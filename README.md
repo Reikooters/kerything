@@ -36,7 +36,7 @@ Kerything is designed to be usable without leaving the keyboard, following stand
 | `Ctrl + Alt + C`   | Copy selected file(s) full absolute path(s) to clipboard                             |
 | `Alt + Shift + F4` | Open your default terminal in the folder of the selected file.                       |
 
-## 🛠 How It Works
+## 🛠️ How It Works
 
 Kerything operates in two parts:
 
@@ -83,7 +83,7 @@ sudo pacman -S qt6-base kwidgetsaddons kcoreaddons solid kio extra-cmake-modules
 
 ```shell
 # Clone the repository
-git clone --branch refs/tags/v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -100,7 +100,7 @@ Manual installation is also possible:
 
 ```shell
 # Clone the repository
-git clone --branch refs/tags/v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -143,7 +143,7 @@ You can follow the steps below to build and install the application manually.
 
 ```shell
 # Clone the repository
-git clone --branch refs/tags/v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything

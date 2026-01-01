@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
+
+cmake_minimum_required(VERSION 4.1)
+project(kerything)
+
+set(CMAKE_CXX_STANDARD 26)
+
+# Qt and KDE require these for code generation (MOC, UI, Resources)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
+# Find TBB for parallel algorithms
+find_package(TBB REQUIRED)
+
+# Find Qt6 components
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
+# Find KDE Frameworks components
+find_package(ECM REQUIRED NO_MODULE)
+set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
+
+find_package(KF6 REQUIRED COMPONENTS
+        WidgetsAddons
+        CoreAddons
+        Solid
+        KIO
+)
+
+# 1. THE HELPER (The disk scanner - runs as root via pkexec)
+add_executable(kerything-scanner-helper
+        main_helper.cpp
+        ScannerEngine.cpp
+        ScannerEngine.h
+)
+target_link_libraries(kerything-scanner-helper PRIVATE TBB::tbb Qt6::Core)
+
+# 2. THE GUI (The user interface - runs as normal user)
+add_executable(kerything
+        main.cpp
+        FileModel.cpp
+        FileModel.h
+        NtfsUtils.cpp
+        NtfsUtils.h
+        MainWindow.cpp
+        MainWindow.h
+        PartitionDialog.cpp
+        PartitionDialog.h
+        ScannerEngine.h # Need the structs for the DB
+)
+
+target_link_libraries(kerything
+        PRIVATE
+        TBB::tbb
+        Qt6::Widgets
+        KF6::WidgetsAddons
+        KF6::CoreAddons
+        KF6::Solid
+        KF6::KIOWidgets
+        KF6::KIOFileWidgets
+        KF6::KIOGui
+)
+
+include(KDEInstallDirs)
+include(ECMInstallIcons)
+
+# Install the binaries
+install(TARGETS kerything kerything-scanner-helper DESTINATION ${KDE_INSTALL_BINDIR})
+
+# Install the icon
+# KDE looks for icons in specific size folders (hicolor theme)
+ecm_install_icons(ICONS icons/256-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
+ecm_install_icons(ICONS icons/48-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
+ecm_install_icons(ICONS icons/32-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
+ecm_install_icons(ICONS icons/16-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
+
+# Install the .desktop file
+install(PROGRAMS net.reikooters.kerything.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+
+# Install the Polkit policy
+install(FILES net.reikooters.kerything.policy DESTINATION ${KDE_INSTALL_DATADIR}/polkit-1/actions)
+
+# Install the license file
+install(FILES LICENSE DESTINATION share/licenses/kerything)
+
+# Add an uninstall target
+if(NOT TARGET uninstall)
+    configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+            IMMEDIATE @ONLY)
+
+    add_custom_target(uninstall
+            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake")
+endif()

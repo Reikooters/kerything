@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Kerything
+Exec=kerything
+Icon=kerything
+Type=Application
+Categories=Qt;KDE;System;
+GenericName=NTFS Disk Scanner
+Comment=Fast file scanning using trigrams
+Terminal=false
+StartupWMClass=kerything

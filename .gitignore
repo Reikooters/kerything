@@ -22,3 +22,6 @@ cmake-build-*/
 
 # JetBrains IDEs
 .idea/
+
+# makepkg
+kerything-*.pkg.tar.zst

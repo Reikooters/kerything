@@ -12,7 +12,6 @@
 #include <QMimeData>
 #include <QClipboard>
 #include <QShortcut>
-#include <QProcess>
 #include <QGuiApplication>
 #include <QMimeDatabase>
 #include <QMimeType>
@@ -21,7 +20,6 @@
 #include <KFileItem>
 #include <KIO/ApplicationLauncherJob>
 #include <KIO/JobUiDelegateFactory>
-#include <KIO/CommandLauncherJob>
 #include <KTerminalLauncherJob>
 #include <KService>
 #include <KApplicationTrader>
@@ -394,18 +392,6 @@ void MainWindow::copyFiles() {
     mimeData->setUrls(urls);
     QGuiApplication::clipboard()->setMimeData(mimeData);
 }
-
-// void MainWindow::openTerminal() {
-//     QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
-//     if (selectedRows.isEmpty()) return;
-//
-//     uint32_t recordIdx = model->getRecordIndex(selectedRows.first().row());
-//     const auto& rec = db.records[recordIdx];
-//     auto it = db.directoryPaths.find(rec.parentRecordIdx);
-//     QString internalPath = (it != db.directoryPaths.end()) ? QString::fromStdString(it->second) : "";
-//
-//     QProcess::startDetached("konsole", {"--workdir", QDir::cleanPath(m_mountPath + "/" + internalPath)});
-// }
 
 void MainWindow::openTerminal() {
     QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();

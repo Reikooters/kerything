@@ -5,7 +5,6 @@
 #define KERYTHING_FILEMODEL_H
 
 #include <QAbstractTableModel>
-#include <qlocale.h>
 #include <vector>
 #include "ScannerEngine.h"
 
@@ -25,8 +24,9 @@ public:
      * @brief Updates the model with a new set of search results.
      * @param newResults A vector of record indices pointing into the database.
      * @param db A pointer to the search database containing file metadata.
+     * @param mountPath The base path where the scanned partition is mounted.
      */
-    void setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db);
+    void setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db, QString mountPath);
 
     /**
      * @brief Sorts the search results based on the specified column and order.
@@ -53,9 +53,28 @@ public:
      */
     uint32_t getRecordIndex(int row) const;
 
+    /**
+     * @brief Returns the item flags for a given index.
+     * In addition to default flags, we enable Drag support for valid items.
+     */
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+
+    /**
+     * @brief Returns the MIME types supported by this model for drag-and-drop.
+     * We use text/uri-list which is the standard format for file transfers on Linux.
+     */
+    QStringList mimeTypes() const override;
+
+    /**
+     * @brief Packages the data for the selected rows into a QMimeData object.
+     * This is called by the view when a drag operation begins.
+     */
+    QMimeData *mimeData(const QModelIndexList &indexes) const override;
+
 private:
     std::vector<uint32_t> m_results; // The record indices from the trigram search
     const ScannerEngine::SearchDatabase* m_db = nullptr;
+    QString m_mountPath;
 };
 
 #endif //KERYTHING_FILEMODEL_H

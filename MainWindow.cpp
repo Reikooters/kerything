@@ -56,6 +56,20 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
     tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView->verticalHeader()->setVisible(false);
 
+    // --- Drag and Drop Configuration ---
+    // setDragEnabled(true) tells the view to start a drag if the user moves the
+    // mouse while pressing the left button on a selected item.
+    tableView->setDragEnabled(true);
+
+    // DragOnly means we can drag items out, but the application doesn't accept drops.
+    tableView->setDragDropMode(QAbstractItemView::DragOnly);
+
+    // Setting the default action to CopyAction signals to the OS
+    // that we want to share/copy the data, which helps the Portal
+    // decide to grant permission.
+    tableView->setDefaultDropAction(Qt::CopyAction);
+    // ---------------------
+
     // Allow resizing and horizontal scrolling
     tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     tableView->horizontalHeader()->setStretchLastSection(true);
@@ -112,6 +126,7 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
 
     // Also trigger it when the search results change (model reset)
     connect(tableView->model(), &QAbstractItemModel::modelReset, this, updateActionStates);
+    // ---------------------
 
     // Status Bar
     statusLabel = new QLabel(this);
@@ -281,7 +296,7 @@ void MainWindow::openFile(const QModelIndex &index) {
     // Handle unmounted drives
     if (m_mountPath.isEmpty()) {
         QMessageBox::information(this, "Drive Not Mounted",
-            "This partition is not currently mounted in Linux."
+            "This partition is not currently mounted in Linux.\n\n"
             "Please mount it first then run this application again to open files.");
         return;
     }
@@ -295,7 +310,7 @@ void MainWindow::openSelectedFiles() {
     // Handle unmounted drives
     if (m_mountPath.isEmpty()) {
         QMessageBox::information(this, "Drive Not Mounted",
-            "This partition is not currently mounted in Linux."
+            "This partition is not currently mounted in Linux.\n\n"
             "Please mount it first then run this application again to open files.");
         return;
     }
@@ -565,7 +580,7 @@ void MainWindow::updateSearch(const QString &text) {
     auto start = std::chrono::steady_clock::now();
 
     auto results = performTrigramSearch(text.toStdString());
-    model->setResults(std::move(results), &db);
+    model->setResults(std::move(results), &db, m_mountPath);
 
     int sortCol = tableView->horizontalHeader()->sortIndicatorSection();
     model->sort(sortCol, tableView->horizontalHeader()->sortIndicatorOrder());

@@ -3,17 +3,21 @@
 
 #include <execution>
 #include <algorithm>
-#include <QIcon>
 #include <string>
+#include <QIcon>
+#include <QMimeData>
+#include <QUrl>
+#include <QDir>
 #include "FileModel.h"
 #include "NtfsUtils.h"
 
 FileModel::FileModel(QObject *parent) : QAbstractTableModel(parent) {}
 
-void FileModel::setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db) {
+void FileModel::setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db, QString mountPath) {
     beginResetModel(); // Notify views that the entire model is being reset
     m_results = std::move(newResults);
     m_db = db;
+    m_mountPath = std::move(mountPath);
     endResetModel();
 }
 
@@ -181,4 +185,59 @@ uint32_t FileModel::getRecordIndex(int row) const {
     }
 
     return m_results[row];
+}
+
+Qt::ItemFlags FileModel::flags(const QModelIndex &index) const {
+    Qt::ItemFlags defaultFlags = QAbstractTableModel::flags(index);
+
+    if (index.isValid()) {
+        // Qt::ItemIsDragEnabled is required for QAbstractItemView to initiate a drag
+        return Qt::ItemIsDragEnabled | defaultFlags;
+    }
+
+    return defaultFlags;
+}
+
+QStringList FileModel::mimeTypes() const {
+    return {"text/uri-list"};
+}
+
+QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
+    if (!m_db || m_mountPath.isEmpty()) {
+        return nullptr;
+    }
+
+    QList<QUrl> urls;
+
+    // Since selection behavior is SelectRows, 'indexes' contains one entry per column
+    // for every selected row. We only process column 0 to ensure each file is added once.
+    for (const QModelIndex &index : indexes) {
+        if (index.column() == 0) {
+            uint32_t recordIdx = m_results[index.row()];
+            const auto &rec = m_db->records[recordIdx];
+
+            // Resolve file name from string pool
+            QString fileName = QString::fromUtf8(&m_db->stringPool[rec.nameOffset], rec.nameLen);
+
+            // Resolve parent directory path
+            QString internalPath;
+            auto it = m_db->directoryPaths.find(rec.parentRecordIdx);
+            if (it != m_db->directoryPaths.end()) {
+                internalPath = QString::fromStdString(it->second);
+            }
+
+            // Construct the absolute Linux path and wrap it in a QUrl
+            QString fullPath = QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName);
+            urls.append(QUrl::fromLocalFile(fullPath));
+        }
+    }
+
+    if (urls.isEmpty()) {
+        return nullptr;
+    }
+
+    auto *mimeData = new QMimeData();
+    mimeData->setUrls(urls);
+
+    return mimeData;
 }

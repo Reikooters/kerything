@@ -154,6 +154,11 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
     };
     connect(downToTable, &QShortcut::activated, focusTable);
     connect(upToTable, &QShortcut::activated, focusTable);
+
+    // Escape key in search line clears the search
+    auto *clearSearch = new QShortcut(QKeySequence(Qt::Key_Escape), searchLine);
+    clearSearch->setContext(Qt::WidgetShortcut);
+    connect(clearSearch, &QShortcut::activated, searchLine, &QLineEdit::clear);
     // ---------------------
 
     // --- Global Window Actions (Shortcuts + Menu items) ---

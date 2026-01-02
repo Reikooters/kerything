@@ -25,9 +25,10 @@ int main(int argc, char* argv[])
     KAboutData::setApplicationData(aboutData);
 
     // This must match the .desktop filename exactly
-    app.setDesktopFileName(QStringLiteral("net.reikooters.kerything"));
+    QApplication::setDesktopFileName(QStringLiteral("net.reikooters.kerything"));
 
-    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("kerything")));
+    // Set window icon
+    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("kerything")));
 
     PartitionDialog dlg;
 

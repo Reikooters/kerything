@@ -18,7 +18,8 @@ The name is a nod to the iconic "Everything" utility, while the 'K' prefix follo
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
 - **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning, regular expressions and other complex patterns, Kerything stays lightweight and responsive.
 - **Multithreaded:** Leverages Intel OneTBB for parallel trigram generation and sorting.
-- **Rich Context Actions:** Right-click menu integration (similar to Dolphin) to open, copy, or manage files directly from the results. (Note: Most context actions are only available if the drive was mounted at the time it was scanned.)
+- **Rich Context Actions:** Right-click menu integration (similar to Dolphin) to open, copy, or manage files directly from the results. *(Note: Most context actions are only available if the drive was mounted at the time it was scanned.)*
+- **Drag-and-Drop Support:** Easily copy or attach files by dragging them from the search results into Dolphin or other applications. *(Note: Currently not supported for Flatpak or other sandboxed applications due to portal limitations.)*
 - **Native KDE Integration:** Built with KF6 for a consistent look and feel on KDE Plasma desktops.
 - **Low Overhead:** The index is stored in memory with an emphasis on efficiency. By using string pooling (e.g., storing a folder path only once even if it contains thousands of files), Kerything maintains a surprisingly small memory footprint even for massive partitions.
 

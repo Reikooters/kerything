@@ -342,6 +342,7 @@ void MainWindow::openSelectedFiles() {
                             : new KIO::ApplicationLauncherJob();
 
         job->setUrls(urls);
+        job->setAutoDelete(true);
         job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));
         job->start();
     }
@@ -423,6 +424,7 @@ void MainWindow::openTerminal() {
     // and handles the command-line arguments to set the working directory.
     auto *job = new KTerminalLauncherJob(QString()); // Empty string means "default terminal"
     job->setWorkingDirectory(fullDirPath);
+    job->setAutoDelete(true);
 
     // Provide a UI delegate for error reporting (e.g., if no terminal is found)
     job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));

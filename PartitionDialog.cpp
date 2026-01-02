@@ -43,6 +43,13 @@ PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
         startBtn->setEnabled(row >= 0);
     });
 
+    // Handle Return key (and double-click) on the list
+    connect(listWidget, &QListWidget::itemActivated, this, [this]() {
+        if (startBtn->isEnabled()) {
+            onStartClicked();
+        }
+    });
+
     resize(500, 300);
     refreshPartitions(); // Initial load
 }

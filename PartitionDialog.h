@@ -12,6 +12,7 @@
 #include <vector>
 #include <optional>
 #include "ScannerEngine.h"
+#include "ScannerManager.h"
 
 /**
  * @brief Represents basic information about a detected disk partition.
@@ -51,11 +52,6 @@ public:
     std::optional<ScannerEngine::SearchDatabase> takeDatabase();
 
     /**
-     * @brief Returns true if the user has requested to cancel the current scan.
-     */
-    bool cancelRequested() const { return m_cancelRequested; }
-
-    /**
      * @brief Updates the UI state (buttons, labels, list) based on whether a scan is currently active.
      */
     void setScanning(bool scanning);
@@ -69,15 +65,16 @@ public:
      * @brief Returns the PartitionInfo for the currently selected item in the list.
      */
     PartitionInfo getSelected();
+
 private:
     std::optional<ScannerEngine::SearchDatabase> m_scannedDb; ///< Storage for the database returned by the helper
+    std::unique_ptr<ScannerManager> m_manager; ///< Helper process manager
+    bool m_isHandlingClick = false; ///< Prevents re-entrant clicks
     QListWidget *listWidget; ///< List of detected NTFS partitions
     QLabel *statusLabel; ///< Label showing instructions or scan status
     QPushButton *startBtn; ///< Action button (Start Indexing / Cancel)
     QPushButton *refreshBtn; ///< Action button (Refresh)
     std::vector<PartitionInfo> partitions; ///< Internal metadata for the list items
-    bool m_isScanning = false; ///< True if the helper process is currently running
-    bool m_cancelRequested = false; ///< True if the user clicked 'Cancel' while scanning
 
     /**
      * @brief Executes a helper process to scan the specified device for partition information.

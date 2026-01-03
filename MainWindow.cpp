@@ -15,6 +15,7 @@
 #include <QGuiApplication>
 #include <QMimeDatabase>
 #include <QMimeType>
+#include <QTimer>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
 #include <KFileItem>
@@ -30,9 +31,10 @@
 #include <numeric>
 #include "MainWindow.h"
 #include "FileModel.h"
+#include "PartitionDialog.h"
+#include "ScannerManager.h"
 
-MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPath)
-    : db(std::move(database)), m_mountPath(std::move(mountPath)) {
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     auto *centralWidget = new QWidget(this);
     auto *layout = new QVBoxLayout(centralWidget);
 
@@ -48,7 +50,9 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
 
     auto *changePartitionAct = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
     connect(changePartitionAct, &QAction::triggered, this, &MainWindow::changePartition);
+    changePartitionAct->setShortcut(QKeySequence::Open);
     menu->addAction(changePartitionAct);
+    addAction(changePartitionAct); // Register with window for shortcuts
 
     auto *rescanPartitionAct = new QAction(QIcon::fromTheme("view-refresh"), "Rescan Partition", this);
     connect(rescanPartitionAct, &QAction::triggered, this, &MainWindow::rescanPartition);
@@ -197,9 +201,9 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
     // ---------------------
 
     // --- Global Window Actions (Shortcuts + Menu items) ---
-    // Ctrl+L: Focus Search
+    // Ctrl+L and Alt+D: Focus Search
     auto *focusSearchAct = new QAction(this);
-    focusSearchAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L));
+    focusSearchAct->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
     connect(focusSearchAct, &QAction::triggered, searchLine, [this]() {
         searchLine->setFocus();
         searchLine->selectAll();
@@ -248,14 +252,58 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
     // Start with a full list, sorted by name ascending
     tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
     updateSearch("");
+
+    // At the end of the constructor, trigger the partition selection
+    // We use a QTimer to call it after the window is shown
+    QTimer::singleShot(0, this, &MainWindow::changePartition);
+}
+
+void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath) {
+    db = std::move(database);
+    m_mountPath = std::move(mountPath);
+    m_devicePath = std::move(devicePath);
+
+    // Refresh search results with new data
+    updateSearch(searchLine->text());
 }
 
 void MainWindow::changePartition() {
-    QMessageBox::information(this, "Change Partition", "Change partition logic will be implemented here.");
+    PartitionDialog dlg(this);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        auto newDb = dlg.takeDatabase();
+        auto selected = dlg.getSelected();
+
+        if (newDb) {
+            setDatabase(std::move(*newDb), selected.mountPoint, selected.devicePath);
+            setWindowTitle(selected.name);
+        }
+    }
 }
 
 void MainWindow::rescanPartition() {
-    QMessageBox::information(this, "Rescan Partition", "Partition rescanning logic will be implemented here.");
+    if (m_devicePath.isEmpty()) {
+        changePartition();
+        return;
+    }
+
+    ScannerManager manager(this);
+
+    // Connect progress messages to the status bar
+    connect(&manager, &ScannerManager::progressMessage, statusLabel, &QLabel::setText);
+
+    // Connect error messages to show a critical message box
+    connect(&manager, &ScannerManager::errorMessage, this, [](const QString &title, const QString &msg) {
+        QMessageBox::critical(nullptr, title, msg);
+    });
+
+    auto newDb = manager.scanDevice(m_devicePath);
+
+    if (newDb) {
+        setDatabase(std::move(*newDb), m_mountPath, m_devicePath);
+    } else {
+        statusLabel->setText("Rescan failed or cancelled.");
+    }
 }
 
 void MainWindow::showAbout() {

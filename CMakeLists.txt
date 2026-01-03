@@ -49,6 +49,8 @@ add_executable(kerything
         PartitionDialog.cpp
         PartitionDialog.h
         ScannerEngine.h # Need the structs for the DB
+        ScannerManager.cpp
+        ScannerManager.h
 )
 
 target_link_libraries(kerything

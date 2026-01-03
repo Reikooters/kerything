@@ -35,22 +35,7 @@ int main(int argc, char* argv[])
     // Set window icon
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("kerything")));
 
-    PartitionDialog dlg;
-
-    // This will block here. The partition selection and scan happens inside the dlg
-    if (dlg.exec() != QDialog::Accepted) {
-        return 0;
-    }
-
-    std::optional<ScannerEngine::SearchDatabase> db = dlg.takeDatabase();
-    if (!db) {
-        return 0;
-    }
-
-    PartitionInfo selected = dlg.getSelected();
-
-    MainWindow window(std::move(*db), selected.mountPoint);
-    window.setWindowTitle(selected.name);
+    MainWindow window;
     window.show();
 
     return app.exec();

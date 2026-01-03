@@ -24,10 +24,13 @@ class MainWindow : public QMainWindow {
 public:
     /**
      * @brief Constructs the MainWindow.
-     * @param database The search database containing the MFT records.
-     * @param mountPath The Linux mount path for the scanned partition.
      */
-    MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPath);
+    explicit MainWindow(QWidget *parent = nullptr);
+
+    /**
+     * @brief Updates the current database and UI.
+     */
+    void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath);
 
 protected:
     /**
@@ -99,6 +102,7 @@ private:
 
     ScannerEngine::SearchDatabase db;
     QString m_mountPath;
+    QString m_devicePath;
     QLineEdit *searchLine;
     QTableView *tableView;
     FileModel *model;

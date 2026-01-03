@@ -15,6 +15,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--version") {
+            std::cout << "kerything-scanner-helper v" << ScannerEngine::VERSION << std::endl;
+            return 0;
+        }
+    }
+
     // Turn off sync with stdio to speed up binary writes and prevent buffering issues
     std::ios_base::sync_with_stdio(false);
 

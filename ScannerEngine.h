@@ -30,6 +30,8 @@
 #include "lib/utf8.h"
 
 namespace ScannerEngine {
+    inline constexpr std::string_view VERSION = "1.1.0";
+
     /**
      * NTFS structures must be byte-aligned because they represent raw data on disk.
      * Without #pragma pack(1), the compiler might add "padding" bytes between

@@ -9,6 +9,13 @@
 
 int main(int argc, char* argv[])
 {
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--version") {
+            std::cout << "kerything v" << ScannerEngine::VERSION << std::endl;
+            return 0;
+        }
+    }
+
     QApplication app(argc, argv);
 
     KAboutData aboutData(

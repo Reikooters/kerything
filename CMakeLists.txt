@@ -26,6 +26,7 @@ find_package(KF6 REQUIRED COMPONENTS
         CoreAddons
         Solid
         KIO
+        XmlGui
 )
 
 # 1. THE HELPER (The disk scanner - runs as root via pkexec)
@@ -60,6 +61,7 @@ target_link_libraries(kerything
         KF6::KIOWidgets
         KF6::KIOFileWidgets
         KF6::KIOGui
+        KF6::XmlGui
 )
 
 include(KDEInstallDirs)

@@ -23,6 +23,8 @@
 #include <KTerminalLauncherJob>
 #include <KService>
 #include <KApplicationTrader>
+#include <KAboutData>
+#include <KAboutApplicationDialog>
 #include <chrono>
 #include <algorithm>
 #include <numeric>
@@ -40,6 +42,39 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
 
     // Add magnifying glass icon to the search bar
     searchLine->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
+
+    // --- Burger Menu Setup ---
+    auto *menu = new QMenu(this);
+
+    auto *changePartitionAct = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
+    connect(changePartitionAct, &QAction::triggered, this, &MainWindow::changePartition);
+    menu->addAction(changePartitionAct);
+
+    auto *rescanPartitionAct = new QAction(QIcon::fromTheme("view-refresh"), "Rescan Partition", this);
+    connect(rescanPartitionAct, &QAction::triggered, this, &MainWindow::rescanPartition);
+    rescanPartitionAct->setShortcut(QKeySequence::Refresh);
+    menu->addAction(rescanPartitionAct);
+    addAction(rescanPartitionAct); // Register with window for shortcuts
+
+    menu->addSeparator();
+
+    auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
+    connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
+    menu->addAction(aboutAct);
+
+    auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit", this);
+    quitAct->setShortcut(QKeySequence::Quit);
+    connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+    menu->addAction(quitAct);
+    addAction(quitAct); // Register with window for shortcuts
+
+    // Add the menu to a button inside the search line
+    auto *menuAction = searchLine->addAction(QIcon::fromTheme("application-menu"), QLineEdit::TrailingPosition);
+    connect(menuAction, &QAction::triggered, [this, menu, menuAction]() {
+        // Show the menu just below the icon
+        menu->exec(QCursor::pos());
+    });
+    // ---------------------
 
     layout->addWidget(searchLine);
 
@@ -213,6 +248,20 @@ MainWindow::MainWindow(ScannerEngine::SearchDatabase&& database, QString mountPa
     // Start with a full list, sorted by name ascending
     tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
     updateSearch("");
+}
+
+void MainWindow::changePartition() {
+    QMessageBox::information(this, "Change Partition", "Change partition logic will be implemented here.");
+}
+
+void MainWindow::rescanPartition() {
+    QMessageBox::information(this, "Rescan Partition", "Partition rescanning logic will be implemented here.");
+}
+
+void MainWindow::showAbout() {
+    auto *dialog = new KAboutApplicationDialog(KAboutData::applicationData(), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->show();
 }
 
 void MainWindow::contextMenuEvent(QContextMenuEvent *event) {

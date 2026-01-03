@@ -42,6 +42,21 @@ private slots:
     void updateSearch(const QString &text);
 
     /**
+     * @brief Shows a placeholder for the change partition logic.
+     */
+    void changePartition();
+
+    /**
+     * @brief Shows a placeholder for the rescan partition logic.
+     */
+    void rescanPartition();
+
+    /**
+     * @brief Shows the About dialog using KAboutData.
+     */
+    void showAbout();
+
+    /**
      * @brief Opens the selected file or folder using system defaults.
      */
     void openFile(const QModelIndex &index);

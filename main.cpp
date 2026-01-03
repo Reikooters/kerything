@@ -14,14 +14,19 @@ int main(int argc, char* argv[])
     KAboutData aboutData(
         QStringLiteral("kerything"),
         QStringLiteral("Kerything"),
-        QStringLiteral("1.0"),
-        QStringLiteral("A fast NTFS file scanner"),
+        QStringLiteral("1.1.0"),
+        QStringLiteral("A fast NTFS file searcher."),
         KAboutLicense::GPL_V3,
-        QStringLiteral("(c) 2026  Reikooters <https://github.com/Reikooters>")
+        QStringLiteral("(c) 2026 Reikooters &lt;https://github.com/Reikooters&gt;")
     );
+
+    aboutData.addAuthor("Reikooters", "Developer", "https://github.com/Reikooters");
+    aboutData.setBugAddress("https://github.com/Reikooters/kerything/issues");
+    aboutData.setHomepage("https://github.com/Reikooters/kerything");
 
     // This tells KDE to look for the icon named 'kerything' in the system theme
     aboutData.setProgramLogo(QIcon::fromTheme(QStringLiteral("kerything")));
+
     KAboutData::setApplicationData(aboutData);
 
     // This must match the .desktop filename exactly

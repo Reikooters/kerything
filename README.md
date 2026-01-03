@@ -48,7 +48,7 @@ Kerything operates in two parts:
 2. **The GUI (`kerything`):** Receives the raw file data from the helper, builds a search database using trigrams, and provides a responsive search interface. Runs in unprivileged user mode.
 
 > [!NOTE]  
-> Because Kerything reads the MFT directly, it is currently limited to NTFS partitions. Additionally, because the `ntfs-3g` FUSE driver doesn't support `fanotify` or update the USN Journal on disk, live file system updates are not currently supported - simply restart the application to get an updated index.
+> Because Kerything reads the MFT directly, it is currently limited to NTFS partitions. Additionally, because the `ntfs-3g` FUSE driver doesn't support `fanotify` or update the USN Journal on disk, live file system updates are not currently supported - simply press F5 within the application to rescan the partition and get an updated index.
 
 ## 💻 Tech Stack
 

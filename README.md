@@ -87,7 +87,7 @@ sudo pacman -S qt6-base kwidgetsaddons kcoreaddons solid kio extra-cmake-modules
 
 ```shell
 # Clone the repository
-git clone --branch v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v1.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -104,7 +104,7 @@ Manual installation is also possible:
 
 ```shell
 # Clone the repository
-git clone --branch v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v1.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -147,7 +147,7 @@ You can follow the steps below to build and install the application manually.
 
 ```shell
 # Clone the repository
-git clone --branch v1.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v1.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything

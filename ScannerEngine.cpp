@@ -216,33 +216,6 @@ namespace ScannerEngine {
         return 0;
     }
 
-    std::unordered_map<uint64_t, Entry> folderMap;
-
-    // Helper to build path from map
-    std::string_view getFullPath(uint64_t recordNum, int depth = 0)
-    {
-        if (recordNum == 5) // MFT Index 5 is always the Root Directory '/'
-            return "";
-        if (depth > 40)
-            return "/<depth_exceeded>"; // NTFS max path is usually deep, but 40 is a safe guard for MFT
-
-        auto it = folderMap.find(recordNum);
-        if (it == folderMap.end())
-            return "/<system>";
-
-        // Using a "cachedPath" is an optimization. Building paths recursively
-        // for every file would be much slower.
-        if (!it->second.cachedPath.empty()) {
-            return it->second.cachedPath;
-        }
-
-        // Build and cache the path
-        std::string parentPath(getFullPath(it->second.parent, depth + 1));
-        it->second.cachedPath = parentPath + "/" + it->second.name;
-
-        return it->second.cachedPath;
-    }
-
     std::optional<SearchDatabase> parseMFT(const std::string& devicePath)
     {
         // Opening a disk device requires 'root' privileges on Linux.

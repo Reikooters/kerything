@@ -328,12 +328,6 @@ namespace ScannerEngine {
         }
     };
 
-    struct Entry {
-        std::string name;
-        uint64_t parent;
-        std::string cachedPath; // Store the resolved path here
-    };
-
     struct FileLink {
         std::string name;
         uint64_t parentIndex;

@@ -7,27 +7,33 @@
 #include <Solid/Block>
 #include <QCoreApplication>
 #include <QVBoxLayout>
+#include <QHeaderView>
 #include <QMessageBox>
 #include "PartitionDialog.h"
 #include "ScannerManager.h"
 
-#include <QProcess>
-
 PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
-    setWindowTitle("Select NTFS Partition");
+    setWindowTitle("Select Partition");
     auto *layout = new QVBoxLayout(this);
 
     auto *topLayout = new QHBoxLayout();
     layout->addLayout(topLayout);
 
-    topLayout->addWidget(new QLabel("Select an NTFS partition:", this));
+    topLayout->addWidget(new QLabel("Select a partition:", this));
     refreshBtn = new QPushButton(QIcon::fromTheme("view-refresh"), "Refresh", this);
     refreshBtn->setToolTip("Refresh list");
     topLayout->addWidget(refreshBtn);
     connect(refreshBtn, &QPushButton::clicked, this, &PartitionDialog::refreshPartitions);
 
-    listWidget = new QListWidget(this);
-    layout->addWidget(listWidget);
+    treeWidget = new QTreeWidget(this);
+    treeWidget->setColumnCount(4);
+    treeWidget->setHeaderLabels({"FS", "Name", "Device", "Mount Path"});
+    treeWidget->setSortingEnabled(true);
+    treeWidget->setRootIsDecorated(false); // No expansion arrows needed for a list
+    treeWidget->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    treeWidget->header()->setStretchLastSection(true);
+    // treeWidget->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    layout->addWidget(treeWidget);
 
     statusLabel = new QLabel("Select a partition to begin.", this);
     layout->addWidget(statusLabel);
@@ -40,12 +46,12 @@ PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
     connect(startBtn, &QPushButton::clicked, this, &PartitionDialog::onStartClicked);
 
     // Enable button only when an item is selected
-    connect(listWidget, &QListWidget::currentRowChanged, this, [this](int row) {
-        startBtn->setEnabled(row >= 0);
+    connect(treeWidget, &QTreeWidget::itemSelectionChanged, this, [this]() {
+        startBtn->setEnabled(!treeWidget->selectedItems().isEmpty());
     });
 
     // Handle Return key (and double-click) on the list
-    connect(listWidget, &QListWidget::itemActivated, this, [this]() {
+    connect(treeWidget, &QTreeWidget::itemActivated, this, [this]() {
         if (startBtn->isEnabled()) {
             onStartClicked();
         }
@@ -63,15 +69,15 @@ PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
         QMessageBox::critical(nullptr, title, msg);
     });
 
-    resize(500, 300);
+    resize(625, 360);
     refreshPartitions(); // Initial load
 }
 
 void PartitionDialog::refreshPartitions() {
-    listWidget->clear();
+    treeWidget->clear();
     partitions.clear();
 
-    // Find NTFS partitions using Solid
+    // Find NTFS and EXT4 partitions using Solid
     auto devices = Solid::Device::listFromType(Solid::DeviceInterface::StorageVolume);
     for (const auto &device : devices) {
         auto *volume = device.as<Solid::StorageVolume>();
@@ -81,22 +87,40 @@ void PartitionDialog::refreshPartitions() {
             continue;
         }
 
-        // Only care about NTFS
+        // Support both NTFS and EXT4
+        // if (volume->fsType().contains("ntfs", Qt::CaseInsensitive)
+        //     || volume->fsType().contains("ext4", Qt::CaseInsensitive)) {
         if (volume->fsType().contains("ntfs", Qt::CaseInsensitive)) {
             auto *access = device.as<Solid::StorageAccess>();
             QString mp = access ? access->filePath() : "";
 
             PartitionInfo info = {
-                QString("%1 (%2) - %3")
-                    .arg(device.product(), block->device(), mp.isEmpty() ? "Not Mounted" : mp),
+                volume->fsType(),
+                device.product(),
                 block->device(),
-                mp
+                mp.isEmpty() ? "Not Mounted" : mp
             };
 
-            listWidget->addItem(new QListWidgetItem(info.name, listWidget));
+            auto *item = new QTreeWidgetItem(treeWidget);
+            // item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            // item->setCheckState(0, Qt::Unchecked);
+            item->setText(0, info.fsType);
+            item->setText(1, info.name);
+            item->setText(2, info.devicePath);
+            item->setText(3, info.mountPoint);
+
+            if (mp.isEmpty()) {
+                item->setForeground(0, QBrush(Qt::gray));
+                item->setForeground(1, QBrush(Qt::gray));
+                item->setForeground(2, QBrush(Qt::gray));
+                item->setForeground(3, QBrush(Qt::gray));
+            }
+
             partitions.push_back(info);
         }
     }
+
+    treeWidget->sortByColumn(2, Qt::AscendingOrder); // Sort by device path by default
 }
 
 void PartitionDialog::onStartClicked() {
@@ -135,7 +159,7 @@ std::optional<ScannerEngine::SearchDatabase> PartitionDialog::takeDatabase() {
 }
 
 void PartitionDialog::setScanning(bool scanning) {
-    listWidget->setEnabled(!scanning);
+    treeWidget->setEnabled(!scanning);
     refreshBtn->setEnabled(!scanning);
 
     if (scanning) {
@@ -146,7 +170,7 @@ void PartitionDialog::setScanning(bool scanning) {
         statusLabel->setText("Select a partition to begin.");
 
         // Ensure button state is correct based on whether something is selected
-        startBtn->setEnabled(listWidget->currentItem() != nullptr);
+        startBtn->setEnabled(!treeWidget->selectedItems().isEmpty());
     }
 }
 
@@ -155,11 +179,41 @@ void PartitionDialog::setButtonEnabled(bool enabled) const {
 }
 
 PartitionInfo PartitionDialog::getSelected() {
-    int row = listWidget->currentRow();
-
-    if (row < 0 || row >= static_cast<int>(partitions.size())) {
+    auto *item = treeWidget->currentItem();
+    if (!item) {
         return {};
     }
 
-    return partitions[row];
+    int index = treeWidget->indexOfTopLevelItem(item);
+    if (index < 0 || index >= static_cast<int>(partitions.size())) {
+        // Fallback: search by device path if sorting changed the visual order
+        QString dev = item->text(2);
+
+        for (const auto& p : partitions) {
+            if (p.devicePath == dev) {
+                return p;
+            }
+        }
+
+        return {};
+    }
+
+    // Since QTreeWidget items aren't mapped 1:1 with the vector when sorted,
+    // we should reconstruct from the item text or use data roles.
+    return { item->text(0), item->text(1), item->text(2), item->text(3) };
 }
+
+// QList<PartitionInfo> PartitionDialog::getSelectedPartitions() {
+//     QList<PartitionInfo> selectedList;
+//
+//     for (QTreeWidgetItem* item : treeWidget->selectedItems()) {
+//         selectedList.append({
+//             item->text(0), // FS
+//             item->text(1), // Name
+//             item->text(2), // Device
+//             item->text(3)  // Mount
+//         });
+//     }
+//
+//     return selectedList;
+// }

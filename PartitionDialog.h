@@ -6,7 +6,7 @@
 
 #include <QDialog>
 #include <QString>
-#include <QListWidget>
+#include <QTreeWidget>
 #include <QLabel>
 #include <QPushButton>
 #include <vector>
@@ -18,25 +18,26 @@
  * @brief Represents basic information about a detected disk partition.
  */
 struct PartitionInfo {
+    QString fsType;
     QString name;
     QString devicePath;
     QString mountPoint;
 };
 
 /**
- * @brief A dialog that allows users to select an NTFS partition and triggers the MFT scanning process.
+ * @brief A dialog that allows users to select a partition and triggers the scanning process.
  */
 class PartitionDialog : public QDialog {
     Q_OBJECT
 
 public:
     /**
-     * @brief Constructs the dialog and populates the list with available NTFS partitions.
+     * @brief Constructs the dialog and populates the list with available partitions.
      */
     explicit PartitionDialog(QWidget *parent = nullptr);
 
     /**
-     * @brief Clears the list and re-scans for NTFS partitions.
+     * @brief Clears the list and re-scans for partitions.
      */
     void refreshPartitions();
 
@@ -66,11 +67,21 @@ public:
      */
     PartitionInfo getSelected();
 
+    /**
+     * @brief Retrieves a list of partitions currently selected in the dialog.
+     *
+     * This method scans the partition list UI for selected items and compiles their
+     * details into a list of PartitionInfo objects.
+     *
+     * @return A list of PartitionInfo objects representing the selected partitions.
+     */
+    QList<PartitionInfo> getSelectedPartitions();
+
 private:
     std::optional<ScannerEngine::SearchDatabase> m_scannedDb; ///< Storage for the database returned by the helper
     std::unique_ptr<ScannerManager> m_manager; ///< Helper process manager
     bool m_isHandlingClick = false; ///< Prevents re-entrant clicks
-    QListWidget *listWidget; ///< List of detected NTFS partitions
+    QTreeWidget *treeWidget; ///< Table of detected partitions
     QLabel *statusLabel; ///< Label showing instructions or scan status
     QPushButton *startBtn; ///< Action button (Start Indexing / Cancel)
     QPushButton *refreshBtn; ///< Action button (Refresh)

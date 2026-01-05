@@ -258,10 +258,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     QTimer::singleShot(0, this, &MainWindow::changePartition);
 }
 
-void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath) {
+void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, QString fsType) {
     db = std::move(database);
     m_mountPath = std::move(mountPath);
     m_devicePath = std::move(devicePath);
+    m_fsType = std::move(fsType);
 
     // Refresh search results with new data
     updateSearch(searchLine->text());
@@ -275,8 +276,12 @@ void MainWindow::changePartition() {
         auto selected = dlg.getSelected();
 
         if (newDb) {
-            setDatabase(std::move(*newDb), selected.mountPoint, selected.devicePath);
-            setWindowTitle(selected.name);
+            setDatabase(std::move(*newDb), selected.mountPoint, selected.devicePath, selected.fsType);
+
+            QString title = QString("[%1] %2 (%3) - %4")
+                .arg(selected.fsType, selected.name, selected.devicePath, selected.mountPoint);
+
+            setWindowTitle(title);
         }
     }
 }
@@ -297,10 +302,10 @@ void MainWindow::rescanPartition() {
         QMessageBox::critical(nullptr, title, msg);
     });
 
-    auto newDb = manager.scanDevice(m_devicePath);
+    auto newDb = manager.scanDevice(m_devicePath, m_fsType);
 
     if (newDb) {
-        setDatabase(std::move(*newDb), m_mountPath, m_devicePath);
+        setDatabase(std::move(*newDb), m_mountPath, m_devicePath, m_fsType);
     } else {
         statusLabel->setText("Rescan failed or cancelled.");
     }

@@ -8,8 +8,8 @@
   <vendor_url>https://github.com/Reikooters/kerything</vendor_url>
 
   <action id="net.reikooters.kerything.run-scanner">
-    <description>Run the Kerything NTFS Scanner</description>
-    <message>Authentication is required to scan the NTFS Master File Table (MFT) on the selected partition.</message>
+    <description>Run the Kerything Disk Scanner</description>
+    <message>Authentication is required to perform a low-level scan of the selected partition.</message>
     <icon_name>kerything</icon_name>
     <defaults>
       <allow_any>auth_admin</allow_any>

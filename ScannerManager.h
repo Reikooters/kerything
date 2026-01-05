@@ -19,7 +19,7 @@ public:
      * @brief Starts the scanning process for the given device.
      * This runs synchronously (blocking) but processes events to keep UI alive.
      */
-    std::optional<ScannerEngine::SearchDatabase> scanDevice(const QString &devicePath);
+    std::optional<ScannerEngine::SearchDatabase> scanDevice(const QString &devicePath, const QString &fsType);
 
     [[nodiscard]] bool isRunning() const { return m_isRunning; }
     void requestCancel() { m_cancelRequested = true; }

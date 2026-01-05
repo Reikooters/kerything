@@ -30,7 +30,7 @@ public:
     /**
      * @brief Updates the current database and UI.
      */
-    void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath);
+    void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, QString fsType);
 
 protected:
     /**
@@ -101,6 +101,7 @@ private:
     static bool contains(std::string_view haystack, std::string_view needle);
 
     ScannerEngine::SearchDatabase db;
+    QString m_fsType;
     QString m_mountPath;
     QString m_devicePath;
     QLineEdit *searchLine;

@@ -5,29 +5,9 @@
 #include "scanners/NtfsScannerEngine.h"
 #include "Version.h"
 
-/**
- * The Helper:
- * 1. Takes an NTFS device path as an argument.
- * 2. Scans the MFT.
- * 3. Dumps the results to stdout in binary format.
- */
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        return 1;
-    }
-
-    for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--version") {
-            std::cout << "kerything-scanner-helper v" << Version::VERSION << std::endl;
-            return 0;
-        }
-    }
-
-    // Turn off sync with stdio to speed up binary writes and prevent buffering issues
-    std::ios_base::sync_with_stdio(false);
-
-    // Use parseMFT from our engine
-    std::optional<NtfsScannerEngine::NtfsDatabase> db = NtfsScannerEngine::parseMft(argv[1]);
+int scanNtfs(const std::string& devicePath) {
+    // Use parseMft from the NTFS scanner engine
+    std::optional<NtfsScannerEngine::NtfsDatabase> db = NtfsScannerEngine::parseMft(devicePath);
     if (!db) {
         return 1;
     }
@@ -48,4 +28,44 @@ int main(int argc, char* argv[]) {
 
     std::cout.flush();
     return 0;
+}
+
+int scanExt4(const std::string& devicePath) {
+    // TODO
+    return 0;
+}
+
+/**
+ * The Helper:
+ * 1. Takes a device path and file system type as arguments.
+ * 2. Scans the specified partition.
+ * 3. Dumps the results to stdout in binary format.
+ */
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        return 1;
+    }
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--version") {
+            std::cout << "kerything-scanner-helper v" << Version::VERSION << std::endl;
+            return 0;
+        }
+    }
+
+    std::string devicePath = argv[1];
+    std::string_view fsType = argv[2];
+
+    // Turn off sync with stdio to speed up binary writes and prevent buffering issues
+    std::ios_base::sync_with_stdio(false);
+
+    std::cerr << "Scanning " << devicePath << " (" << fsType << ")" << std::endl;
+
+    if (fsType == "ntfs") {
+        return scanNtfs(devicePath);
+    } else if (fsType == "ext4") {
+        return scanExt4(devicePath);
+    }
+
+    return 1;
 }

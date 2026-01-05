@@ -88,9 +88,8 @@ void PartitionDialog::refreshPartitions() {
         }
 
         // Support both NTFS and EXT4
-        // if (volume->fsType().contains("ntfs", Qt::CaseInsensitive)
-        //     || volume->fsType().contains("ext4", Qt::CaseInsensitive)) {
-        if (volume->fsType().contains("ntfs", Qt::CaseInsensitive)) {
+        if (volume->fsType().contains("ntfs", Qt::CaseInsensitive)
+            || volume->fsType().contains("ext4", Qt::CaseInsensitive)) {
             auto *access = device.as<Solid::StorageAccess>();
             QString mp = access ? access->filePath() : "";
 
@@ -145,7 +144,7 @@ void PartitionDialog::onStartClicked() {
         return;
     }
 
-    m_scannedDb = m_manager->scanDevice(selected.devicePath);
+    m_scannedDb = m_manager->scanDevice(selected.devicePath, selected.fsType);
 
     if (m_scannedDb) {
         this->accept();

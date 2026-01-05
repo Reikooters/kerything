@@ -16,7 +16,7 @@ ScannerManager::~ScannerManager() {
     requestCancel();
 }
 
-std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QString &devicePath) {
+std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QString &devicePath, const QString &fsType) {
     m_isRunning = true;
     m_cancelRequested = false;
     Q_EMIT scannerStarted();
@@ -30,8 +30,8 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
     QString helperPath = QCoreApplication::applicationDirPath() + "/kerything-scanner-helper";
 
     // We want to handle the data as a stream
-    qDebug() << "Launching helper:" << helperPath << "on" << devicePath;
-    helper->start("pkexec", {helperPath, devicePath});
+    qDebug() << "Launching helper:" << helperPath << "on" << devicePath << "type:" << fsType;
+    helper->start("pkexec", {helperPath, devicePath, fsType});
 
     // Loop until finished, keeping the UI responsive
     while (!helper->waitForFinished(100)) {

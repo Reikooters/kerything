@@ -327,16 +327,12 @@ namespace ScannerEngine {
             }
         }
 
-        std::cerr << "MFT scan and index complete. " << db.records.size() << " entries indexed. Pre-calculating paths...\n";
+        std::cerr << "MFT scan and index complete. " << db.records.size() << " entries indexed. Resolving parent pointers...\n";
 
-        // Step 1: Fix pointers and clear the large MFT map
-        db.precalculatePaths();
+        // Resolve parent pointers and clear the large MFT map
+        db.resolveParentPointers();
 
-        std::cerr << "Pre-calculating paths completed. Building trigrams is skipped in helper.\n";
-
-        // Step 2: Build the Trigram Index in parallel
-        // NO LONGER DOING IN THE HELPER APP AS IT IS NOT USED AT ALL
-        //db.buildTrigramIndexParallel();
+        std::cerr << "Resolving parent pointers completed.\n";
 
         return SearchDatabase{std::move(db)};
     }

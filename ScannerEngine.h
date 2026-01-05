@@ -178,9 +178,6 @@ namespace ScannerEngine {
         std::vector<FileRecord> records;
         std::vector<char> stringPool;
 
-        // Final paths for DIRECTORIES only (mapped by internal record index)
-        std::unordered_map<uint32_t, std::string> directoryPaths;
-
         // The "Frozen Index": A single sorted vector of all trigram-record pairs
         std::vector<TrigramEntry> flatIndex;
 
@@ -265,10 +262,10 @@ namespace ScannerEngine {
         }
 
         // We call this once after the MFT scan is completely finished
-        void precalculatePaths() {
-            std::cerr << "Fixing parent pointers..." << std::endl;
+        void resolveParentPointers() {
+            std::cerr << "Resolving parent pointers..." << std::endl;
 
-            // Step 1: Convert parent MFT index to internal index
+            // Convert parent MFT index to internal index
             for (auto& rec : records) {
                 auto it = mftToRecordIdx.find(rec.tempParentMft);
                 if (it != mftToRecordIdx.end()) {
@@ -279,52 +276,46 @@ namespace ScannerEngine {
                 }
             }
 
-            // Reclaim the MFT map immediately
+            // Reclaim the MFT map
             mftToRecordIdx.clear();
+        }
 
-            // Step 2: Iterative Path Calculation
-            std::cerr << "Building directory strings..." << std::endl;
-            for (uint32_t i = 0; i < records.size(); ++i) {
-                // Only process directories that haven't been resolved yet
-                if (records[i].isDir && !directoryPaths.contains(i)) {
+        std::string getFullPath(uint32_t recordIdx) const {
+            std::vector<uint32_t> chain;
+            uint32_t current = recordIdx;
 
-                    std::vector<uint32_t> chain;
-                    uint32_t current = i;
-
-                    // 1. Identify the chain of parents that need resolving
-                    // STOP if we hit:
-                    // - A record we already resolved
-                    // - The root marker (0xFFFFFFFF)
-                    // - A record that points to itself (NTFS root often does this)
-                    while (current != 0xFFFFFFFF && !directoryPaths.contains(current)) {
-                        chain.push_back(current);
-                        uint32_t next = records[current].parentRecordIdx;
-                        if (next == current) break; // Self-reference safety
-                        current = next;
-                    }
-
-                    // 2. Build paths from top to bottom
-                    std::string base = (current != 0xFFFFFFFF && directoryPaths.contains(current))
-                                       ? directoryPaths[current] : "";
-
-                    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-                        uint32_t idx = *it;
-                        const auto& r = records[idx];
-                        std::string_view name(&stringPool[r.nameOffset], r.nameLen);
-
-                        // Filter out "." and ".." entries which NTFS sometimes includes
-                        if (name == "." || name == "..") {
-                            directoryPaths[idx] = base;
-                            continue;
-                        }
-
-                        // Build the string
-                        if (base == "/") base = ""; // Avoid "//"
-                        base += "/" + std::string(name);
-                        directoryPaths[idx] = base;
-                    }
-                }
+            // 1. Identify the chain of parents that need resolving
+            // STOP if we hit:
+            // - The root marker (0xFFFFFFFF)
+            // - A record that points to itself (NTFS root often does this)
+            while (current != 0xFFFFFFFF) {
+                chain.push_back(current);
+                uint32_t next = records[current].parentRecordIdx;
+                if (next == current) break; // Self-reference safety
+                current = next;
             }
+
+            // 2. Build paths from top to bottom
+            std::string base;
+
+            for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+                uint32_t idx = *it;
+                const auto& r = records[idx];
+                std::string_view name(&stringPool[r.nameOffset], r.nameLen);
+
+                // Filter out "." and ".." entries which NTFS sometimes includes
+                if (name == "." || name == "..") {
+                    continue;
+                }
+
+                // Build the string
+                if (base == "/") base = ""; // Avoid "//"
+                base += "/" + std::string(name);
+            }
+
+            if (base.empty()) base = "/";
+
+            return base;
         }
     };
 

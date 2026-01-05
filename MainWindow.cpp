@@ -344,12 +344,7 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
             const auto& rec = db.records[recordIdx];
 
             QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
-            QString internalPath;
-            auto it = db.directoryPaths.find(rec.parentRecordIdx);
-
-            if (it != db.directoryPaths.end()) {
-                internalPath = QString::fromStdString(it->second);
-            }
+            QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
 
             QString fullPath = QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName);
 
@@ -433,11 +428,7 @@ void MainWindow::openSelectedFiles() {
         const auto& rec = db.records[recordIdx];
 
         QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
-        QString internalPath;
-        auto it = db.directoryPaths.find(rec.parentRecordIdx);
-        if (it != db.directoryPaths.end()) {
-            internalPath = QString::fromStdString(it->second);
-        }
+        QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
 
         QString fullPath = QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName);
         QUrl url = QUrl::fromLocalFile(fullPath);
@@ -472,8 +463,7 @@ void MainWindow::openSelectedLocation() {
 
     uint32_t recordIdx = model->getRecordIndex(selectedRows.first().row());
     const auto& rec = db.records[recordIdx];
-    auto it = db.directoryPaths.find(rec.parentRecordIdx);
-    QString internalPath = (it != db.directoryPaths.end()) ? QString::fromStdString(it->second) : "";
+    QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
 
     QDesktopServices::openUrl(QUrl::fromLocalFile(QDir::cleanPath(m_mountPath + "/" + internalPath)));
 }
@@ -485,8 +475,7 @@ void MainWindow::copyPaths() {
         uint32_t recordIdx = model->getRecordIndex(index.row());
         const auto& rec = db.records[recordIdx];
         QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
-        auto it = db.directoryPaths.find(rec.parentRecordIdx);
-        QString internalPath = (it != db.directoryPaths.end()) ? QString::fromStdString(it->second) : "";
+        QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
         paths.append(QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName));
     }
 
@@ -500,8 +489,7 @@ void MainWindow::copyFiles() {
         uint32_t recordIdx = model->getRecordIndex(index.row());
         const auto& rec = db.records[recordIdx];
         QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
-        auto it = db.directoryPaths.find(rec.parentRecordIdx);
-        QString internalPath = (it != db.directoryPaths.end()) ? QString::fromStdString(it->second) : "";
+        QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
         urls.append(QUrl::fromLocalFile(QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName)));
     }
 
@@ -519,8 +507,7 @@ void MainWindow::openTerminal() {
 
     uint32_t recordIdx = model->getRecordIndex(selectedRows.first().row());
     const auto& rec = db.records[recordIdx];
-    auto it = db.directoryPaths.find(rec.parentRecordIdx);
-    QString internalPath = (it != db.directoryPaths.end()) ? QString::fromStdString(it->second) : "";
+    QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
     QString fullDirPath = QDir::cleanPath(m_mountPath + "/" + internalPath);
 
     // KTerminalLauncherJob automatically finds the preferred terminal

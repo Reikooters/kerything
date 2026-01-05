@@ -45,17 +45,6 @@ int main(int argc, char* argv[]) {
     // 4. Write the string pool itself
     std::cout.write(db->stringPool.data(), static_cast<std::streamsize>(poolSize));
 
-    // 5. Write the directory paths (Serialization)
-    uint64_t dirCount = db->directoryPaths.size();
-    std::cout.write(reinterpret_cast<const char*>(&dirCount), sizeof(dirCount));
-
-    for (const auto& [idx, path] : db->directoryPaths) {
-        std::cout.write(reinterpret_cast<const char*>(&idx), sizeof(idx));
-        uint32_t len = path.length();
-        std::cout.write(reinterpret_cast<const char*>(&len), sizeof(len));
-        std::cout.write(path.data(), len);
-    }
-
     std::cout.flush();
     return 0;
 }

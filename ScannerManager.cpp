@@ -154,29 +154,7 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
     db.stringPool.resize(poolSize);
     stream.readRawData(db.stringPool.data(), static_cast<qint64>(poolSize));
 
-    // 5. Read directory paths
-    uint64_t dirCount = 0;
-    if (!readVal(dirCount)) {
-        m_isRunning = false;
-        Q_EMIT scannerFinished();
-
-        return std::nullopt;
-    }
-
-    qDebug() << "Reading" << dirCount << "directory paths...";
-    for (uint64_t i = 0; i < dirCount; ++i) {
-        quint32 idx, len;
-
-        if (!readVal(idx) || !readVal(len)) {
-            break;
-        }
-
-        std::string path(len, '\0');
-        stream.readRawData(path.data(), len);
-        db.directoryPaths[idx] = std::move(path);
-    }
-
-    // 6. Build the trigram index
+    // 5. Build the trigram index
     qDebug() << "Data transfer complete. Building trigrams...";
     Q_EMIT progressMessage("Building search index...");
     QCoreApplication::processEvents();

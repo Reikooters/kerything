@@ -59,12 +59,8 @@ void FileModel::sort(int column, Qt::SortOrder order) {
                         );
                     case 1: // Path
                     {
-                        // Look up the pre-computed directory path for the file's parent
-                        auto itA = m_db->directoryPaths.find(a.parentRecordIdx);
-                        auto itB = m_db->directoryPaths.find(b.parentRecordIdx);
-                        static constexpr std::string_view rootPath = "/";
-                        std::string_view pathA = (itA != m_db->directoryPaths.end()) ? std::string_view(itA->second) : rootPath;
-                        std::string_view pathB = (itB != m_db->directoryPaths.end()) ? std::string_view(itB->second) : rootPath;
+                        std::string pathA = m_db->getFullPath(a.parentRecordIdx);
+                        std::string pathB = m_db->getFullPath(b.parentRecordIdx);
                         return compareCaseInsensitive(pathA, pathB);
                     }
                     case 2: // Size
@@ -88,14 +84,8 @@ void FileModel::sort(int column, Qt::SortOrder order) {
                         );
                     case 1: // Path
                     {
-                        auto itA = m_db->directoryPaths.find(a.parentRecordIdx);
-                        auto itB = m_db->directoryPaths.find(b.parentRecordIdx);
-
-                        static constexpr std::string_view rootPath = "/";
-
-                        std::string_view pathA = (itA != m_db->directoryPaths.end()) ? std::string_view(itA->second) : rootPath;
-                        std::string_view pathB = (itB != m_db->directoryPaths.end()) ? std::string_view(itB->second) : rootPath;
-
+                        std::string pathA = m_db->getFullPath(a.parentRecordIdx);
+                        std::string pathB = m_db->getFullPath(b.parentRecordIdx);
                         return compareCaseInsensitive(pathB, pathA);
                     }
                     case 2: // Size
@@ -158,11 +148,7 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
             return QString::fromUtf8(&m_db->stringPool[rec.nameOffset], rec.nameLen);
         case 1: // Path: Resolved from the directory map
         {
-            auto it = m_db->directoryPaths.find(rec.parentRecordIdx);
-            if (it != m_db->directoryPaths.end()) {
-                return QString::fromStdString(it->second);
-            }
-            return QString("/");
+            return QString::fromStdString(m_db->getFullPath(rec.parentRecordIdx));
         }
         case 2: // Size: Formatted according to the user's locale
             if (rec.isDir) return QString("<DIR>");
@@ -220,11 +206,7 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
             QString fileName = QString::fromUtf8(&m_db->stringPool[rec.nameOffset], rec.nameLen);
 
             // Resolve parent directory path
-            QString internalPath;
-            auto it = m_db->directoryPaths.find(rec.parentRecordIdx);
-            if (it != m_db->directoryPaths.end()) {
-                internalPath = QString::fromStdString(it->second);
-            }
+            QString internalPath = QString::fromStdString(m_db->getFullPath(rec.parentRecordIdx));
 
             // Construct the absolute Linux path and wrap it in a QUrl
             QString fullPath = QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName);

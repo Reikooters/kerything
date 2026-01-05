@@ -39,7 +39,7 @@ add_executable(kerything-scanner-helper
         Utils.h
         Version.h
 )
-target_link_libraries(kerything-scanner-helper PRIVATE TBB::tbb Qt6::Core)
+target_link_libraries(kerything-scanner-helper PRIVATE TBB::tbb)
 
 # 2. THE GUI (The user interface - runs as normal user)
 add_executable(kerything

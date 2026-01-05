@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
+
 #include <fstream>
 #include <iostream>
 #include "../Utils.h"

@@ -32,8 +32,12 @@ find_package(KF6 REQUIRED COMPONENTS
 # 1. THE HELPER (The disk scanner - runs as root via pkexec)
 add_executable(kerything-scanner-helper
         main_helper.cpp
-        ScannerEngine.cpp
         ScannerEngine.h
+        scanners/NtfsScannerEngine.cpp
+        scanners/NtfsScannerEngine.h
+        Utils.cpp
+        Utils.h
+        Version.h
 )
 target_link_libraries(kerything-scanner-helper PRIVATE TBB::tbb Qt6::Core)
 
@@ -51,6 +55,7 @@ add_executable(kerything
         ScannerEngine.h # Need the structs for the DB
         ScannerManager.cpp
         ScannerManager.h
+        Version.h
 )
 
 target_link_libraries(kerything

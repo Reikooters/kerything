@@ -1,25 +1,10 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
+#include <fstream>
+#include <iostream>
+#include "../Utils.h"
+#include "NtfsScannerEngine.h"
 
-#include "ScannerEngine.h"
-
-namespace ScannerEngine {
+namespace NtfsScannerEngine {
     std::vector<MftRun> mftRuns;
-
-    std::string utf16ToUtf8(const char16_t* utf16_ptr, size_t length)
-    {
-        if (!utf16_ptr || length == 0)
-            return "";
-
-        std::string out;
-        out.reserve(length * 2); // Pre-allocate to avoid multiple reallocs
-        try {
-            utf8::utf16to8(utf16_ptr, utf16_ptr + length, std::back_inserter(out));
-        } catch (const utf8::invalid_utf16& e) {
-            return "Invalid UTF-16 Data";
-        }
-        return out;
-    }
 
     FileInfo getFileInfo(MFT_RecordHeader* header, char* buffer, uint64_t index) {
         FileInfo info = {{}, 0, static_cast<bool>(header->flags & 0x02), 0, index};
@@ -45,8 +30,14 @@ namespace ScannerEngine {
             auto* attr = reinterpret_cast<AttributeHeader*>(buffer + attrOffset);
 
             // Validation: If attribute length is 0 or exceeds remaining buffer, it's corrupt.
-            if (attr->length == 0 || (attrOffset + attr->length) > recordSize) break;
-            if (attr->type == 0xFFFFFFFF) break;
+            if (attr->length == 0 || (attrOffset + attr->length) > recordSize) {
+                break;
+            }
+
+            // 0xFFFFFFFF is the end-of-attributes marker in NTFS
+            if (attr->type == 0xFFFFFFFF) {
+                break;
+            }
 
             if (attr->type == 0x30) { // $FILE_NAME
                 // Check if attribute is Resident.
@@ -66,7 +57,7 @@ namespace ScannerEngine {
                             // MFT references are 64-bit, but only the first 48 bits are the record index.
                             // The top 16 bits are the "Sequence Number" used for consistency checks.
                             allNames.push_back({
-                                utf16ToUtf8(fn->name, fn->nameLength),
+                                Utils::utf16ToUtf8(fn->name, fn->nameLength),
                                 fn->parentDirectory & 0xFFFFFFFFFFFFULL,
                                 fn->namespaceType,
                                 fn->modificationTime,
@@ -78,14 +69,15 @@ namespace ScannerEngine {
             }
             else if (attr->type == 0x80 && attr->nameLength == 0) { // $DATA (unnamed) (The actual file content)
                 dataAttrFound = true;
+
                 if (attr->nonResident == 0) {
                     // Resident: data is right here in the MFT record
-                    sizeFromData = reinterpret_cast<ResidentHeader*>(buffer + attrOffset + 16)->dataLength;
+                    sizeFromData = reinterpret_cast<ResidentHeader*>(buffer + attrOffset + sizeof(AttributeHeader))->dataLength;
                 } else {
-                    // Non-resident: size is at offset 48 of the attribute header
-                    sizeFromData = *reinterpret_cast<uint64_t*>(buffer + attrOffset + 48);
+                    sizeFromData = reinterpret_cast<NonResidentHeader*>(buffer + attrOffset + sizeof(AttributeHeader))->dataSize;
                 }
             }
+
             attrOffset += attr->length;
         }
 
@@ -126,12 +118,6 @@ namespace ScannerEngine {
         return info;
     }
 
-    /**
-     * NTFS Fixups (Update Sequence Array):
-     * To detect partial writes, NTFS saves the last 2 bytes of every 512-byte
-     * sector into an array and replaces them with a "sequence number".
-     * Before reading, we must "fix" the sectors by putting the original bytes back.
-     */
     void applyFixups(char* buffer, uint32_t recordSize)
     {
         auto* header = reinterpret_cast<MFT_RecordHeader*>(buffer);
@@ -144,9 +130,23 @@ namespace ScannerEngine {
         // header->updateSequenceSize includes the sequence number itself, so we subtract 1
         int sectorCount = header->updateSequenceSize - 1;
 
+        if (sectorCount <= 0) {
+            return;
+        }
+
+        // Use recordSize to determine the actual bytes per sector for this record
+        uint32_t bytesPerSector = recordSize / sectorCount;
+
         for (int i = 0; i < sectorCount; ++i) {
-            // The last 2 bytes of every 512-byte sector
-            uint16_t* sectorEnd = reinterpret_cast<uint16_t*>(buffer + ((i + 1) * 512) - 2);
+            // The last 2 bytes of every sector
+            uint32_t offset = ((i + 1) * bytesPerSector) - 2;
+
+            // Safety check to prevent buffer overflow if MFT header is corrupt
+            if (offset + 2 > recordSize) {
+                break;
+            }
+
+            uint16_t* sectorEnd = reinterpret_cast<uint16_t*>(buffer + offset);
 
             // Safety check: if it doesn't match, the record is corrupt or partially written
             if (*sectorEnd != sequenceNumber) {
@@ -159,17 +159,13 @@ namespace ScannerEngine {
         }
     }
 
-    /**
-     * The MFT itself is a file ($MFT) and can be fragmented.
-     * This function decodes "Data Runs" (compressed byte streams) to find
-     * where the MFT fragments are located physically on the disk.
-     */
-    void parseMftRuns(char* buffer, uint32_t attrOffset, uint64_t bytesPerCluster)
+    void parseMftRuns(char* buffer, uint32_t attrOffset)
     {
         auto* attr = reinterpret_cast<AttributeHeader*>(buffer + attrOffset);
-        // Non-resident data attribute header is 64 bytes
-        uint16_t runOffset = *reinterpret_cast<uint16_t*>(buffer + attrOffset + 32);
-        uint8_t* runPos = reinterpret_cast<uint8_t*>(buffer + attrOffset + runOffset);
+
+        // The "Mapping Pairs" (Data Runs) offset is at byte 32 of a non-resident attribute header
+        uint16_t runOffset = *reinterpret_cast<uint16_t*>(reinterpret_cast<char*>(attr) + 32);
+        uint8_t* runPos = reinterpret_cast<uint8_t*>(reinterpret_cast<char*>(attr) + runOffset);
 
         uint64_t currentVcn = 0;
         int64_t currentLcn = 0;
@@ -180,17 +176,20 @@ namespace ScannerEngine {
             uint8_t offSize = (header >> 4) & 0x0F; // How many bytes encode the offset
 
             uint64_t runLen = 0;
-            for (int i = 0; i < lenSize; ++i)
+            for (int i = 0; i < lenSize; ++i) {
                 runLen |= static_cast<uint64_t>(*runPos++) << (i * 8);
+            }
 
             int64_t runOff = 0;
-            for (int i = 0; i < offSize; ++i)
+            for (int i = 0; i < offSize; ++i) {
                 runOff |= static_cast<int64_t>(*runPos++) << (i * 8);
+            }
 
             // Sign extend the offset: NTFS offsets are relative and can be negative!
             if (offSize > 0 && (runOff & (1ULL << (offSize * 8 - 1)))) {
-                for (int i = offSize; i < 8; ++i)
+                for (int i = offSize; i < 8; ++i) {
                     runOff |= (0xFFULL << (i * 8));
+                }
             }
 
             currentLcn += runOff;
@@ -199,10 +198,6 @@ namespace ScannerEngine {
         }
     }
 
-    /**
-     * Converts an MFT Index (e.g., File #1234) to a physical byte offset on the disk.
-     * It uses the data runs we parsed earlier to account for MFT fragmentation.
-     */
     uint64_t mftIndexToPhysicalOffset(uint64_t index, uint32_t recordSize, uint64_t bytesPerCluster)
     {
         uint64_t virtualClusterNumber = (index * recordSize) / bytesPerCluster;
@@ -216,7 +211,7 @@ namespace ScannerEngine {
         return 0;
     }
 
-    std::optional<SearchDatabase> parseMFT(const std::string& devicePath)
+    std::optional<NtfsDatabase> parseMft(const std::string& devicePath)
     {
         // Opening a disk device requires 'root' privileges on Linux.
         std::ifstream disk(devicePath, std::ios::binary);
@@ -246,11 +241,11 @@ namespace ScannerEngine {
         uint32_t recordSize = (clustersPerFileRecord > 0) ? (clustersPerFileRecord * bytesPerCluster) : (1 << (-clustersPerFileRecord));
 
         std::cerr << "--- NTFS Volume Info ---" << "\n";
-        std::cerr << "Bytes per Sector:  " << boot.bytesPerSector << "\n";
-        std::cerr << "Sectors per Clust: " << static_cast<int>(boot.sectorsPerCluster) << "\n";
-        std::cerr << "MFT Start LCN:     " << boot.mftStartLcn << "\n";
-        std::cerr << "MFT Offset (hex):  0x" << std::hex << mftOffset << std::dec << "\n";
-        std::cerr << "Record Size:       " << recordSize << " bytes\n";
+        std::cerr << "Bytes per Sector:    " << boot.bytesPerSector << "\n";
+        std::cerr << "Sectors per Cluster: " << static_cast<int>(boot.sectorsPerCluster) << "\n";
+        std::cerr << "MFT Start LCN:       " << boot.mftStartLcn << "\n";
+        std::cerr << "MFT Offset (hex):    0x" << std::hex << mftOffset << std::dec << "\n";
+        std::cerr << "Record Size:         " << recordSize << " bytes\n";
         std::cerr << "------------------------" << "\n";
 
         if (mftOffset == 0 || recordSize == 0) {
@@ -269,14 +264,23 @@ namespace ScannerEngine {
         uint64_t totalMftSize = 0;
         while (mftAttrOffset + 16 <= mftHeader->usedSize) {
             auto* attr = reinterpret_cast<AttributeHeader*>(buffer.data() + mftAttrOffset);
-            if (attr->type == 0x80) { // Data Attribute
-                parseMftRuns(buffer.data(), mftAttrOffset, bytesPerCluster);
-                // Size is at offset 48 for non-resident attributes
-                totalMftSize = *reinterpret_cast<uint64_t*>(buffer.data() + mftAttrOffset + 48);
+
+            if (attr->type == 0x80) { // $DATA Attribute
+                parseMftRuns(buffer.data(), mftAttrOffset);
+
+                if (attr->nonResident) {
+                    auto* nonResident = reinterpret_cast<NonResidentHeader*>(
+                        buffer.data() + mftAttrOffset + sizeof(AttributeHeader));
+                    totalMftSize = nonResident->dataSize;
+                }
                 break;
             }
-            if (attr->type == 0xFFFFFFFF || attr->length == 0)
+
+            // 0xFFFFFFFF is the end-of-attributes marker in NTFS
+            if (attr->type == 0xFFFFFFFF || attr->length == 0) {
                 break;
+            }
+
             mftAttrOffset += attr->length;
         }
 
@@ -288,12 +292,12 @@ namespace ScannerEngine {
         const size_t batchSizeInRecords = (4 * 1024 * 1024) / recordSize;
         std::vector<char> batchBuffer(batchSizeInRecords * recordSize);
 
-        SearchDatabase db;
+        NtfsDatabase db;
         db.records.reserve(totalRecords);
         db.stringPool.reserve(totalRecords * 20); // Average filename length estimate
 
         // Step 3: Single Pass.
-        // We collect all valid records. Trigrams are built as we go.
+        // We collect all valid records.
         for (const auto& run : mftRuns) {
             uint64_t runOffset = run.logicalClusterNumber * bytesPerCluster;
             uint64_t recordsInRun = (run.length * bytesPerCluster) / recordSize;
@@ -334,6 +338,49 @@ namespace ScannerEngine {
 
         std::cerr << "Resolving parent pointers completed.\n";
 
-        return SearchDatabase{std::move(db)};
+        return NtfsDatabase{std::move(db)};
+    }
+
+    void NtfsDatabase::add(std::string_view name, uint64_t mftIndex, uint64_t parentMftIndex, uint64_t size, uint64_t mod, bool isDir) {
+        uint32_t currentIdx = static_cast<uint32_t>(records.size());
+
+        FileRecord rec{};
+        rec.size = size;
+        rec.modificationTime = mod;
+        rec.nameOffset = static_cast<uint32_t>(stringPool.size());
+        rec.nameLen = static_cast<uint16_t>(name.length());
+        rec.isDir = isDir;
+        rec.isSymlink = false; // unused
+
+        records.push_back(rec);
+        tempParentMfts.push_back(parentMftIndex); // Store metadata in parallel vector
+        stringPool.insert(stringPool.end(), name.begin(), name.end());
+
+        // Fill the temporary map
+        mftToRecordIdx[mftIndex] = currentIdx;
+    }
+
+    // We call this once after the MFT scan is completely finished
+    void NtfsDatabase::resolveParentPointers() {
+        std::cerr << "Resolving parent pointers..." << std::endl;
+
+        // Convert parent MFT index to internal index
+        for (size_t i = 0; i < records.size(); ++i) {
+            uint64_t parentMft = tempParentMfts[i]; // Look up from parallel vector
+
+            auto it = mftToRecordIdx.find(parentMft);
+            if (it != mftToRecordIdx.end()) {
+                records[i].parentRecordIdx = it->second;
+            } else {
+                // If parent isn't in our DB (like MFT Index 5's parent), mark as root
+                records[i].parentRecordIdx = 0xFFFFFFFF;
+            }
+        }
+
+        // Cleanup all temporary data.
+        // The memory is freed, and the GUI never even sees it.
+        mftToRecordIdx.clear();
+        tempParentMfts.clear();
+        tempParentMfts.shrink_to_fit();
     }
 }

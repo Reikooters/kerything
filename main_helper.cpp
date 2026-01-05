@@ -2,7 +2,8 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include <iostream>
-#include "ScannerEngine.h"
+#include "scanners/NtfsScannerEngine.h"
+#include "Version.h"
 
 /**
  * The Helper:
@@ -17,7 +18,7 @@ int main(int argc, char* argv[]) {
 
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--version") {
-            std::cout << "kerything-scanner-helper v" << ScannerEngine::VERSION << std::endl;
+            std::cout << "kerything-scanner-helper v" << Version::VERSION << std::endl;
             return 0;
         }
     }
@@ -26,7 +27,7 @@ int main(int argc, char* argv[]) {
     std::ios_base::sync_with_stdio(false);
 
     // Use parseMFT from our engine
-    auto db = ScannerEngine::parseMFT(argv[1]);
+    std::optional<NtfsScannerEngine::NtfsDatabase> db = NtfsScannerEngine::parseMft(argv[1]);
     if (!db) {
         return 1;
     }
@@ -36,7 +37,7 @@ int main(int argc, char* argv[]) {
     std::cout.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
 
     // 2. Write the raw vector data (The FileRecord structs)
-    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(ScannerEngine::FileRecord)));
+    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(NtfsScannerEngine::FileRecord)));
 
     // 3. Write the size of the string pool
     uint64_t poolSize = db->stringPool.size();

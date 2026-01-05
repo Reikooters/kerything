@@ -6,12 +6,13 @@
 #include "ScannerEngine.h"
 #include "PartitionDialog.h"
 #include "MainWindow.h"
+#include "Version.h"
 
 int main(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--version") {
-            std::cout << "kerything v" << ScannerEngine::VERSION << std::endl;
+            std::cout << "kerything v" << Version::VERSION << std::endl;
             return 0;
         }
     }
@@ -21,7 +22,7 @@ int main(int argc, char* argv[])
     KAboutData aboutData(
         QStringLiteral("kerything"),
         QStringLiteral("Kerything"),
-        QStringLiteral("1.1.0"),
+        QString::fromUtf8(Version::VERSION),
         QStringLiteral("A fast NTFS file searcher."),
         KAboutLicense::GPL_V3,
         QStringLiteral("(c) 2026 Reikooters &lt;https://github.com/Reikooters&gt;")

@@ -78,13 +78,13 @@ Kerything operates in two parts:
 You likely already have the required dependencies installed. You can check with:
 
 ```bash
-pacman -Q qt6-base kwidgetsaddons kcoreaddons solid kio extra-cmake-modules onetbb
+pacman -Q qt6-base kwidgetsaddons kcoreaddons solid kio extra-cmake-modules onetbb e2fsprogs
 ```
 
 If you get any 'not found' errors, install the ones you need with:
 
 ```bash
-sudo pacman -S qt6-base kwidgetsaddons kcoreaddons solid kio extra-cmake-modules onetbb
+sudo pacman -S qt6-base kwidgetsaddons kcoreaddons solid kio extra-cmake-modules onetbb e2fsprogs
 ```
 
 #### Installation steps:

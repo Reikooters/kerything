@@ -10,6 +10,8 @@ The name is a nod to the iconic "Everything" utility, while the 'K' prefix follo
 
 *Kerything is a community project and is not affiliated with Voidtools.*
 
+![Screenshot](screenshot.png)
+
 ## 🚀 Features
 
 - **Blazing Fast Indexing:** (tested on 7200rpm HDDs)

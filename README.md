@@ -200,7 +200,7 @@ Kerything makes use of the following excellent open-source libraries:
 
 - **[utfcpp](https://github.com/nemtrif/utfcpp):** A simple, portable and lightweight library for handling UTF-8 encoded strings in C++.
 - **[onetbb](https://github.com/oneapi-src/oneTBB):** Intel's oneAPI Threading Building Blocks library for parallelism.
-- **[e2fsprogs](https://github.com/tytso/e2fsprogs])::** The Linux filesystem tools used to read EXT4 partitions.
+- **[e2fsprogs](https://github.com/tytso/e2fsprogs]):** The Linux filesystem tools used to read EXT4 partitions.
 
 ## 📜 License
 

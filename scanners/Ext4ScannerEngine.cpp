@@ -104,33 +104,32 @@ namespace Ext4ScannerEngine {
             return 0;
         }
 
-        // Store the name in the string pool
-        uint32_t current_offset = ctx->db.stringPool.size();
-        ctx->db.stringPool.insert(ctx->db.stringPool.end(), dirent->name, dirent->name + len);
-
-        // Access the FileRecord via the ScanContext
-        FileRecord* record;
-        int recordIndex;
-
+        // Check if this inode already has a record (e.g. from another hard link)
         auto it = ctx->db.inodeToRecordIdx.find(dirent->inode);
+        uint32_t recordIndex;
+
         if (it == ctx->db.inodeToRecordIdx.end()) {
+            // "Birth" the record here because we have a name
             FileRecord newRecord{};
-            record = &ctx->db.records.emplace_back(newRecord);
-            ctx->db.tempParentInodes.push_back(dir_ino);
+            newRecord.parentRecordIdx = 0xFFFFFFFF;
+
+            ctx->db.records.push_back(newRecord);
             recordIndex = ctx->db.records.size() - 1;
             ctx->db.inodeToRecordIdx[dirent->inode] = recordIndex;
-        }
-        else {
-            record = &ctx->db.records[it->second];
-            recordIndex = it->second;
 
-            // Set parent inode for the FileRecord to be the directory inode
+            // Keep the parallel vector in sync
+            ctx->db.tempParentInodes.push_back(dir_ino);
+        } else {
+            recordIndex = it->second;
+            // Update the parent just in case (though usually doesn't change for the same name)
             ctx->db.tempParentInodes[recordIndex] = dir_ino;
         }
 
-        // Update the FileRecord to specify the name offset and length in the string pool
-        record->nameOffset = current_offset;
-        record->nameLen = len;
+        // Store the name in the string pool
+        FileRecord& record = ctx->db.records[recordIndex];
+        record.nameOffset = ctx->db.stringPool.size();
+        record.nameLen = len;
+        ctx->db.stringPool.insert(ctx->db.stringPool.end(), dirent->name, dirent->name + len);
 
         return 0;
     }
@@ -151,11 +150,20 @@ namespace Ext4ScannerEngine {
         Ext4Database db;
         db.records.reserve(initialCapacity);
         db.tempParentInodes.reserve(initialCapacity);
+        db.inodeToRecordIdx.reserve(initialCapacity);
+        db.inodeToFileStats.reserve(initialCapacity);
 
         // Pre-reserve string pool based on heuristic (average 20 chars per filename)
         db.stringPool.reserve(initialCapacity * 20);
 
-        int bufferBlocks = 512;
+        // Explicitly add the root entry first
+        FileRecord rootRec{};
+        rootRec.parentRecordIdx = 0xFFFFFFFF;
+        db.records.push_back(rootRec);
+        db.inodeToRecordIdx[EXT2_ROOT_INO] = 0;
+        db.tempParentInodes.push_back(0);
+
+        int bufferBlocks = 4096;
 
         ext2_inode_scan scan;
         ext2fs_open_inode_scan(fs, bufferBlocks, &scan);
@@ -165,91 +173,35 @@ namespace Ext4ScannerEngine {
 
         ScanContext ctx{db, max_inodes};
 
+        // Crawl the directory tree to discover all names and structure
+        // We start from the root inode (2) and let ext2fs_dir_iterate2 recurse
+        // through directories.
         while (ext2fs_get_next_inode(scan, &ino, &inode) == 0 && ino != 0) {
-            // Ignore files that have no links (deleted but still in use)
-            if (inode.i_links_count == 0) {
-                continue;
-            }
+            if (inode.i_links_count == 0) continue;
 
-            FileRecord* record;
+            FileStats stats{};
+            stats.size = EXT2_I_SIZE(&inode);
+            stats.modificationTime = inode.i_mtime;
+            stats.isDir = LINUX_S_ISDIR(inode.i_mode);
+            stats.isSymlink = LINUX_S_ISLNK(inode.i_mode);
 
-            auto it = db.inodeToRecordIdx.find(ino);
-            if (it == db.inodeToRecordIdx.end()) {
-                FileRecord newRecord{};
-                record = &db.records.emplace_back(newRecord);
-                db.inodeToRecordIdx[ino] = db.records.size() - 1;
+            db.inodeToFileStats[ino] = stats;
 
-                // Add temporary placeholder for the file's parent inode, will be updated later in dirCallback
-                db.tempParentInodes.push_back(0);
-            }
-            else {
-                record = &db.records[it->second];
-            }
-
-            record->size = EXT2_I_SIZE(&inode); // Note: For symlinks, EXT2_I_SIZE(&inode) will be the length of the path it points to.
-            record->modificationTime = inode.i_mtime;
-
-            bool isDir = LINUX_S_ISDIR(inode.i_mode);
-
-            if (isDir) {
-                record->isDir = 1;
-            }
-
-            bool isSymlink = LINUX_S_ISLNK(inode.i_mode);
-
-            if (isSymlink) {
-                record->isSymlink = 1;
-            }
-
-            // If it's a directory, iterate its entries to find child names
-            if (record->isDir) {
+            if (LINUX_S_ISDIR(inode.i_mode)) {
+                // This will trigger dirCallback for every file inside this directory
                 ext2fs_dir_iterate2(fs, ino, 0, nullptr, dirCallback, &ctx);
             }
-
-            // NOTE TO SELF: Don't use `record` anymore here as the pointer might have been
-            // invalidated in dirCallback()
         }
+
+        // Close the scan
+        ext2fs_close_inode_scan(scan);
+        ext2fs_close(fs);
 
         // Resolve parent Inodes to parent Record Indices
         db.resolveParentPointers();
 
-        // // Now output the results
-        // std::cout << "\nInode\tType\tParent\tSize\t\tName\n";
-        // std::cout << "------------------------------------------------------------\n";
-        // for (int i = 0; i < db.records.size(); i++) {
-        //     FileRecord& record = db.records[i];
-        //
-        //     // Skip entries that don't have a name
-        //     if (record.nameLen == 0) {
-        //         continue;
-        //     }
-        //
-        //     std::string type = record.isDir ? "DIR" : "FILE";
-        //
-        //     if (record.isSymlink) {
-        //         type.append("_SYMLINK");
-        //     }
-        //
-        //     // Reconstruct the name from the arena
-        //     std::string display_name;
-        //     std::string parent_path;
-        //
-        //     display_name.assign(db.stringPool.data() + record.nameOffset, record.nameLen);
-        //     parent_path = db.getFullPath(record.parentRecordIdx);
-        //
-        //     // Ensure parent_path ends with / if it's not empty
-        //     if (!parent_path.empty() && parent_path.back() != '/') {
-        //         parent_path += "/";
-        //     }
-        //
-        //     std::cout << type << "\t"
-        //               << record.size << "\t\t"
-        //               << parent_path << "\t"
-        //               << display_name << "\n";
-        // }
-
-        ext2fs_close_inode_scan(scan);
-        ext2fs_close(fs);
+        // Populate stats into records
+        db.populateStatsIntoRecords();
 
         return db;
     }
@@ -277,10 +229,26 @@ namespace Ext4ScannerEngine {
             }
         }
 
-        // Cleanup all temporary data.
-        // The memory is freed, and the GUI never even sees it.
-        inodeToRecordIdx.clear();
+        // Clean up parent inodes temporary data
         tempParentInodes.clear();
         tempParentInodes.shrink_to_fit();
+    }
+
+    void Ext4Database::populateStatsIntoRecords() {
+        std::cerr << "Populating stats into records..." << std::endl;
+
+        for (auto& it : inodeToRecordIdx) {
+            FileRecord& record = records[it.second];
+            FileStats& stats = inodeToFileStats[it.first];
+            record.size = stats.size;
+            record.modificationTime = stats.modificationTime;
+            record.isDir = stats.isDir;
+            record.isSymlink = stats.isSymlink;
+        }
+
+        // Clean up remaining temporary data
+        // The memory is freed, and the GUI never even sees it.
+        inodeToRecordIdx.clear();
+        inodeToFileStats.clear();
     }
 }

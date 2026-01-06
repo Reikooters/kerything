@@ -39,6 +39,14 @@ namespace Ext4ScannerEngine {
 
     #pragma pack(pop)
 
+    struct FileStats {
+        uint64_t size;
+        uint64_t modificationTime;
+        uint8_t isDir : 1;
+        uint8_t isSymlink : 1; // Unused in NTFS
+        uint8_t reserved : 6;
+    };
+
     struct Ext4Database {
         std::vector<FileRecord> records;
         std::vector<char> stringPool;
@@ -48,9 +56,12 @@ namespace Ext4ScannerEngine {
         std::unordered_map<uint32_t, uint32_t> inodeToRecordIdx;
         // Temporary storage for inodes index
         std::vector<uint32_t> tempParentInodes;
+        // Temporary storage for inode stats
+        std::unordered_map<uint32_t, FileStats> inodeToFileStats;
 
-        // We call this once after the inode scan is completely finished
+        // We call these once after the inode scan is completely finished
         void resolveParentPointers();
+        void populateStatsIntoRecords();
 
         [[nodiscard]] std::string getFullPath(const uint32_t recordIdx) const;
     };

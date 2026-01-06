@@ -4,7 +4,7 @@
 pkgname=kerything
 pkgver=1.2.0
 pkgrel=1
-pkgdesc="Fast NTFS file scanner using trigrams"
+pkgdesc="Fast NTFS and EXT4 file scanner using trigrams"
 arch=('x86_64')
 url="https://github.com/Reikooters/kerything"
 license=('GPL-3.0-or-later')

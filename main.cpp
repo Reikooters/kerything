@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
         QStringLiteral("kerything"),
         QStringLiteral("Kerything"),
         QString::fromUtf8(Version::VERSION),
-        QStringLiteral("A fast NTFS file searcher."),
+        QStringLiteral("A fast NTFS and EXT4 file searcher, inspired by the Windows utility \"Everything\" by Voidtools."),
         KAboutLicense::GPL_V3,
         QStringLiteral("(c) 2026 Reikooters &lt;https://github.com/Reikooters&gt;")
     );

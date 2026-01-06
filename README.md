@@ -1,10 +1,10 @@
 # Kerything 🔍
 
-Kerything is a lightning-fast NTFS file search utility for Linux, built with C++26, Qt 6, and KDE Frameworks 6.
+Kerything is a lightning-fast NTFS and EXT4 file search utility for Linux, built with C++26, Qt 6, and KDE Frameworks 6.
 
-Inspired by the Windows utility "Everything" by Voidtools, Kerything bypasses standard directory crawling by reading the **NTFS Master File Table (MFT)** directly. This allows it to index millions of files per second.
+Inspired by the Windows utility "Everything" by Voidtools, Kerything bypasses standard directory crawling by reading the **NTFS Master File Table (MFT)** or scanning **EXT4 inodes** directly. This allows it to index millions of files per second.
 
-The application is targeted at KDE Plasma desktop users who want a fast file search utility for their NTFS drives, including those who dual-boot Windows or still use NTFS hard disks on their Linux machine. 🐧✨
+The application is targeted at KDE Plasma desktop users who want a fast file search utility for their NTFS and EXT4 drives, including those who dual-boot Windows or still use NTFS hard disks on their Linux machine. 🐧✨
 
 The name is a nod to the iconic "Everything" utility, while the 'K' prefix follows the long-standing naming tradition of the KDE community.
 
@@ -12,8 +12,10 @@ The name is a nod to the iconic "Everything" utility, while the 'K' prefix follo
 
 ## 🚀 Features
 
-- **Blazing Fast Indexing:** Scans 2M+ files per second (tested on 7200rpm HDDs).
-- **Offline Indexing:** Supports scanning NTFS partitions even when they are not mounted in Linux.
+- **Blazing Fast Indexing:** (tested on 7200rpm HDDs)
+  - Scans NTFS partitions at 2M+ files per second.
+  - Scans EXT4 partitions at 1.2M+ files per second.
+- **Offline Indexing:** Supports scanning NTFS and EXT4 partitions even when they are not mounted in Linux.
 - **Instant Search:** Uses trigram indexing for real-time search results as you type.
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
 - **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning, regular expressions and other complex patterns, Kerything stays lightweight and responsive.
@@ -29,7 +31,7 @@ Kerything is designed to be usable without leaving the keyboard, following stand
 
 | Shortcut                 | Action                                                                               |
 |:-------------------------|:-------------------------------------------------------------------------------------|
-| `Ctrl + L` or `Alt + D` | Focus search bar and select all text                                                 |
+| `Ctrl + L` or `Alt + D`  | Focus search bar and select all text                                                 |
 | `Down / Up`              | Move focus from search bar to the results table                                      |
 | `Return`                 | Open selected file(s) with default applications                                      |
 | `Ctrl + Return`          | Open the folder containing the selected file                                         |
@@ -44,11 +46,13 @@ Kerything is designed to be usable without leaving the keyboard, following stand
 
 Kerything operates in two parts:
 
-1. **The Scanner Helper (`kerything-scanner-helper`):** A small C++ utility that runs via `pkexec`. It requires root privileges to access the raw block device of your NTFS partition to read the MFT records directly.
+1. **The Scanner Helper (`kerything-scanner-helper`):** A small C++ utility that runs via `pkexec`. It requires root privileges to access the raw block device of your NTFS/EXT4 partition to read the MFT records/inodes directly.
 2. **The GUI (`kerything`):** Receives the raw file data from the helper, builds a search database using trigrams, and provides a responsive search interface. Runs in unprivileged user mode.
 
 > [!NOTE]  
-> Because Kerything reads the MFT directly, it is currently limited to NTFS partitions. Additionally, because the `ntfs-3g` FUSE driver doesn't support `fanotify` or update the USN Journal on disk, live file system updates are not currently supported - simply press F5 within the application to rescan the partition and get an updated index.
+> For **NTFS partitions**, because Kerything reads the MFT directly, and because the `ntfs-3g` FUSE driver doesn't support `fanotify` or update the USN Journal on disk, live file system updates are not currently supported - simply press F5 within the application to rescan the partition and get an updated index.
+> 
+> For **EXT4 partitions**, real-time updates using `fanotify` are a planned feature.
 
 ## 💻 Tech Stack
 
@@ -186,14 +190,15 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 
 ## 🗺️ Future Plans
 
-- **Native Linux Filesystem Support:** Researching direct metadata access for `ext4`, `btrfs`, and `xfs` to provide the same speed for native Linux partitions.
-- **Live Updates:** Implementing `fanotify` support for native Linux filesystems (such as those mentioned above) to keep the index updated in real-time.
+- **Live Updates:** Implementing `fanotify` support for EXT4 partitions to keep the index updated in real-time.
 
 ## 💖 Credits
 
-Kerything makes use of the following excellent open-source library:
+Kerything makes use of the following excellent open-source libraries:
 
 - **[utfcpp](https://github.com/nemtrif/utfcpp):** A simple, portable and lightweight library for handling UTF-8 encoded strings in C++.
+- **[onetbb](https://github.com/oneapi-src/oneTBB):** Intel's oneAPI Threading Building Blocks library for parallelism.
+- **[e2fsprogs](https://github.com/tytso/e2fsprogs])::** The Linux filesystem tools used to read EXT4 partitions.
 
 ## 📜 License
 

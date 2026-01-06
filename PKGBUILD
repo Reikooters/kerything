@@ -2,7 +2,7 @@
 # Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 pkgname=kerything
-pkgver=1.2.0
+pkgver=1.3.0
 pkgrel=1
 pkgdesc="Fast NTFS and EXT4 file scanner using trigrams"
 arch=('x86_64')

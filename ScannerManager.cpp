@@ -157,13 +157,19 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
     db.stringPool.resize(poolSize);
     stream.readRawData(db.stringPool.data(), static_cast<qint64>(poolSize));
 
-    // 5. Build the trigram index
-    qDebug() << "Data transfer complete. Building trigrams...";
+    // 5. Pre-sort data by name ascending
+    qDebug() << "Data transfer complete. Sorting data...";
+    Q_EMIT progressMessage("Data transfer complete. Sorting data...");
+    QCoreApplication::processEvents();
+    db.sortByNameAscendingParallel();
+
+    // 6. Build the trigram index
+    qDebug() << "Building trigrams index...";
     Q_EMIT progressMessage("Building search index...");
     QCoreApplication::processEvents();
     db.buildTrigramIndexParallel();
 
-    qDebug() << "Building trigrams complete.";
+    qDebug() << "Index generation complete.";
     m_isRunning = false;
     Q_EMIT scannerFinished();
     return db;

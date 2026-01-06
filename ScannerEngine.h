@@ -73,6 +73,57 @@ namespace ScannerEngine {
         // The "Frozen Index": A single sorted vector of all trigram-record pairs
         std::vector<TrigramEntry> flatIndex;
 
+        void sortByNameAscendingParallel() {
+            if (records.empty()) {
+                return;
+            }
+
+            std::cerr << "Pre-sorting records by name ascending (case-insensitive) in parallel..." << std::endl;
+
+            auto compareCaseInsensitive = [&](const FileRecord& a, const FileRecord& b) {
+                std::string_view s1(&stringPool[a.nameOffset], a.nameLen);
+                std::string_view s2(&stringPool[b.nameOffset], b.nameLen);
+
+                return std::lexicographical_compare(
+                    s1.begin(), s1.end(),
+                    s2.begin(), s2.end(),
+                    [](char a, char b) {
+                        return std::tolower(static_cast<unsigned char>(a)) <
+                               static_cast<unsigned char>(std::tolower(b));
+                    }
+                );
+            };
+
+            // NOTE: We cannot simply sort 'records' because parentRecordIdx
+            // depends on the original vector indices. We must re-map them.
+
+            // 1. Create an index mapping
+            std::vector<uint32_t> p(records.size());
+            std::iota(p.begin(), p.end(), 0);
+
+            // 2. Sort the index mapping based on names
+            std::sort(std::execution::par, p.begin(), p.end(), [&](uint32_t i, uint32_t j) {
+                return compareCaseInsensitive(records[i], records[j]);
+            });
+
+            // 3. Create a reverse mapping to update parentRecordIdx
+            std::vector<uint32_t> rev(p.size());
+            for (uint32_t i = 0; i < p.size(); ++i) {
+                rev[p[i]] = i;
+            }
+
+            // 4. Reorder records and update parent indices
+            std::vector<FileRecord> newRecords(records.size());
+            for (size_t i = 0; i < p.size(); ++i) {
+                newRecords[i] = records[p[i]];
+                if (newRecords[i].parentRecordIdx != 0xFFFFFFFF) {
+                    newRecords[i].parentRecordIdx = rev[newRecords[i].parentRecordIdx];
+                }
+            }
+
+            records = std::move(newRecords);
+        }
+
         void buildTrigramIndexParallel() {
             std::cerr << "Building Flat Trigram Index in parallel..." << std::endl;
 

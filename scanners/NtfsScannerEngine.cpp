@@ -306,6 +306,7 @@ namespace NtfsScannerEngine {
         NtfsDatabase db;
         db.records.reserve(totalRecords);
         db.tempParentMfts.reserve(totalRecords);
+        db.mftToRecordIdx.reserve(totalRecords);
         db.stringPool.reserve(totalRecords * 20); // Average filename length estimate
 
         // Step 3: Single Pass.

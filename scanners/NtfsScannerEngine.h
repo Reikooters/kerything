@@ -180,11 +180,16 @@ namespace NtfsScannerEngine {
         uint32_t nameOffset; // Offset into the global string pool
         uint16_t nameLen;
         uint8_t isDir : 1;
-        uint8_t isSymlink : 1; // Unused in NTFS
+        uint8_t isSymlink : 1;
         uint8_t reserved : 6;
     };
 
     #pragma pack(pop)
+
+    // Constants for Reparse Points
+    static constexpr uint32_t FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+    static constexpr uint32_t IO_REPARSE_TAG_SYMLINK = 0xA000000C;
+    static constexpr uint32_t IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003; // Junctions
 
     struct FileLink {
         std::string name;
@@ -195,6 +200,7 @@ namespace NtfsScannerEngine {
         std::vector<FileLink> links;
         uint64_t size;
         bool isDir;
+        bool isSymlink;
         uint64_t modificationTime;
         uint64_t mftIndex; // Used to track the record's location
     };
@@ -209,7 +215,7 @@ namespace NtfsScannerEngine {
         // Temporary storage for 48-bit MFT index
         std::vector<uint64_t> tempParentMfts;
 
-        void add(std::string_view name, uint64_t mftIndex, uint64_t parentMftIndex, uint64_t size, uint64_t mod, bool isDir);
+        void add(std::string_view name, uint64_t mftIndex, uint64_t parentMftIndex, uint64_t size, uint64_t mod, bool isDir, bool isSymlink);
 
         // We call this once after the MFT scan is completely finished
         void resolveParentPointers();

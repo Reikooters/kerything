@@ -10,7 +10,7 @@ namespace NtfsScannerEngine {
     std::vector<MftRun> mftRuns;
 
     FileInfo getFileInfo(MFT_RecordHeader* header, char* buffer, uint64_t index) {
-        FileInfo info = {{}, 0, static_cast<bool>(header->flags & 0x02), 0, index};
+        FileInfo info = {{}, 0, static_cast<bool>(header->flags & 0x02), false, 0, index};
         uint32_t attrOffset = header->firstAttributeOffset;
         uint32_t recordSize = header->usedSize; // Use the size reported by the header
 
@@ -66,6 +66,14 @@ namespace NtfsScannerEngine {
                                 fn->modificationTime,
                                 fn->dataSize
                             });
+
+                            // Check if this name attribute indicates a reparse point (Symlink/Junction)
+                            if (fn->flags & FILE_ATTRIBUTE_REPARSE_POINT) {
+                                if (fn->reparseValue == IO_REPARSE_TAG_SYMLINK ||
+                                    fn->reparseValue == IO_REPARSE_TAG_MOUNT_POINT) {
+                                    info.isSymlink = true;
+                                }
+                            }
                         }
                     }
                 }
@@ -297,6 +305,7 @@ namespace NtfsScannerEngine {
 
         NtfsDatabase db;
         db.records.reserve(totalRecords);
+        db.tempParentMfts.reserve(totalRecords);
         db.stringPool.reserve(totalRecords * 20); // Average filename length estimate
 
         // Step 3: Single Pass.
@@ -328,7 +337,7 @@ namespace NtfsScannerEngine {
                         // System files starting with $ are usually hidden in Everything
                         if (link.name[0] == '$' && recordIndex < 16) continue;
 
-                        db.add(link.name, recordIndex, link.parentIndex, info.size, info.modificationTime, info.isDir);
+                        db.add(link.name, recordIndex, link.parentIndex, info.size, info.modificationTime, info.isDir, info.isSymlink);
                     }
                 }
             }
@@ -341,10 +350,10 @@ namespace NtfsScannerEngine {
 
         std::cerr << "Resolving parent pointers completed.\n";
 
-        return NtfsDatabase{std::move(db)};
+        return db;
     }
 
-    void NtfsDatabase::add(std::string_view name, uint64_t mftIndex, uint64_t parentMftIndex, uint64_t size, uint64_t mod, bool isDir) {
+    void NtfsDatabase::add(std::string_view name, uint64_t mftIndex, uint64_t parentMftIndex, uint64_t size, uint64_t mod, bool isDir, bool isSymlink) {
         uint32_t currentIdx = static_cast<uint32_t>(records.size());
 
         FileRecord rec{};
@@ -353,6 +362,7 @@ namespace NtfsScannerEngine {
         rec.nameOffset = static_cast<uint32_t>(stringPool.size());
         rec.nameLen = static_cast<uint16_t>(name.length());
         rec.isDir = isDir;
+        rec.isSymlink = isSymlink;
         rec.isSymlink = false; // unused
 
         records.push_back(rec);

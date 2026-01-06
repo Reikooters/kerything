@@ -25,8 +25,9 @@ public:
      * @param newResults A vector of record indices pointing into the database.
      * @param db A pointer to the search database containing file metadata.
      * @param mountPath The base path where the scanned partition is mounted.
+     * @param fsType The type of the file system (e.g., "ntfs", "ext4").
      */
-    void setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db, QString mountPath);
+    void setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db, QString mountPath, QString fsType);
 
     /**
      * @brief Sorts the search results based on the specified column and order.
@@ -75,6 +76,7 @@ private:
     std::vector<uint32_t> m_results; // The record indices from the trigram search
     const ScannerEngine::SearchDatabase* m_db = nullptr;
     QString m_mountPath;
+    QString m_fsType;
 };
 
 #endif //KERYTHING_FILEMODEL_H

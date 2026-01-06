@@ -152,7 +152,7 @@ namespace ScannerEngine {
             // 1. Identify the chain of parents that need resolving
             // STOP if we hit:
             // - The root marker (0xFFFFFFFF)
-            // - A record that points to itself (NTFS root often does this)
+            // - A record that points to itself (some filesystems do this)
             while (current != 0xFFFFFFFF) {
                 const auto& r = records[current];
                 std::string_view name(&stringPool[r.nameOffset], r.nameLen);

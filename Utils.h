@@ -9,6 +9,7 @@
 
 namespace Utils {
     std::string utf16ToUtf8(const char16_t* utf16_ptr, size_t length);
+    std::string uint64ToFormattedTime(uint64_t time);
 }
 
 #endif //KERYTHING_UTILS_H

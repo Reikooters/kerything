@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include "scanners/NtfsScannerEngine.h"
+#include "scanners/Ext4ScannerEngine.h"
 #include "Version.h"
 
 int scanNtfs(const std::string& devicePath) {
@@ -31,7 +32,27 @@ int scanNtfs(const std::string& devicePath) {
 }
 
 int scanExt4(const std::string& devicePath) {
-    // TODO
+    // Use parseInodes from the EXT4 scanner engine
+    std::optional<Ext4ScannerEngine::Ext4Database> db = Ext4ScannerEngine::parseInodes(devicePath);
+    if (!db) {
+        return 1;
+    }
+
+    // 1. Write the number of records
+    uint64_t recordCount = db->records.size();
+    std::cout.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
+
+    // 2. Write the raw vector data (The FileRecord structs)
+    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(NtfsScannerEngine::FileRecord)));
+
+    // 3. Write the size of the string pool
+    uint64_t poolSize = db->stringPool.size();
+    std::cout.write(reinterpret_cast<const char*>(&poolSize), sizeof(poolSize));
+
+    // 4. Write the string pool itself
+    std::cout.write(db->stringPool.data(), static_cast<std::streamsize>(poolSize));
+
+    std::cout.flush();
     return 0;
 }
 

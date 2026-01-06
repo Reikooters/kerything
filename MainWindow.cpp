@@ -674,7 +674,7 @@ void MainWindow::updateSearch(const QString &text) {
     auto start = std::chrono::steady_clock::now();
 
     auto results = performTrigramSearch(text.toStdString());
-    model->setResults(std::move(results), &db, m_mountPath);
+    model->setResults(std::move(results), &db, m_mountPath, m_fsType);
 
     int sortCol = tableView->horizontalHeader()->sortIndicatorSection();
     model->sort(sortCol, tableView->horizontalHeader()->sortIndicatorOrder());

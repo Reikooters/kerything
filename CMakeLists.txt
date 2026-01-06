@@ -29,6 +29,12 @@ find_package(KF6 REQUIRED COMPONENTS
         XmlGui
 )
 
+# Find PkgConfig
+find_package(PkgConfig REQUIRED)
+
+# Check for both ext2fs and com_err
+pkg_check_modules(EXT2FS REQUIRED ext2fs com_err)
+
 # 1. THE HELPER (The disk scanner - runs as root via pkexec)
 add_executable(kerything-scanner-helper
         main_helper.cpp
@@ -38,8 +44,17 @@ add_executable(kerything-scanner-helper
         Utils.cpp
         Utils.h
         Version.h
+        scanners/Ext4ScannerEngine.cpp
+        scanners/Ext4ScannerEngine.h
 )
-target_link_libraries(kerything-scanner-helper PRIVATE TBB::tbb)
+
+# Link the libraries and include directories found by pkg-config
+target_link_libraries(kerything-scanner-helper
+        PRIVATE
+        TBB::tbb
+        ${EXT2FS_LIBRARIES}
+)
+target_include_directories(kerything-scanner-helper PRIVATE ${EXT2FS_INCLUDE_DIRS})
 
 # 2. THE GUI (The user interface - runs as normal user)
 add_executable(kerything
@@ -55,6 +70,8 @@ add_executable(kerything
         ScannerEngine.h # Need the structs for the DB
         ScannerManager.cpp
         ScannerManager.h
+        Utils.h
+        Utils.cpp
         Version.h
 )
 

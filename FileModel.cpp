@@ -10,14 +10,16 @@
 #include <QDir>
 #include "FileModel.h"
 #include "NtfsUtils.h"
+#include "Utils.h"
 
 FileModel::FileModel(QObject *parent) : QAbstractTableModel(parent) {}
 
-void FileModel::setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db, QString mountPath) {
+void FileModel::setResults(std::vector<uint32_t> newResults, const ScannerEngine::SearchDatabase* db, QString mountPath, QString fsType) {
     beginResetModel(); // Notify views that the entire model is being reset
     m_results = std::move(newResults);
     m_db = db;
     m_mountPath = std::move(mountPath);
+    m_fsType = std::move(fsType);
     endResetModel();
 }
 
@@ -140,7 +142,11 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         // index.column() is always 0 in this case, as we checked earlier.
 
         // Using standard KDE/Freedesktop theme names for icons
-        return rec.isDir ? QIcon::fromTheme("inode-directory") : QIcon::fromTheme("document-new");
+        if (rec.isDir) {
+            return rec.isSymlink ? QIcon::fromTheme("inode-directory-symlink", QIcon::fromTheme("folder-remote")) : QIcon::fromTheme("inode-directory");
+        }
+
+        return rec.isSymlink ? QIcon::fromTheme("emblem-symbolic-link") : QIcon::fromTheme("document-new");
     }
 
     switch (index.column()) {
@@ -159,7 +165,15 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
             // Formats the raw byte count with appropriate thousands separators
             return QLocale().toString(static_cast<qlonglong>(rec.size));
         case 3: // Date: Formatted using NTFS-specific logic
-            return QString::fromStdString(NtfsUtils::ntfsTimeToStr(rec.modificationTime));
+        {
+            if (m_fsType == "ntfs") {
+                return QString::fromStdString(NtfsUtils::ntfsTimeToStr(rec.modificationTime));
+            }
+            if (m_fsType == "ext4") {
+                return QString::fromStdString(Utils::uint64ToFormattedTime(rec.modificationTime));
+            }
+            return QString::fromStdString(std::to_string(rec.modificationTime));
+        }
         default:
             return {};
     }

@@ -26,7 +26,7 @@ sha256sums=()
 build() {
   # Use optimized build flags while keeping most security flags.
   # Omits `-Wp,-D_GLIBCXX_ASSERTIONS` as this security flag decreases application performance by 10x
-  local my_flags="-march=native -mtune=native -O3 -flto=auto -DNDEBUG -fno-plt -fno-omit-frame-pointer -fstack-protector-strong -fstack-clash-protection -fcf-protection -fexceptions -fstack-clash-protection -Wp,-D_FORTIFY_SOURCE=3"
+  local my_flags="-march=native -mtune=native -O3 -flto=auto -DNDEBUG -fno-plt -fno-omit-frame-pointer -fstack-protector-strong -fstack-clash-protection -fcf-protection -fexceptions -Wp,-D_FORTIFY_SOURCE=3"
 
   cmake -B build -S "$startdir" \
     -DCMAKE_BUILD_TYPE=Release \

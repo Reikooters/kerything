@@ -12,7 +12,9 @@ depends=('qt6-base' 'kwidgetsaddons' 'kcoreaddons' 'kio' 'solid' 'onetbb' 'e2fsp
 makedepends=('cmake' 'extra-cmake-modules')
 
 # Disable the creation of the -debug package
-options=('!debug')
+# Add link time optimization
+# Stop Arch Linux from injecting its default build flags
+options=('!debug' 'lto' '!buildflags')
 
 #source=("git+${url}.git#tag=v${pkgver}")
 #sha256sums=('SKIP')
@@ -22,11 +24,19 @@ source=()
 sha256sums=()
 
 build() {
+  # Use optimized build flags while keeping most security flags.
+  # Omits `-Wp,-D_GLIBCXX_ASSERTIONS` as this security flag decreases application performance by 10x
+  local my_flags="-march=native -mtune=native -O3 -flto=auto -DNDEBUG -fno-plt -fno-omit-frame-pointer -fstack-protector-strong -fstack-clash-protection -fcf-protection -fexceptions -fstack-clash-protection -Wp,-D_FORTIFY_SOURCE=3"
+
   cmake -B build -S "$startdir" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS_RELEASE="$my_flags" \
+    -DCMAKE_C_FLAGS_RELEASE="$my_flags" \
+    -DCMAKE_EXE_LINKER_FLAGS_RELEASE="-Wl,-O1,--sort-common,--as-needed" \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -Wno-dev
-  cmake --build build
+
+  cmake --build build --parallel $(nproc)
 }
 
 package() {

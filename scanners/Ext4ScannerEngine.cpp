@@ -11,69 +11,6 @@ namespace Ext4ScannerEngine {
         uint32_t maxInodes;
     };
 
-    [[nodiscard]] std::string Ext4Database::getFullPath(const uint32_t recordIdx) const {
-        std::vector<uint32_t> chain;
-        uint32_t current = recordIdx;
-        size_t totalLength = 0;
-
-        static constexpr std::string_view rootPath = "/";
-        static constexpr std::string_view oneDot = ".";
-        static constexpr std::string_view twoDots = "..";
-
-        // 1. Identify the chain of parents that need resolving
-        // STOP if we hit:
-        // - The root marker (0xFFFFFFFF)
-        // - A record that points to itself (some filesystems do this)
-        while (current != 0xFFFFFFFF) {
-            const auto& r = records[current];
-            std::string_view name(&stringPool[r.nameOffset], r.nameLen);
-
-            // Only count length if it's not a dot-entry
-            if (name != oneDot && name != twoDots) {
-                chain.push_back(current);
-                totalLength += 1; // For the "/" separator
-                totalLength += r.nameLen;
-            }
-
-            uint32_t next = r.parentRecordIdx;
-
-            if (next == current) {
-                break; // Self-reference safety
-            }
-
-            current = next;
-        }
-
-        if (chain.empty()) {
-            return std::string(rootPath);
-        }
-
-        // 2. Pre-allocate the exact size
-        std::string base;
-        base.reserve(totalLength);
-
-        // 3. Build paths from top to bottom
-        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-            uint32_t idx = *it;
-            const auto& r = records[idx];
-            std::string_view name(&stringPool[r.nameOffset], r.nameLen);
-
-            // If the first element is the root "/", we don't want to double-up
-            // but typically in MFT, the root is just an empty name or a specific index.
-            // This check handles the edge case where the first entry is already "/"
-            if (name == rootPath && base.empty()) {
-                base = rootPath;
-                continue;
-            }
-
-            // Build the string
-            base += rootPath;
-            base += name;
-        }
-
-        return base;
-    }
-
     int dirCallback(ext2_ino_t dir_ino, int entry_flags, struct ext2_dir_entry *dirent,
                     int offset, int blocksize, char *buf, void *priv_data) {
         // Ignore invalid entries or empty inodes

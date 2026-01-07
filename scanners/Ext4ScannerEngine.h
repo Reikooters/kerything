@@ -62,8 +62,6 @@ namespace Ext4ScannerEngine {
         // We call these once after the inode scan is completely finished
         void resolveParentPointers();
         void populateStatsIntoRecords();
-
-        [[nodiscard]] std::string getFullPath(const uint32_t recordIdx) const;
     };
 
     std::optional<Ext4Database> parseInodes(const std::string& devicePath);

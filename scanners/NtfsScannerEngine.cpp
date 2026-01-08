@@ -182,8 +182,14 @@ namespace NtfsScannerEngine {
             //
             // On my two test drives, one had 0.4% and the other had 2.7%
             // of records which are related to multiple records.
+
+            if (!dataAttrFound && allNames.empty()) {
+                // Record doesn't contain any information we care about,
+                // don't need to keep track of it for later
+                return;
+            }
+
             ExtensionFileInfo extensionRecordFileInfo{};
-            extensionRecordFileInfo.modificationTime = info.modificationTime;
             extensionRecordFileInfo.isDir = info.isDir;
             extensionRecordFileInfo.isSymlink = info.isSymlink;
             extensionRecordFileInfo.mftIndex = index;
@@ -199,13 +205,12 @@ namespace NtfsScannerEngine {
         for (const auto& extensionRecordFileInfosKvp : extensionRecordFileInfos) {
             // Combine the data from all records into one FileInfo,
             // and rebuild the "allNames" list.
-            FileInfo info = {};
+            FileInfo info{};
             std::vector<TempFileLink> allNames;
             bool dataAttrFound = false;
             uint64_t sizeFromData = 0;
 
             for (const auto& fileInfo : extensionRecordFileInfosKvp.second) {
-                info.modificationTime = std::max(fileInfo.modificationTime, info.modificationTime);
                 info.isDir |= fileInfo.isDir;
                 info.isSymlink |= fileInfo.isSymlink;
                 info.mftIndex = extensionRecordFileInfosKvp.first;
@@ -389,7 +394,7 @@ namespace NtfsScannerEngine {
         std::cerr << "MFT consists of " << mftRuns.size() << " fragments.\n";
         std::cerr << "Total MFT Records: " << totalRecords << "\n";
 
-        // Batch processing buffer (e.g., 4MB)
+        // Batch processing buffer (4MB)
         const size_t batchSizeInRecords = (4 * 1024 * 1024) / recordSize;
         std::vector<char> batchBuffer(batchSizeInRecords * recordSize);
 

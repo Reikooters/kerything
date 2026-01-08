@@ -217,7 +217,6 @@ namespace NtfsScannerEngine {
         std::vector<TempFileLink> tempLinks;
         bool isDir;
         bool isSymlink;
-        uint64_t modificationTime;
         uint64_t mftIndex; // Used to track the record's location
         bool dataAttrFound;
         uint64_t sizeFromData = 0;
@@ -233,36 +232,112 @@ namespace NtfsScannerEngine {
         // Temporary storage for 48-bit MFT index
         std::vector<uint64_t> tempParentMfts;
 
+        /**
+         * Adds a file or directory record to the database.
+         *
+         * @param name The name of the file or directory.
+         * @param mftIndex The MFT (Master File Table) index of the file or directory.
+         * @param parentMftIndex The MFT index of the parent directory.
+         * @param size The size of the file in bytes.
+         * @param mod The last modification time of the file or directory, represented as a timestamp.
+         * @param isDir A flag indicating whether the entry is a directory.
+         * @param isSymlink A flag indicating whether the entry is a symbolic link.
+         */
         void add(std::string_view name, uint64_t mftIndex, uint64_t parentMftIndex, uint64_t size, uint64_t mod, bool isDir, bool isSymlink);
 
-        // We call this once after the MFT scan is completely finished
+        /**
+         * Resolves parent-child relationships between file records in the NTFS database.
+         * This is called once after the MFT scan is completely finished
+         *
+         * This method converts temporary parent MFT indices into internal indices and updates
+         * the database entries to reflect the hierarchical relationships. Any unresolved parent
+         * pointers, such as those referencing the root directory, are marked accordingly.
+         * Additionally, all temporary data structures used during the setup phase are freed
+         * to optimize memory usage.
+         */
         void resolveParentPointers();
     };
 
+    /**
+     * Parses the Master File Table (MFT) from the specified NTFS volume.
+     * This method reads the boot sector to locate the MFT, calculates
+     * record size, and iteratively processes records to build an
+     * in-memory representation of the file system's metadata.
+     *
+     * @param devicePath The path to the target device or volume where
+     *                   the NTFS partition is located. This should be
+     *                   a valid system path.
+     * @return An optional NtfsDatabase containing the reconstructed
+     *         metadata of the NTFS volume, or std::nullopt if parsing fails.
+     */
     std::optional<NtfsDatabase> parseMft(const std::string& devicePath);
-
-    FileInfo getFileInfo(MFT_RecordHeader* header, char* buffer, uint64_t index);
 
     /**
      * NTFS Fixups (Update Sequence Array):
      * To detect partial writes, NTFS saves the last 2 bytes of every 512-byte
      * sector into an array and replaces them with a "sequence number".
      * Before reading, we must "fix" the sectors by putting the original bytes back.
+     *
+     * Applies the fixup procedure to a given MFT record buffer. The fixup process replaces
+     * the last 2 bytes of each sector in the record with their correct values, based
+     * on the update sequence array. This ensures integrity and consistency of the record.
+     *
+     * @param buffer Pointer to the buffer containing the MFT record data.
+     * @param recordSize The size of the MFT record in bytes, used to calculate sector boundaries.
      */
     void applyFixups(char* buffer, uint32_t recordSize);
 
     /**
      * The MFT itself is a file ($MFT) and can be fragmented.
-     * This function decodes "Data Runs" (compressed byte streams) to find
-     * where the MFT fragments are located physically on the disk.
+     * This function decodes "Data Runs" (compressed byte streams) to find where the MFT fragments are
+     * located physically on the disk.
+     *
+     * NTFS Data Runs describe the mapping between Virtual Cluster Numbers (VCNs) and Logical Cluster Numbers (LCNs),
+     * and this method extracts these mappings into a list of runs for use in subsequent operations.
+     *
+     * @param buffer A pointer to the buffer containing the NTFS attribute data. This buffer should contain
+     *               the raw attribute including the attribute header and the Data Runs.
+     * @param attrOffset The offset, in bytes, within the buffer where the attribute starts. The Data Runs are
+     *                   expected to begin at a specific offset relative to this base position.
      */
     void parseMftRuns(char* buffer, uint32_t attrOffset);
 
     /**
-     * Converts an MFT Index (e.g., File #1234) to a physical byte offset on the disk.
-     * It uses the data runs we parsed earlier to account for MFT fragmentation.
+     * Calculates the physical byte offset on disk corresponding to a given MFT index.
+     * This function takes into account the MFT record size, bytes per cluster, and the
+     * structure of the MFT runs to determine the correct physical location on disk.
+     * It uses the data runs parsed using parseMftRuns() to account for MFT fragmentation.
+     *
+     * @param index The MFT index for which the physical offset is to be calculated.
+     * @param recordSize The size of a single MFT record in bytes.
+     * @param bytesPerCluster The number of bytes in a cluster.
+     * @return The physical byte offset on disk corresponding to the specified MFT index.
+     *         Returns 0 if the index does not map to any physical location.
      */
     uint64_t mftIndexToPhysicalOffset(uint64_t index, uint32_t recordSize, uint64_t bytesPerCluster);
+
+    /**
+     * Finalizes the processing of a file's metadata and adds it to the NtfsDatabase.
+     *
+     * @param info A reference to the FileInfo object containing the file's metadata.
+     * @param allNames A vector of TempFileLink objects representing all names (links) associated with the file.
+     * @param dataAttrFound A boolean indicating whether a DATA attribute was found for the file.
+     * @param sizeFromData A 64-bit integer specifying the file size derived from the DATA attribute, if available.
+     * @param db A reference to the NtfsDatabase where the file information will be stored.
+     * @param index A 64-bit integer representing the MFT index of the file.
+     */
+    void finalizeAndAddFile(FileInfo& info, const std::vector<TempFileLink>& allNames, bool dataAttrFound, uint64_t sizeFromData, NtfsDatabase& db, uint64_t index);
+
+    /**
+     * Processes a Master File Table (MFT) record, extracting metadata and attributes,
+     * and determines whether the record can be finalized immediately or requires additional processing.
+     *
+     * @param header Pointer to the MFT record header, containing metadata and attribute references.
+     * @param buffer Raw binary data representing the content of the MFT record.
+     * @param index The index of the current MFT record being processed.
+     * @param db Reference to the NtfsDatabase object used to store processed file information.
+     */
+    void processMftRecord(MFT_RecordHeader* header, char* buffer, uint64_t index, NtfsDatabase& db);
 }
 
 #endif //KERYTHING_NTFSSCANNERENGINE_H

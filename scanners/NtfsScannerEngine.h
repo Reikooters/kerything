@@ -191,6 +191,14 @@ namespace NtfsScannerEngine {
     static constexpr uint32_t IO_REPARSE_TAG_SYMLINK = 0xA000000C;
     static constexpr uint32_t IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003; // Junctions
 
+    struct TempFileLink {
+        std::string name;
+        uint64_t parent;
+        uint8_t namespaceType;
+        uint64_t modTime;
+        uint64_t dataSize; // Size cached in the filename attribute
+    };
+
     struct FileLink {
         std::string name;
         uint64_t parentIndex;
@@ -203,6 +211,16 @@ namespace NtfsScannerEngine {
         bool isSymlink;
         uint64_t modificationTime;
         uint64_t mftIndex; // Used to track the record's location
+    };
+
+    struct ExtensionFileInfo {
+        std::vector<TempFileLink> tempLinks;
+        bool isDir;
+        bool isSymlink;
+        uint64_t modificationTime;
+        uint64_t mftIndex; // Used to track the record's location
+        bool dataAttrFound;
+        uint64_t sizeFromData = 0;
     };
 
     struct NtfsDatabase {

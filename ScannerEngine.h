@@ -208,8 +208,8 @@ namespace ScannerEngine {
                 const auto& r = records[current];
                 std::string_view name(&stringPool[r.nameOffset], r.nameLen);
 
-                // Only count length if it's not a dot-entry
-                if (name != oneDot && name != twoDots) {
+                // Only count length if it's not a dot-entry and not blank
+                if (name != oneDot && name != twoDots && !name.empty()) {
                     chain.push_back(current);
                     totalLength += 1; // For the "/" separator
                     totalLength += r.nameLen;

@@ -155,8 +155,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
         QAction* copyFileNamesAction = findChild<QAction*>("copyFileNamesAction");
         if (copyFileNamesAction) {
-            copyFileNamesAction->setEnabled(isMounted && count > 0);
-            copyFileNamesAction->setText(count == 1 ? "Copy File Name" : "Copy " + QString::number(count) + " File Names");
+            copyFileNamesAction->setEnabled(count > 0);
+            copyFileNamesAction->setText(count == 1 ? "Copy File Name" : "Copy File Names");
         }
 
         QAction* copyPathsAction = findChild<QAction*>("copyPathsAction");

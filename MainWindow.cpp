@@ -273,6 +273,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
 void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, QString fsType) {
     db = std::move(database);
+
+    // Remove UI placeholder when partition is not mounted
+    if (mountPath == "Not Mounted") {
+        mountPath.clear();
+    }
+
     m_mountPath = std::move(mountPath);
     m_devicePath = std::move(devicePath);
     m_fsType = std::move(fsType);

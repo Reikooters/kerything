@@ -124,7 +124,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     // --- Action State Management ---
     auto updateActionStates = [this]() {
-        QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
+        const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
         int count = selectedRows.count();
         bool isMounted = !m_mountPath.isEmpty();
 
@@ -347,7 +347,7 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
         tableView->setCurrentIndex(clickIndex);
     }
 
-    QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
     bool isMounted = !m_mountPath.isEmpty();
 
     QMenu menu(this);
@@ -431,7 +431,7 @@ void MainWindow::openSelectedFiles() {
         return;
     }
 
-    QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     // If nothing is selected, don't open anything
     if (selectedRows.isEmpty()) {
@@ -474,7 +474,7 @@ void MainWindow::openSelectedFiles() {
 }
 
 void MainWindow::openSelectedLocation() {
-    QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
         return;
@@ -488,22 +488,36 @@ void MainWindow::openSelectedLocation() {
 }
 
 void MainWindow::copyFileNames() {
-    QStringList paths;
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
-    for (const QModelIndex &index : tableView->selectionModel()->selectedRows()) {
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QStringList fileNames;
+    fileNames.reserve(selectedRows.size());
+
+    for (const QModelIndex &index : selectedRows) {
         uint32_t recordIdx = model->getRecordIndex(index.row());
         const auto& rec = db.records[recordIdx];
         QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
-        paths.append(fileName);
+        fileNames.append(fileName);
     }
 
-    QGuiApplication::clipboard()->setText(paths.join('\n'));
+    QGuiApplication::clipboard()->setText(fileNames.join('\n'));
 }
 
 void MainWindow::copyPaths() {
-    QStringList paths;
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
-    for (const QModelIndex &index : tableView->selectionModel()->selectedRows()) {
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QStringList paths;
+    paths.reserve(selectedRows.size());
+
+    for (const QModelIndex &index : selectedRows) {
         uint32_t recordIdx = model->getRecordIndex(index.row());
         const auto& rec = db.records[recordIdx];
         QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
@@ -515,9 +529,16 @@ void MainWindow::copyPaths() {
 }
 
 void MainWindow::copyFiles() {
-    QList<QUrl> urls;
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
-    for (const QModelIndex &index : tableView->selectionModel()->selectedRows()) {
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QList<QUrl> urls;
+    urls.reserve(selectedRows.size());
+
+    for (const QModelIndex &index : selectedRows) {
         uint32_t recordIdx = model->getRecordIndex(index.row());
         const auto& rec = db.records[recordIdx];
         QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
@@ -531,7 +552,7 @@ void MainWindow::copyFiles() {
 }
 
 void MainWindow::openTerminal() {
-    QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
         return;

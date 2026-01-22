@@ -31,18 +31,19 @@ The name is a nod to the iconic "Everything" utility, while the 'K' prefix follo
 
 Kerything is designed to be usable without leaving the keyboard, following standard KDE/Dolphin conventions:
 
-| Shortcut                 | Action                                                                               |
-|:-------------------------|:-------------------------------------------------------------------------------------|
-| `Ctrl + L` or `Alt + D`  | Focus search bar and select all text                                                 |
-| `Down / Up`              | Move focus from search bar to the results table                                      |
-| `Return`                 | Open selected file(s) with default applications                                      |
-| `Ctrl + Return`          | Open the folder containing the selected file                                         |
-| `Ctrl + C`               | Copy selected file(s) to clipboard (for pasting into Dolphin or another application) |
-| `Ctrl + Alt + C`         | Copy selected file(s) full absolute path(s) to clipboard                             |
-| `Alt + Shift + F4`       | Open your default terminal in the folder of the selected file.                       |
-| `Ctrl + O`               | Change to a different partition                                                      |
-| `F5`                     | Rescan the selected partition                                                        |
-| `Ctrl + Q`               | Exit the application                                                                 |
+| Shortcut                | Action                                                                               |
+|:------------------------|:-------------------------------------------------------------------------------------|
+| `Ctrl + L` or `Alt + D` | Focus search bar and select all text                                                 |
+| `Down / Up`             | Move focus from search bar to the results table                                      |
+| `Return`                | Open selected file(s) with default applications                                      |
+| `Ctrl + Return`         | Open the folder containing the selected file                                         |
+| `Ctrl + C`              | Copy selected file(s) to clipboard (for pasting into Dolphin or another application) |
+| `Ctrl + Shift + C`      | Copy selected file(s) file name(s) to clipboard                                      |
+| `Ctrl + Alt + C`        | Copy selected file(s) full absolute path(s) to clipboard                             |
+| `Alt + Shift + F4`      | Open your default terminal in the folder of the selected file.                       |
+| `Ctrl + O`              | Change to a different partition                                                      |
+| `F5`                    | Rescan the selected partition                                                        |
+| `Ctrl + Q`              | Exit the application                                                                 |
 
 ## 🛠️ How It Works
 

@@ -413,7 +413,7 @@ void MainWindow::openFile(const QModelIndex &index) {
     if (m_mountPath.isEmpty()) {
         QMessageBox::information(this, "Drive Not Mounted",
             "This partition is not currently mounted in Linux.\n\n"
-            "Please mount it first then run this application again to open files.");
+            "Please mount it first then rescan the partition to open files.");
         return;
     }
 
@@ -427,7 +427,7 @@ void MainWindow::openSelectedFiles() {
     if (m_mountPath.isEmpty()) {
         QMessageBox::information(this, "Drive Not Mounted",
             "This partition is not currently mounted in Linux.\n\n"
-            "Please mount it first then run this application again to open files.");
+            "Please mount it first then rescan the partition to open files.");
         return;
     }
 
@@ -477,6 +477,11 @@ void MainWindow::openSelectedLocation() {
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    // Opening the selected file's directory only makes sense when the partition is mounted
+    if (m_mountPath.isEmpty()) {
         return;
     }
 
@@ -535,6 +540,11 @@ void MainWindow::copyFiles() {
         return;
     }
 
+    // Copying file objects (URLs) only makes sense when the partition is mounted
+    if (m_mountPath.isEmpty()) {
+        return;
+    }
+
     QList<QUrl> urls;
     urls.reserve(selectedRows.size());
 
@@ -555,6 +565,11 @@ void MainWindow::openTerminal() {
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    // Opening the terminal in the selected file's directory only makes sense when the partition is mounted
+    if (m_mountPath.isEmpty()) {
         return;
     }
 

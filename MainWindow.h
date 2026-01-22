@@ -75,6 +75,11 @@ private slots:
     void openSelectedLocation();
 
     /**
+     * @brief Copies the names of the selected items to the clipboard.
+     */
+    void copyFileNames();
+
+    /**
      * @brief Copies the full paths of selected items to the clipboard.
      */
     void copyPaths();

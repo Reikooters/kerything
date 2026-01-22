@@ -153,6 +153,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             copyFilesAction->setText(count == 1 ? "Copy File" : "Copy " + QString::number(count) + " Files");
         }
 
+        QAction* copyFileNamesAction = findChild<QAction*>("copyFileNamesAction");
+        if (copyFileNamesAction) {
+            copyFileNamesAction->setEnabled(isMounted && count > 0);
+            copyFileNamesAction->setText(count == 1 ? "Copy File Name" : "Copy " + QString::number(count) + " File Names");
+        }
+
         QAction* copyPathsAction = findChild<QAction*>("copyPathsAction");
         if (copyPathsAction) {
             copyPathsAction->setEnabled(count > 0);
@@ -231,7 +237,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(copyFilesAct, &QAction::triggered, this, &MainWindow::copyFiles);
     addAction(copyFilesAct);
 
-    // Ctrl+Alt+C: Copy Full Path
+    // Ctrl+Shift+C: Copy File Names
+    auto *copyFileNamesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy File Name", this);
+    copyFileNamesAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
+    copyFileNamesAct->setObjectName("copyFileNamesAction");
+    connect(copyFileNamesAct, &QAction::triggered, this, &MainWindow::copyFileNames);
+    addAction(copyFileNamesAct);
+
+    // Ctrl+Alt+C: Copy Full Paths
     auto *copyPathsAct = new QAction(QIcon::fromTheme("edit-copy-path"), "Copy Full Path", this);
     copyPathsAct->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_C));
     copyPathsAct->setObjectName("copyPathsAction");
@@ -376,6 +389,7 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
 
     menu.addSeparator();
     menu.addAction(findChild<QAction*>("copyFilesAction"));
+    menu.addAction(findChild<QAction*>("copyFileNamesAction"));
     menu.addAction(findChild<QAction*>("copyPathsAction"));
 
     menu.addSeparator();
@@ -471,6 +485,19 @@ void MainWindow::openSelectedLocation() {
     QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
 
     QDesktopServices::openUrl(QUrl::fromLocalFile(QDir::cleanPath(m_mountPath + "/" + internalPath)));
+}
+
+void MainWindow::copyFileNames() {
+    QStringList paths;
+
+    for (const QModelIndex &index : tableView->selectionModel()->selectedRows()) {
+        uint32_t recordIdx = model->getRecordIndex(index.row());
+        const auto& rec = db.records[recordIdx];
+        QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
+        paths.append(fileName);
+    }
+
+    QGuiApplication::clipboard()->setText(paths.join('\n'));
 }
 
 void MainWindow::copyPaths() {

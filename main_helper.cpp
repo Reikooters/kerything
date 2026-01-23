@@ -2,58 +2,164 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include <iostream>
+#include <string>
+#include <string_view>
+#include <cstdlib>
+#include <cerrno>
+#include <cstring>
+#include <filesystem>
+#include <sys/stat.h>
+
 #include "scanners/NtfsScannerEngine.h"
 #include "scanners/Ext4ScannerEngine.h"
 #include "Version.h"
+
+static void printUsage(const char* argv0) {
+    std::cerr
+        << "Usage:\n"
+        << "  " << argv0 << " --version\n"
+        << "  " << argv0 << " <devicePath> <fsType>\n"
+        << "Where:\n"
+        << "  <devicePath> is a block device path like /dev/sdXN or /dev/nvme0n1pN\n"
+        << "  <fsType> is one of: ntfs, ext4\n";
+}
+
+static bool isAllowedFsType(std::string_view fsType) {
+    return fsType == "ntfs" || fsType == "ext4";
+}
+
+static bool validateDevicePath(const std::string& inputPath, std::string& resolvedOut) {
+    namespace fs = std::filesystem;
+
+    if (inputPath.empty()) {
+        std::cerr << "Error: empty device path.\n";
+        return false;
+    }
+
+    fs::path p(inputPath);
+
+    if (!p.is_absolute()) {
+        std::cerr << "Error: device path must be absolute (got: " << inputPath << ").\n";
+        return false;
+    }
+
+    // Only allow scanning devices under /dev.
+    if (p.native().rfind("/dev/", 0) != 0) {
+        std::cerr << "Error: device path must be under /dev (got: " << inputPath << ").\n";
+        return false;
+    }
+
+    // Resolve symlinks / relative components safely.
+    // realpath() fails if the path doesn't exist.
+    char buf[PATH_MAX];
+    if (!realpath(inputPath.c_str(), buf)) {
+        std::cerr << "Error: failed to resolve device path '" << inputPath
+                  << "': " << std::strerror(errno) << "\n";
+        return false;
+    }
+
+    resolvedOut = buf;
+
+    struct stat st {};
+    if (stat(resolvedOut.c_str(), &st) != 0) {
+        std::cerr << "Error: stat() failed for '" << resolvedOut
+                  << "': " << std::strerror(errno) << "\n";
+        return false;
+    }
+
+    if (!S_ISBLK(st.st_mode)) {
+        std::cerr << "Error: '" << resolvedOut << "' is not a block device.\n";
+        return false;
+    }
+
+    // Reject world-writable device nodes (paranoia / sanity check)
+    if ((st.st_mode & S_IWOTH) != 0) {
+        std::cerr << "Error: refusing world-writable device node '" << resolvedOut << "'.\n";
+        return false;
+    }
+
+    return true;
+}
+
+static bool safeWriteAll(const char* data, std::streamsize n) {
+    std::cout.write(data, n);
+    return static_cast<bool>(std::cout);
+}
 
 int scanNtfs(const std::string& devicePath) {
     // Use parseMft from the NTFS scanner engine
     std::optional<NtfsScannerEngine::NtfsDatabase> db = NtfsScannerEngine::parseMft(devicePath);
     if (!db) {
-        return 1;
+        return 2;
     }
 
     // 1. Write the number of records
     uint64_t recordCount = db->records.size();
-    std::cout.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
+    if (!safeWriteAll(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount))) {
+        std::cerr << "Error: failed writing recordCount to stdout.\n";
+        return 3;
+    }
 
     // 2. Write the raw vector data (The FileRecord structs)
-    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(NtfsScannerEngine::FileRecord)));
+    const auto recordBytes = static_cast<std::streamsize>(recordCount * sizeof(NtfsScannerEngine::FileRecord));
+    if (!safeWriteAll(reinterpret_cast<const char*>(db->records.data()), recordBytes)) {
+        std::cerr << "Error: failed writing records to stdout.\n";
+        return 3;
+    }
 
     // 3. Write the size of the string pool
     uint64_t poolSize = db->stringPool.size();
-    std::cout.write(reinterpret_cast<const char*>(&poolSize), sizeof(poolSize));
+    if (!safeWriteAll(reinterpret_cast<const char*>(&poolSize), sizeof(poolSize))) {
+        std::cerr << "Error: failed writing poolSize to stdout.\n";
+        return 3;
+    }
 
     // 4. Write the string pool itself
-    std::cout.write(db->stringPool.data(), static_cast<std::streamsize>(poolSize));
+    if (!safeWriteAll(db->stringPool.data(), static_cast<std::streamsize>(poolSize))) {
+        std::cerr << "Error: failed writing stringPool to stdout.\n";
+        return 3;
+    }
 
     std::cout.flush();
-    return 0;
+    return std::cout ? 0 : 3;
 }
 
 int scanExt4(const std::string& devicePath) {
     // Use parseInodes from the EXT4 scanner engine
     std::optional<Ext4ScannerEngine::Ext4Database> db = Ext4ScannerEngine::parseInodes(devicePath);
     if (!db) {
-        return 1;
+        return 2;
     }
 
     // 1. Write the number of records
     uint64_t recordCount = db->records.size();
-    std::cout.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
+    if (!safeWriteAll(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount))) {
+        std::cerr << "Error: failed writing recordCount to stdout.\n";
+        return 3;
+    }
 
     // 2. Write the raw vector data (The FileRecord structs)
-    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(Ext4ScannerEngine::FileRecord)));
+    const auto recordBytes = static_cast<std::streamsize>(recordCount * sizeof(Ext4ScannerEngine::FileRecord));
+    if (!safeWriteAll(reinterpret_cast<const char*>(db->records.data()), recordBytes)) {
+        std::cerr << "Error: failed writing records to stdout.\n";
+        return 3;
+    }
 
     // 3. Write the size of the string pool
     uint64_t poolSize = db->stringPool.size();
-    std::cout.write(reinterpret_cast<const char*>(&poolSize), sizeof(poolSize));
+    if (!safeWriteAll(reinterpret_cast<const char*>(&poolSize), sizeof(poolSize))) {
+        std::cerr << "Error: failed writing poolSize to stdout.\n";
+        return 3;
+    }
 
     // 4. Write the string pool itself
-    std::cout.write(db->stringPool.data(), static_cast<std::streamsize>(poolSize));
+    if (!safeWriteAll(db->stringPool.data(), static_cast<std::streamsize>(poolSize))) {
+        std::cerr << "Error: failed writing stringPool to stdout.\n";
+        return 3;
+    }
 
     std::cout.flush();
-    return 0;
+    return std::cout ? 0 : 3;
 }
 
 /**
@@ -63,30 +169,42 @@ int scanExt4(const std::string& devicePath) {
  * 3. Dumps the results to stdout in binary format.
  */
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        return 1;
+    // Allow "--version" without requiring other args
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        std::cout << "kerything-scanner-helper v" << Version::VERSION << std::endl;
+        return 0;
     }
 
-    for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--version") {
-            std::cout << "kerything-scanner-helper v" << Version::VERSION << std::endl;
-            return 0;
-        }
+    if (argc != 3) {
+        printUsage(argv[0]);
+        return 64; // EX_USAGE
     }
 
-    std::string devicePath = argv[1];
+    std::string devicePathInput = argv[1];
     std::string_view fsType = argv[2];
+
+    if (!isAllowedFsType(fsType)) {
+        std::cerr << "Error: unsupported fsType '" << fsType << "'.\n";
+        printUsage(argv[0]);
+        return 64; // EX_USAGE
+    }
+
+    std::string devicePath;
+    if (!validateDevicePath(devicePathInput, devicePath)) {
+        return 65; // EX_DATAERR-ish
+    }
 
     // Turn off sync with stdio to speed up binary writes and prevent buffering issues
     std::ios_base::sync_with_stdio(false);
 
-    std::cerr << "Scanning " << devicePath << " (" << fsType << ")" << std::endl;
+    std::cerr << "Scanning " << devicePath << " (" << fsType << ")\n";
 
     if (fsType == "ntfs") {
         return scanNtfs(devicePath);
-    } else if (fsType == "ext4") {
+    }
+    if (fsType == "ext4") {
         return scanExt4(devicePath);
     }
 
-    return 1;
+    return 64;
 }

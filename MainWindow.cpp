@@ -31,6 +31,7 @@
 #include <numeric>
 #include "MainWindow.h"
 #include "FileModel.h"
+#include "GuiUtils.h"
 #include "PartitionDialog.h"
 #include "ScannerManager.h"
 
@@ -271,7 +272,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     QTimer::singleShot(0, this, &MainWindow::changePartition);
 }
 
-void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, QString fsType) {
+void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, const QString& fsType) {
     db = std::move(database);
 
     // Remove UI placeholder when partition is not mounted
@@ -281,7 +282,13 @@ void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString m
 
     m_mountPath = std::move(mountPath);
     m_devicePath = std::move(devicePath);
-    m_fsType = std::move(fsType);
+
+    const QString fsTypeNormalized = GuiUtils::normalizeFsTypeForHelper(fsType);
+    if (fsTypeNormalized.isEmpty()) {
+        m_fsType = fsType;
+    } else {
+        m_fsType = fsTypeNormalized;
+    }
 
     // Refresh search results with new data
     updateSearch(searchLine->text());
@@ -308,6 +315,18 @@ void MainWindow::changePartition() {
 void MainWindow::rescanPartition() {
     if (m_devicePath.isEmpty()) {
         changePartition();
+        return;
+    }
+
+    const QString t = m_fsType.trimmed().toLower();
+    if (t != QStringLiteral("ntfs") && t != QStringLiteral("ext4")) {
+        QMessageBox::warning(
+            this,
+            "Unsupported filesystem",
+            QString("Cannot rescan because the filesystem type is not supported for raw scanning.\n\nDetected: %1")
+                .arg(m_fsType)
+        );
+        statusLabel->setText("Rescan unavailable (unsupported filesystem).");
         return;
     }
 

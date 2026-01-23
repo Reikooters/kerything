@@ -41,11 +41,11 @@ add_executable(kerything-scanner-helper
         ScannerEngine.h
         scanners/NtfsScannerEngine.cpp
         scanners/NtfsScannerEngine.h
-        Utils.cpp
-        Utils.h
-        Version.h
         scanners/Ext4ScannerEngine.cpp
         scanners/Ext4ScannerEngine.h
+        ScannerUtils.cpp
+        ScannerUtils.h
+        Version.h
 )
 
 # Link the libraries and include directories found by pkg-config
@@ -61,8 +61,8 @@ add_executable(kerything
         main.cpp
         FileModel.cpp
         FileModel.h
-        NtfsUtils.cpp
-        NtfsUtils.h
+        GuiUtils.cpp
+        GuiUtils.h
         MainWindow.cpp
         MainWindow.h
         PartitionDialog.cpp
@@ -70,8 +70,6 @@ add_executable(kerything
         ScannerEngine.h # Need the structs for the DB
         ScannerManager.cpp
         ScannerManager.h
-        Utils.h
-        Utils.cpp
         Version.h
 )
 

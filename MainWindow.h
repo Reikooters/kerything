@@ -30,7 +30,7 @@ public:
     /**
      * @brief Updates the current database and UI.
      */
-    void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, QString fsType);
+    void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, const QString& fsType);
 
 protected:
     /**

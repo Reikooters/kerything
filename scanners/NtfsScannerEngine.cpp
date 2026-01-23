@@ -3,7 +3,7 @@
 
 #include <fstream>
 #include <iostream>
-#include "../Utils.h"
+#include "../ScannerUtils.h"
 #include "NtfsScannerEngine.h"
 
 namespace NtfsScannerEngine {
@@ -121,7 +121,7 @@ namespace NtfsScannerEngine {
                             // MFT references are 64-bit, but only the first 48 bits are the record index.
                             // The top 16 bits are the "Sequence Number" used for consistency checks.
                             allNames.push_back({
-                                Utils::utf16ToUtf8(fn->name, fn->nameLength),
+                                ScannerUtils::utf16ToUtf8(fn->name, fn->nameLength),
                                 fn->parentDirectory & 0xFFFFFFFFFFFFULL,
                                 fn->namespaceType,
                                 fn->modificationTime,

@@ -9,8 +9,7 @@
 #include <QUrl>
 #include <QDir>
 #include "FileModel.h"
-#include "NtfsUtils.h"
-#include "Utils.h"
+#include "GuiUtils.h"
 
 FileModel::FileModel(QObject *parent) : QAbstractTableModel(parent) {}
 
@@ -167,10 +166,10 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         case 3: // Date: Formatted using NTFS-specific logic
         {
             if (m_fsType == "ntfs") {
-                return QString::fromStdString(NtfsUtils::ntfsTimeToStr(rec.modificationTime));
+                return QString::fromStdString(GuiUtils::ntfsTimeToLocalStr(rec.modificationTime));
             }
             if (m_fsType == "ext4") {
-                return QString::fromStdString(Utils::uint64ToFormattedTime(rec.modificationTime));
+                return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
             }
             return QString::fromStdString(std::to_string(rec.modificationTime));
         }

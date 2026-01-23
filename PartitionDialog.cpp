@@ -10,6 +10,7 @@
 #include <QHeaderView>
 #include <QMessageBox>
 #include "PartitionDialog.h"
+#include "GuiUtils.h"
 #include "ScannerManager.h"
 
 PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
@@ -144,7 +145,19 @@ void PartitionDialog::onStartClicked() {
         return;
     }
 
-    m_scannedDb = m_manager->scanDevice(selected.devicePath, selected.fsType);
+    const QString fsTypeNormalized = GuiUtils::normalizeFsTypeForHelper(selected.fsType);
+    if (fsTypeNormalized.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            tr("Unsupported filesystem"),
+            tr("This filesystem type is not supported for raw scanning.\n\nDetected: %1")
+                .arg(selected.fsType)
+        );
+        m_isHandlingClick = false;
+        return;
+    }
+
+    m_scannedDb = m_manager->scanDevice(selected.devicePath, fsTypeNormalized);
 
     if (m_scannedDb) {
         this->accept();

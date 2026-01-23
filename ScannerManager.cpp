@@ -6,6 +6,7 @@
 #include <QDataStream>
 #include <QDebug>
 #include <QMessageBox>
+#include <limits>
 #include "ScannerManager.h"
 
 ScannerManager::ScannerManager(QObject *parent) : QObject(parent) {}
@@ -29,13 +30,19 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
     auto helper = std::make_unique<QProcess>();
     QString helperPath = QCoreApplication::applicationDirPath() + "/kerything-scanner-helper";
 
-    // We want to handle the data as a stream
+    // Launch helper
     qDebug() << "Launching helper:" << helperPath << "on" << devicePath << "type:" << fsType;
     helper->start("pkexec", {helperPath, devicePath, fsType});
+
+    QByteArray rawData;
+    rawData.reserve(1024 * 1024 * 16); // start with 16 MiB to reduce early reallocations
 
     // Loop until finished, keeping the UI responsive
     while (!helper->waitForFinished(100)) {
         QCoreApplication::processEvents();
+
+        // drain stdout continuously to avoid deadlock if helper writes a lot.
+        rawData += helper->readAllStandardOutput();
 
         // Check if user clicked the "Cancel" button or closed the dialog
         if (m_cancelRequested) {
@@ -60,6 +67,9 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
         }
     }
 
+    // Drain any remaining stdout after exit
+    rawData += helper->readAllStandardOutput();
+
     if (helper->exitCode() != 0) {
         m_isRunning = false;
 
@@ -75,13 +85,11 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
         return std::nullopt;
     }
 
-    // Helper process has finished, now we consume the data
+    // Helper process has finished, now we process the data
     qDebug() << "Helper finished with exit code" << helper->exitCode();
 
-    Q_EMIT progressMessage("Transferring data from helper...");
+    Q_EMIT progressMessage("Processing data from helper...");
     QCoreApplication::processEvents();
-
-    QByteArray rawData = helper->readAllStandardOutput();
 
     if (rawData.isEmpty()) {
         m_isRunning = false;
@@ -122,7 +130,40 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
     }
     qDebug() << "Helper reporting" << recordCount << "records. Allocating memory...";
 
-    // 2. Read records
+    // Sanity: prevent absurd allocations
+    static constexpr quint64 kMaxRecords = 500'000'000ULL; // 500M entries
+    if (recordCount == 0 || recordCount > kMaxRecords) {
+        m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error",
+            QString("Helper returned an invalid record count: %1").arg(recordCount));
+
+        Q_EMIT scannerFinished();
+        return std::nullopt;
+    }
+
+    // 2. Read records (size checks first)
+    const quint64 recordBytes64 = recordCount * static_cast<quint64>(sizeof(ScannerEngine::FileRecord));
+    if (recordBytes64 / static_cast<quint64>(sizeof(ScannerEngine::FileRecord)) != recordCount) {
+        m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error", "Record byte size overflow.");
+
+        Q_EMIT scannerFinished();
+        return std::nullopt;
+    }
+
+    if (recordBytes64 > static_cast<quint64>(std::numeric_limits<qint64>::max())) {
+        m_isRunning = false;
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error", "Record data is too large to read safely.");
+
+        Q_EMIT scannerFinished();
+        return std::nullopt;
+    }
+
     try {
         db.records.resize(recordCount);
     } catch (const std::exception& e) {
@@ -139,15 +180,51 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
         return std::nullopt;
     }
 
-    stream.readRawData(reinterpret_cast<char*>(db.records.data()), static_cast<qint64>(recordCount * sizeof(ScannerEngine::FileRecord)));
+    if (stream.readRawData(reinterpret_cast<char*>(db.records.data()),
+                           static_cast<qint64>(recordBytes64)) != static_cast<qint64>(recordBytes64)) {
+        m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error", "Truncated stream while reading records.");
+
+        Q_EMIT scannerFinished();
+        return std::nullopt;
+    }
     qDebug() << "Records transfer complete.";
 
     // 3. Read string pool size
     quint64 poolSize = 0;
     if (!readVal(poolSize)) {
         m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error", "Failed to read string pool size.");
+
+        Q_EMIT scannerFinished();
+        return std::nullopt;
+    }
+
+    // Sanity: prevent absurd allocations
+    static constexpr quint64 kMaxPoolBytes = 8ULL * 1024 * 1024 * 1024; // 8 GiB
+    if (poolSize == 0 || poolSize > kMaxPoolBytes) {
+        m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error",
+            QString("Helper returned an invalid string pool size: %1 bytes").arg(poolSize));
         Q_EMIT scannerFinished();
 
+        return std::nullopt;
+    }
+
+    // Redundant extra check, just kept here in case the 8 GiB limit is ever removed
+    if (poolSize > static_cast<quint64>(std::numeric_limits<qint64>::max())) {
+        m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error", "String pool is too large to read safely.");
+
+        Q_EMIT scannerFinished();
         return std::nullopt;
     }
 
@@ -155,11 +232,19 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
 
     // 4. Read string pool
     db.stringPool.resize(poolSize);
-    stream.readRawData(db.stringPool.data(), static_cast<qint64>(poolSize));
+    if (stream.readRawData(db.stringPool.data(), static_cast<qint64>(poolSize)) != static_cast<qint64>(poolSize)) {
+        m_isRunning = false;
+
+        Q_EMIT progressMessage("Data stream error.");
+        Q_EMIT errorMessage("Data Stream Error", "Truncated stream while reading string pool.");
+
+        Q_EMIT scannerFinished();
+        return std::nullopt;
+    }
 
     // 5. Pre-sort data by name ascending
-    qDebug() << "Data transfer complete. Sorting data...";
-    Q_EMIT progressMessage("Data transfer complete. Sorting data...");
+    qDebug() << "Data processing complete. Sorting data...";
+    Q_EMIT progressMessage("Data processing complete. Sorting data...");
     QCoreApplication::processEvents();
     db.sortByNameAscendingParallel();
 

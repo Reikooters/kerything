@@ -7,7 +7,7 @@
 #include <string_view>
 
 namespace Version {
-    inline constexpr std::string_view VERSION = "1.3.4";
+    inline constexpr std::string_view VERSION = "1.3.5";
 };
 
 #endif //KERYTHING_VERSION_H

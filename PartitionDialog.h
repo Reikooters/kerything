@@ -67,15 +67,15 @@ public:
      */
     PartitionInfo getSelected();
 
-    /**
-     * @brief Retrieves a list of partitions currently selected in the dialog.
-     *
-     * This method scans the partition list UI for selected items and compiles their
-     * details into a list of PartitionInfo objects.
-     *
-     * @return A list of PartitionInfo objects representing the selected partitions.
-     */
-    QList<PartitionInfo> getSelectedPartitions();
+    // /**
+    //  * @brief Retrieves a list of partitions currently selected in the dialog.
+    //  *
+    //  * This method scans the partition list UI for selected items and compiles their
+    //  * details into a list of PartitionInfo objects.
+    //  *
+    //  * @return A list of PartitionInfo objects representing the selected partitions.
+    //  */
+    // QList<PartitionInfo> getSelectedPartitions();
 
 private:
     std::optional<ScannerEngine::SearchDatabase> m_scannedDb; ///< Storage for the database returned by the helper
@@ -86,19 +86,6 @@ private:
     QPushButton *startBtn; ///< Action button (Start Indexing / Cancel)
     QPushButton *refreshBtn; ///< Action button (Refresh)
     std::vector<PartitionInfo> partitions; ///< Internal metadata for the list items
-
-    /**
-     * @brief Executes a helper process to scan the specified device for partition information.
-     *
-     * This function invokes an external helper process using `pkexec` to perform a scan on the
-     * provided device path. It handles data returned by the helper process, parses the results,
-     * and builds the necessary data structures for the partition search database.
-     *
-     * @param devicePath The path to the device to be scanned (e.g., "/dev/sda").
-     * @return An optional `ScannerEngine::SearchDatabase` containing the scan results. Returns
-     *         `std::nullopt` if the scan fails or an error occurs during processing.
-     */
-    std::optional<ScannerEngine::SearchDatabase> scanViaHelper(const QString& devicePath);
 };
 
 #endif //KERYTHING_PARTITIONDIALOG_H

@@ -43,7 +43,7 @@ int scanExt4(const std::string& devicePath) {
     std::cout.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
 
     // 2. Write the raw vector data (The FileRecord structs)
-    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(NtfsScannerEngine::FileRecord)));
+    std::cout.write(reinterpret_cast<const char*>(db->records.data()), static_cast<std::streamsize>(recordCount * sizeof(Ext4ScannerEngine::FileRecord)));
 
     // 3. Write the size of the string pool
     uint64_t poolSize = db->stringPool.size();

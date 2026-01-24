@@ -51,8 +51,7 @@ add_executable(kerything-scanner-helper
 # Link the libraries and include directories found by pkg-config
 target_link_libraries(kerything-scanner-helper
         PRIVATE
-        TBB::tbb
-        ${EXT2FS_LIBRARIES}
+        ${EXT2FS_LIBRARIES} # Lib for parsing EXT4 inodes
 )
 target_include_directories(kerything-scanner-helper PRIVATE ${EXT2FS_INCLUDE_DIRS})
 
@@ -75,15 +74,15 @@ add_executable(kerything
 
 target_link_libraries(kerything
         PRIVATE
-        TBB::tbb
-        Qt6::Widgets
-        KF6::WidgetsAddons
-        KF6::CoreAddons
-        KF6::Solid
-        KF6::KIOWidgets
-        KF6::KIOFileWidgets
-        KF6::KIOGui
-        KF6::XmlGui
+        TBB::tbb # Parallelism
+        Qt6::Widgets # GUI widgets
+        KF6::WidgetsAddons # TODO: Check whether this can be removed
+        KF6::CoreAddons # TODO: Check whether this can be removed
+        KF6::Solid # For querying list of partitions
+        KF6::KIOWidgets # TODO: Check whether this can be removed
+        KF6::KIOFileWidgets # For KDE right-click context menu
+        KF6::KIOGui # TODO: Check whether this can be removed
+        KF6::XmlGui # for KDE About dialog
 )
 
 include(KDEInstallDirs)

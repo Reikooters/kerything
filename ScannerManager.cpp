@@ -37,12 +37,72 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
     QByteArray rawData;
     rawData.reserve(1024 * 1024 * 16); // start with 16 MiB to reduce early reallocations
 
+    QByteArray stderrBuf;
+    stderrBuf.reserve(4096);
+    int lastPct = -1;
+
+    // Percent completion updates from the helper are written to stderr
+    // on a line beginning with KERYTHING_PROGRESS then the integer value.
+    // Parse those as we get them and update the progress bar,
+    // while ignoring any other lines written to stderr.
+    auto drainAndParseStderr = [&](bool flushPartialLine = false) {
+        stderrBuf += helper->readAllStandardError();
+        std::optional<int> latestPctSeen;
+
+        auto consumeLine = [&](QByteArrayView lineView) {
+            static constexpr QByteArrayView kPrefix("KERYTHING_PROGRESS ");
+            if (!lineView.startsWith(kPrefix)) {
+                return;
+            }
+
+            bool ok = false;
+
+            int pct = lineView.mid(kPrefix.size()).trimmed().toInt(&ok);
+
+            if (!ok) {
+                return;
+            }
+
+            pct = std::clamp(pct, 0, 100);
+            latestPctSeen = pct;
+        };
+
+        while (true) {
+            const int nl = stderrBuf.indexOf('\n');
+            if (nl < 0) {
+                break;
+            }
+
+            QByteArrayView lineView(stderrBuf.constData(), nl);
+            consumeLine(lineView);
+
+            stderrBuf.remove(0, nl + 1);
+        }
+
+        // If the process has finished, treat the remaining bytes as the last line.
+        if (flushPartialLine && !stderrBuf.isEmpty()) {
+            consumeLine(stderrBuf);
+            stderrBuf.clear();
+        }
+
+        // If a progress update was received, update the percentage progress displayed,
+        // but only if the new percentage value is different from the one currently shown.
+        if (latestPctSeen && *latestPctSeen != lastPct) {
+            lastPct = *latestPctSeen;
+            Q_EMIT progressValue(lastPct);
+            Q_EMIT progressMessage(QStringLiteral("Scanning device... %1%").arg(lastPct));
+        }
+    };
+
     // Loop until finished, keeping the UI responsive
     while (!helper->waitForFinished(100)) {
         QCoreApplication::processEvents();
 
         // drain stdout continuously to avoid deadlock if helper writes a lot.
         rawData += helper->readAllStandardOutput();
+
+        // Drain stderr for progress updates (and ignore other stderr output)
+        drainAndParseStderr();
 
         // Check if user clicked the "Cancel" button or closed the dialog
         if (m_cancelRequested) {
@@ -67,8 +127,9 @@ std::optional<ScannerEngine::SearchDatabase> ScannerManager::scanDevice(const QS
         }
     }
 
-    // Drain any remaining stdout after exit
+    // Drain any remaining stdout/stderr after exit
     rawData += helper->readAllStandardOutput();
+    drainAndParseStderr();
 
     if (helper->exitCode() != 0) {
         m_isRunning = false;

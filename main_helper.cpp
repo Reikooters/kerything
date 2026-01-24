@@ -8,6 +8,8 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <chrono>
+#include <linux/limits.h>
 #include <sys/stat.h>
 
 #include "scanners/NtfsScannerEngine.h"
@@ -86,9 +88,57 @@ static bool safeWriteAll(const char* data, std::streamsize n) {
     return static_cast<bool>(std::cout);
 }
 
+struct ProgressReporter {
+    using Clock = std::chrono::steady_clock;
+    static constexpr auto kMinInterval = std::chrono::milliseconds(100);
+
+    Clock::time_point nextEmit = Clock::now();
+    uint8_t lastPct = 255;
+
+    void operator()(uint64_t done, uint64_t total) {
+        if (total == 0) {
+            total = 1;
+        }
+        if (done > total) {
+            done = total;
+        }
+
+        // Always emit completion immediately
+        if (done == total) {
+            if (lastPct == 100) {
+                return;
+            }
+
+            lastPct = 100;
+            std::cerr << "KERYTHING_PROGRESS 100\n";
+            std::cerr.flush();
+            return;
+        }
+
+        const auto now = Clock::now();
+        if (now < nextEmit) {
+            return;
+        }
+        nextEmit = now + kMinInterval;
+
+        const uint64_t pct64 = (done * 100 + total / 2) / total;
+        const uint8_t pct = static_cast<uint8_t>(pct64);
+
+        if (pct == lastPct) {
+            return;
+        }
+        lastPct = pct;
+
+        std::cerr << "KERYTHING_PROGRESS " << static_cast<unsigned>(pct) << "\n";
+        std::cerr.flush();
+    }
+};
+
 int scanNtfs(const std::string& devicePath) {
+    ProgressReporter reporter;
+
     // Use parseMft from the NTFS scanner engine
-    std::optional<NtfsScannerEngine::NtfsDatabase> db = NtfsScannerEngine::parseMft(devicePath);
+    std::optional<NtfsScannerEngine::NtfsDatabase> db = NtfsScannerEngine::parseMft(devicePath, reporter);
     if (!db) {
         return 2;
     }
@@ -125,8 +175,10 @@ int scanNtfs(const std::string& devicePath) {
 }
 
 int scanExt4(const std::string& devicePath) {
+    ProgressReporter reporter;
+
     // Use parseInodes from the EXT4 scanner engine
-    std::optional<Ext4ScannerEngine::Ext4Database> db = Ext4ScannerEngine::parseInodes(devicePath);
+    std::optional<Ext4ScannerEngine::Ext4Database> db = Ext4ScannerEngine::parseInodes(devicePath, reporter);
     if (!db) {
         return 2;
     }

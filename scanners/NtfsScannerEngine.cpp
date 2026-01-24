@@ -318,7 +318,7 @@ namespace NtfsScannerEngine {
         return 0;
     }
 
-    std::optional<NtfsDatabase> parseMft(const std::string& devicePath) {
+    std::optional<NtfsDatabase> parseMft(const std::string& devicePath, ProgressCallback progressCb) {
         // Opening a disk device requires 'root' privileges on Linux.
         std::ifstream disk(devicePath, std::ios::binary);
         if (!disk) {
@@ -404,6 +404,11 @@ namespace NtfsScannerEngine {
         db.mftToRecordIdx.reserve(totalRecords);
         db.stringPool.reserve(totalRecords * 20); // Average filename length estimate
 
+        uint64_t scannedRecords = 0;
+        if (progressCb) {
+            progressCb(0, totalRecords);
+        }
+
         // Step 3: Single Pass.
         // We collect all valid records.
         for (const auto& run : mftRuns) {
@@ -419,12 +424,20 @@ namespace NtfsScannerEngine {
                 disk.read(batchBuffer.data(), toRead * recordSize);
 
                 for (uint64_t i = 0; i < toRead; ++i) {
+                    ++scannedRecords;
+
+                    static constexpr uint64_t kProgressEvery = 4096; // must be power of two
+                    if (progressCb && ((scannedRecords & (kProgressEvery - 1)) == 0)) {
+                        progressCb(scannedRecords, totalRecords);
+                    }
+
                     char* recordPtr = batchBuffer.data() + (i * recordSize);
                     auto* header = reinterpret_cast<MFT_RecordHeader*>(recordPtr);
 
                     // Check signature and 'In Use' flag
-                    if (std::string_view(header->signature, 4) != "FILE" || !(header->flags & 0x01))
+                    if (std::string_view(header->signature, 4) != "FILE" || !(header->flags & 0x01)) {
                         continue;
+                    }
 
                     applyFixups(recordPtr, recordSize);
                     uint64_t recordIndex = runStartIndex + r + i;
@@ -433,6 +446,8 @@ namespace NtfsScannerEngine {
                 }
             }
         }
+
+        if (progressCb) progressCb(totalRecords, totalRecords);
 
         // Now that we've scanned the whole partition, process extension records since we have all their parts
         processExtensionRecords(db);

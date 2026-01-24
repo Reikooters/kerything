@@ -71,7 +71,7 @@ namespace Ext4ScannerEngine {
         return 0;
     }
 
-    std::optional<Ext4Database> parseInodes(const std::string& devicePath) {
+    std::optional<Ext4Database> parseInodes(const std::string& devicePath, ProgressCallback progressCb) {
         ext2_filsys fs;
         errcode_t retval = ext2fs_open(devicePath.c_str(), 0, 0, 0, unix_io_manager, &fs);
         if (retval) {
@@ -79,7 +79,9 @@ namespace Ext4ScannerEngine {
             return std::nullopt;
         }
 
-        uint32_t max_inodes = fs->super->s_inodes_count;
+        const uint32_t totalInodes = fs->super->s_inodes_count;
+        const uint32_t freeInodes  = fs->super->s_free_inodes_count;
+        const uint32_t inodesInUse = (freeInodes <= totalInodes) ? (totalInodes - freeInodes) : totalInodes;
 
         // Reserve a reasonable starting size for the map (1.5 million files)
         int initialCapacity = 1500000;
@@ -108,13 +110,22 @@ namespace Ext4ScannerEngine {
         ext2_ino_t ino;
         ext2_inode inode;
 
-        ScanContext ctx{db, max_inodes};
+        ScanContext ctx{db, totalInodes};
+
+        uint64_t usedInodesSeen = 0;
+        if (progressCb) {
+            progressCb(0, inodesInUse);
+        }
 
         // Crawl the directory tree to discover all names and structure
         // We start from the root inode (2) and let ext2fs_dir_iterate2 recurse
         // through directories.
         while (ext2fs_get_next_inode(scan, &ino, &inode) == 0 && ino != 0) {
-            if (inode.i_links_count == 0) continue;
+            if (inode.i_links_count == 0) {
+                continue;
+            }
+
+            ++usedInodesSeen;
 
             FileStats stats{};
             stats.size = EXT2_I_SIZE(&inode);
@@ -124,10 +135,19 @@ namespace Ext4ScannerEngine {
 
             db.inodeToFileStats[ino] = stats;
 
+            static constexpr uint64_t kProgressEvery = 4096; // must be power of two
+            if (progressCb && ((usedInodesSeen & (kProgressEvery - 1)) == 0)) {
+                progressCb(usedInodesSeen, inodesInUse);
+            }
+
             if (LINUX_S_ISDIR(inode.i_mode)) {
                 // This will trigger dirCallback for every file inside this directory
                 ext2fs_dir_iterate2(fs, ino, 0, nullptr, dirCallback, &ctx);
             }
+        }
+
+        if (progressCb) {
+            progressCb(inodesInUse, inodesInUse);
         }
 
         // Close the scan

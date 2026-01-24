@@ -9,6 +9,7 @@
 #include <vector>
 #include <iostream>
 #include <string>
+#include <functional>
 #include <ext2fs/ext2fs.h>
 
 namespace Ext4ScannerEngine {
@@ -33,7 +34,7 @@ namespace Ext4ScannerEngine {
         uint32_t nameOffset; // Offset into the global string pool
         uint16_t nameLen;
         uint8_t isDir : 1;
-        uint8_t isSymlink : 1; // Unused in NTFS
+        uint8_t isSymlink : 1;
         uint8_t reserved : 6;
     };
 
@@ -43,7 +44,7 @@ namespace Ext4ScannerEngine {
         uint64_t size;
         uint64_t modificationTime;
         uint8_t isDir : 1;
-        uint8_t isSymlink : 1; // Unused in NTFS
+        uint8_t isSymlink : 1;
         uint8_t reserved : 6;
     };
 
@@ -64,8 +65,36 @@ namespace Ext4ScannerEngine {
         void populateStatsIntoRecords();
     };
 
-    std::optional<Ext4Database> parseInodes(const std::string& devicePath);
+    /**
+     * Progress callback: called with (done, total) to report scan progress.
+     */
+    using ProgressCallback = std::function<void(uint64_t done, uint64_t total)>;
 
+    /**
+     * Parses the inodes of the specified Ext4 filesystem and builds an internal database structure.
+     *
+     * @param devicePath The file path to the device containing the Ext4 filesystem.
+     * @param progressCb A callback function to report progress during inode scanning.
+     *                   The callback takes two arguments: the number of inodes processed and the total number of inodes.
+     *                   Can be null if progress reporting is not required.
+     * @return An optional Ext4Database object containing the parsed data.
+     *         Returns std::nullopt if there is an error opening or scanning the filesystem.
+     */
+    std::optional<Ext4Database> parseInodes(const std::string& devicePath, ProgressCallback progressCb = {});
+
+    /**
+     * Callback function invoked for each directory entry during a directory iteration in the Ext4 filesystem.
+     * This function processes directory entries, updates the inode-to-record mappings, and populates file records.
+     *
+     * @param dir_ino The inode number of the directory being scanned.
+     * @param entry_flags Flags providing additional information about the directory entry (e.g., error conditions, entry type).
+     * @param dirent A pointer to the `ext2_dir_entry` structure that represents the directory entry.
+     * @param offset The byte offset of the directory entry within the directory block.
+     * @param blocksize The size of the directory block in bytes.
+     * @param buf A pointer to the data buffer containing the raw directory block data.
+     * @param priv_data A void pointer to user-defined private data (used to pass the scanning context, such as `ScanContext`).
+     * @return Returns 0 on successful processing of the entry. Non-zero values may indicate processing errors.
+     */
     int dirCallback(ext2_ino_t dir_ino, int entry_flags, ext2_dir_entry *dirent, int offset, int blocksize, char *buf, void *priv_data);
 }
 

@@ -8,20 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <string_view>
-
-// VITAL FIX: TBB and Qt both want 'emit'.
-// We must undefine it before including <execution>
-#ifdef emit
-#define QT_EMIT_BACKUP emit
-#undef emit
-#endif
-
-#include <execution>
-
-#ifdef QT_EMIT_BACKUP
-#define emit QT_EMIT_BACKUP
-#undef QT_EMIT_BACKUP
-#endif
+#include <functional>
 
 namespace NtfsScannerEngine {
 
@@ -259,6 +246,11 @@ namespace NtfsScannerEngine {
     };
 
     /**
+     * Progress callback: called with (done, total) to report scan progress.
+     */
+    using ProgressCallback = std::function<void(uint64_t done, uint64_t total)>;
+
+    /**
      * Parses the Master File Table (MFT) from the specified NTFS volume.
      * This method reads the boot sector to locate the MFT, calculates
      * record size, and iteratively processes records to build an
@@ -267,10 +259,14 @@ namespace NtfsScannerEngine {
      * @param devicePath The path to the target device or volume where
      *                   the NTFS partition is located. This should be
      *                   a valid system path.
+     * @param progressCb A callback function to report progress during MFT scanning.
+     *                   The callback takes two arguments: the number of records processed
+     *                   and the total number of records.
+     *                   Can be null if progress reporting is not required.
      * @return An optional NtfsDatabase containing the reconstructed
      *         metadata of the NTFS volume, or std::nullopt if parsing fails.
      */
-    std::optional<NtfsDatabase> parseMft(const std::string& devicePath);
+    std::optional<NtfsDatabase> parseMft(const std::string& devicePath, ProgressCallback progressCb = {});
 
     /**
      * NTFS Fixups (Update Sequence Array):

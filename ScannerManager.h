@@ -26,6 +26,7 @@ public:
 
 signals:
     void progressMessage(const QString &message);
+    void progressValue(int percent);
     void errorMessage(const QString &title, const QString &message);
     void scannerStarted();
     void scannerFinished();

@@ -9,6 +9,7 @@
 #include <QTreeWidget>
 #include <QLabel>
 #include <QPushButton>
+#include <QProgressBar>
 #include <vector>
 #include <optional>
 #include "ScannerEngine.h"
@@ -86,6 +87,7 @@ private:
     QPushButton *startBtn; ///< Action button (Start Indexing / Cancel)
     QPushButton *refreshBtn; ///< Action button (Refresh)
     std::vector<PartitionInfo> partitions; ///< Internal metadata for the list items
+    QProgressBar *progressBar; ///< Progress bar showing scanner progress
 };
 
 #endif //KERYTHING_PARTITIONDIALOG_H

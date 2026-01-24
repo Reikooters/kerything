@@ -9,6 +9,7 @@
 #include <QVBoxLayout>
 #include <QHeaderView>
 #include <QMessageBox>
+#include <QProgressBar>
 #include "PartitionDialog.h"
 #include "GuiUtils.h"
 #include "ScannerManager.h"
@@ -39,6 +40,13 @@ PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
     statusLabel = new QLabel("Select a partition to begin.", this);
     layout->addWidget(statusLabel);
 
+    progressBar = new QProgressBar(this);
+    progressBar->setTextVisible(false);
+    progressBar->setRange(0, 100);
+    progressBar->setValue(0);
+    progressBar->setVisible(false); // Hidden until scanning
+    layout->addWidget(progressBar);
+
     startBtn = new QPushButton("Start Indexing", this);
     startBtn->setEnabled(false); // Disable the button by default
     layout->addWidget(startBtn);
@@ -64,6 +72,7 @@ PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
     connect(m_manager.get(), &ScannerManager::scannerStarted, this, [this]() { setScanning(true); });
     connect(m_manager.get(), &ScannerManager::scannerFinished, this, [this]() { setScanning(false); });
     connect(m_manager.get(), &ScannerManager::progressMessage, statusLabel, &QLabel::setText);
+    connect(m_manager.get(), &ScannerManager::progressValue, progressBar, &QProgressBar::setValue);
 
     // Connect error messages to show a critical message box
     connect(m_manager.get(), &ScannerManager::errorMessage, this, [](const QString &title, const QString &msg) {
@@ -177,9 +186,16 @@ void PartitionDialog::setScanning(bool scanning) {
     if (scanning) {
         startBtn->setText("Cancel Scanning");
         startBtn->setEnabled(true); // Button stays enabled to allow cancelling
+
+        // Show the progress bar while scanning
+        progressBar->setVisible(true);
     } else {
         startBtn->setText("Start Indexing");
         statusLabel->setText("Select a partition to begin.");
+
+        // Hide the progress bar after scanning completes or cancellation
+        progressBar->setVisible(false);
+        progressBar->setValue(0);
 
         // Ensure button state is correct based on whether something is selected
         startBtn->setEnabled(!treeWidget->selectedItems().isEmpty());

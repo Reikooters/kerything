@@ -8,7 +8,7 @@ pkgdesc="Fast NTFS and EXT4 file scanner using trigrams"
 arch=('x86_64')
 url="https://github.com/Reikooters/kerything"
 license=('GPL-3.0-or-later')
-depends=('qt6-base' 'kwidgetsaddons' 'kcoreaddons' 'kio' 'solid' 'onetbb' 'e2fsprogs')
+depends=('qt6-base' 'kwidgetsaddons' 'kcoreaddons' 'solid' 'kio' 'kxmlgui' 'onetbb' 'e2fsprogs')
 makedepends=('cmake' 'extra-cmake-modules')
 
 # Disable the creation of the -debug package

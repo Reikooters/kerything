@@ -133,6 +133,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     tableView->setAlternatingRowColors(true);
     tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView->verticalHeader()->setVisible(false);
+    tableView->setWordWrap(false);
 
     // Full-row hover
     tableView->setItemDelegate(new HoverRowDelegate(this));

@@ -32,13 +32,34 @@ public:
      */
     void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, const QString& fsType);
 
+    int hoveredRow() const { return m_hoveredRow; }
+
 protected:
     /**
      * @brief Handles right-click events to show the file context menu.
      */
     void contextMenuEvent(QContextMenuEvent *event) override;
 
+    /**
+     * @brief Filters events for specific objects in the application.
+     *
+     * This method intercepts and handles events for the given watched object
+     * and applies custom behavior. If the event is not explicitly handled,
+     * it delegates the processing to the base class implementation.
+     *
+     * @param watched The QObject that this method is filtering events for.
+     * @param event The QEvent being intercepted for this object.
+     * @return True if the event is handled and should not propagate further;
+     *         otherwise returns false to pass the event to the base class or default handlers.
+     */
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private slots:
+    /**
+     * @brief Tracks which row is currently hovered so we can paint a full-row hover highlight.
+     */
+    void onTableHovered(const QModelIndex& index);
+
     /**
      * @brief Triggered when the search text changes. Performs a trigram search and updates the view.
      */
@@ -113,6 +134,8 @@ private:
     QTableView *tableView;
     FileModel *model;
     QLabel *statusLabel;
+
+    int m_hoveredRow = -1;
 };
 
 #endif //KERYTHING_MAINWINDOW_H

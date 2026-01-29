@@ -16,6 +16,9 @@
 #include <QMimeDatabase>
 #include <QMimeType>
 #include <QTimer>
+#include <QStyledItemDelegate>
+#include <QEvent>
+#include <QPainter>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
 #include <KFileItem>
@@ -34,6 +37,41 @@
 #include "GuiUtils.h"
 #include "PartitionDialog.h"
 #include "ScannerManager.h"
+
+namespace {
+    class HoverRowDelegate final : public QStyledItemDelegate {
+    public:
+        explicit HoverRowDelegate(const MainWindow* owner)
+            : QStyledItemDelegate(const_cast<MainWindow*>(owner)), m_owner(owner) {}
+
+        void paint(QPainter* painter, const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override
+        {
+            QStyleOptionViewItem opt(option);
+            initStyleOption(&opt, index);
+
+            const bool isHoveredRow = (m_owner && index.row() == m_owner->hoveredRow());
+            const bool isSelected = (opt.state & QStyle::State_Selected);
+
+            if (isHoveredRow && !isSelected) {
+                // alternatingRowColors: prevent "alternate row" painting from overriding our hover
+                opt.features &= ~QStyleOptionViewItem::Alternate;
+
+                QColor hover = opt.palette.color(QPalette::Highlight);
+                hover.setAlpha(40);
+                painter->fillRect(opt.rect, hover);
+
+                // Also ensure the style doesn't paint another background on top
+                opt.backgroundBrush = Qt::NoBrush;
+            }
+
+            QStyledItemDelegate::paint(painter, opt, index);
+        }
+
+    private:
+        const MainWindow* m_owner = nullptr;
+    };
+}
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     auto *centralWidget = new QWidget(this);
@@ -95,6 +133,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     tableView->setAlternatingRowColors(true);
     tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView->verticalHeader()->setVisible(false);
+
+    // Full-row hover
+    tableView->setItemDelegate(new HoverRowDelegate(this));
+    tableView->setMouseTracking(true);
+    tableView->viewport()->setMouseTracking(true);
+    connect(tableView, &QAbstractItemView::entered, this, &MainWindow::onTableHovered);
+    tableView->viewport()->installEventFilter(this);
 
     // --- Drag and Drop Configuration ---
     // setDragEnabled(true) tells the view to start a drag if the user moves the
@@ -270,6 +315,29 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // At the end of the constructor, trigger the partition selection
     // We use a QTimer to call it after the window is shown
     QTimer::singleShot(0, this, &MainWindow::changePartition);
+}
+
+void MainWindow::onTableHovered(const QModelIndex& index) {
+    const int newRow = index.isValid() ? index.row() : -1;
+    if (newRow == m_hoveredRow) {
+        return;
+    }
+
+    m_hoveredRow = newRow;
+    tableView->viewport()->update();
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == tableView->viewport()) {
+        if (event->type() == QEvent::Leave) {
+            if (m_hoveredRow != -1) {
+                m_hoveredRow = -1;
+                tableView->viewport()->update();
+            }
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, const QString& fsType) {

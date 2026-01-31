@@ -31,6 +31,7 @@ PartitionDialog::PartitionDialog(QWidget *parent) : QDialog(parent) {
     treeWidget->setColumnCount(4);
     treeWidget->setHeaderLabels({"FS", "Name", "Device", "Mount Path"});
     treeWidget->setSortingEnabled(true);
+    treeWidget->sortByColumn(2, Qt::AscendingOrder); // Sort by device path by default
     treeWidget->setRootIsDecorated(false); // No expansion arrows needed for a list
     treeWidget->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     treeWidget->header()->setStretchLastSection(true);
@@ -128,8 +129,6 @@ void PartitionDialog::refreshPartitions() {
             partitions.push_back(info);
         }
     }
-
-    treeWidget->sortByColumn(2, Qt::AscendingOrder); // Sort by device path by default
 }
 
 void PartitionDialog::onStartClicked() {

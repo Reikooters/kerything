@@ -143,6 +143,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     tableView->setMouseTracking(true);
     tableView->viewport()->setMouseTracking(true);
     connect(tableView, &QAbstractItemView::entered, this, &MainWindow::onTableHovered);
+    connect(tableView, &QAbstractItemView::viewportEntered, this, &MainWindow::onTableViewportHovered);
     tableView->viewport()->installEventFilter(this);
 
     // --- Drag and Drop Configuration ---
@@ -503,6 +504,13 @@ void MainWindow::onTableHovered(const QModelIndex& index) {
 
     m_hoveredRow = newRow;
     tableView->viewport()->update();
+}
+
+void MainWindow::onTableViewportHovered() {
+    if (m_hoveredRow != -1) {
+        m_hoveredRow = -1;
+        tableView->viewport()->update();
+    }
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {

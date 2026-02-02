@@ -109,6 +109,11 @@ private slots:
     void onTableHovered(const QModelIndex& index);
 
     /**
+     * @brief Tracks when the empty area of the table is hovered (below the last item in the list)
+     */
+    void onTableViewportHovered();
+
+    /**
      * @brief Triggered when the search text changes. Performs a trigram search and updates the view.
      */
     void updateSearch(const QString &text);

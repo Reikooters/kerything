@@ -9,11 +9,16 @@
 #include <QTableView>
 #include <QLabel>
 #include <QString>
+#include <QTimer>
+#include <QtDBus/QDBusServiceWatcher>
 #include <vector>
 #include <string>
+#include <memory>
 #include "ScannerEngine.h"
+#include "DbusIndexerClient.h"
 
 class FileModel;
+class RemoteFileModel;
 
 /**
  * @brief The main application window for searching and viewing files.
@@ -32,6 +37,14 @@ public:
      */
     void setDatabase(ScannerEngine::SearchDatabase&& database, QString mountPath, QString devicePath, const QString& fsType);
 
+    /**
+     * @brief Retrieves the index of the currently hovered row in the table view.
+     *
+     * This method returns the row index that is currently being hovered by the
+     * mouse pointer. If no row is hovered, it returns -1.
+     *
+     * @return The index of the hovered row, or -1 if no row is hovered.
+     */
     int hoveredRow() const { return m_hoveredRow; }
 
 protected:
@@ -55,6 +68,41 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
+    /**
+     * @brief Handles the event of a daemon service being registered.
+     *
+     * This method is triggered when a daemon service becomes available or restarts.
+     * It updates the daemon status and refreshes the current query page if necessary.
+     *
+     * @param serviceName The name of the registered daemon service.
+     */
+    void onDaemonServiceRegistered(const QString& serviceName);
+
+    /**
+     * @brief Handles the event when a daemon service is unregistered.
+     *
+     * This method updates the UI and internal states to reflect the disconnection
+     * of the specified daemon service. It ensures users are informed about the
+     * unavailability of live updates and transitions the search model to an offline
+     * state if necessary.
+     *
+     * @param serviceName The name of the daemon service that was unregistered.
+     */
+    void onDaemonServiceUnregistered(const QString& serviceName);
+
+    /**
+     * @brief Updates the device index and refreshes the search results in the UI.
+     *
+     * This slot is triggered when the device index is updated. It ensures that
+     * the search results are refreshed based on the new index data, particularly
+     * when using the daemon search functionality.
+     *
+     * @param deviceId The unique identifier of the device whose index was updated.
+     * @param generation The generation number of the updated index.
+     * @param entryCount The number of entries in the updated index.
+     */
+    void onDeviceIndexUpdated(const QString& deviceId, quint64 generation, quint64 entryCount);
+
     /**
      * @brief Tracks which row is currently hovered so we can paint a full-row hover highlight.
      */
@@ -126,14 +174,41 @@ private:
      */
     static bool contains(std::string_view haystack, std::string_view needle);
 
+    /**
+     * @brief Updates the status label to reflect the current state of the daemon connection.
+     *
+     * This function checks the connection to the D-Bus and updates the status label accordingly.
+     * It handles the following scenarios:
+     * - If the D-Bus is not initialized, it indicates that the daemon is disconnected and live
+     *   updates are paused.
+     * - If the daemon ping fails, the disconnection is reported along with the error message.
+     * - If fetching the list of indexed devices fails, the connection status is shown with an
+     *   error message indicating the issue with retrieving indexes.
+     * - If connected and indexes are available, the label displays the number of indexed
+     *   partitions and total objects indexed by the daemon.
+     */
+    void refreshDaemonStatusLabel();
+
+    bool m_useDaemonSearch = false;
+
     ScannerEngine::SearchDatabase db;
     QString m_fsType;
     QString m_mountPath;
     QString m_devicePath;
-    QLineEdit *searchLine;
-    QTableView *tableView;
-    FileModel *model;
-    QLabel *statusLabel;
+
+    QLineEdit *searchLine = nullptr;
+    QTableView *tableView = nullptr;
+
+    FileModel *model = nullptr; // local model
+    RemoteFileModel *remoteModel = nullptr; // daemon model
+
+    QLabel *daemonStatusLabel = nullptr;
+    std::unique_ptr<DbusIndexerClient> m_dbus;
+
+    QDBusServiceWatcher* m_daemonWatcher = nullptr;
+
+    QTimer* m_indexUpdateDebounceTimer = nullptr;
+    bool m_indexUpdatePending = false;
 
     int m_hoveredRow = -1;
 };

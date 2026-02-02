@@ -19,6 +19,7 @@
 #include <QStyledItemDelegate>
 #include <QEvent>
 #include <QPainter>
+#include <QtDBus/QDBusConnection>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
 #include <KFileItem>
@@ -37,6 +38,8 @@
 #include "GuiUtils.h"
 #include "PartitionDialog.h"
 #include "ScannerManager.h"
+#include "RemoteFileModel.h"
+#include "DbusIndexerClient.h"
 
 namespace {
     class HoverRowDelegate final : public QStyledItemDelegate {
@@ -220,9 +223,96 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(tableView->model(), &QAbstractItemModel::modelReset, this, updateActionStates);
     // ---------------------
 
-    // Status Bar
-    statusLabel = new QLabel(this);
-    statusBar()->addPermanentWidget(statusLabel);
+    // Daemon Status Bar
+    daemonStatusLabel = new QLabel(this);
+    statusBar()->addPermanentWidget(daemonStatusLabel);
+
+    // Create D-Bus client
+    m_dbus = std::make_unique<DbusIndexerClient>(this);
+
+    // Watch daemon presence on the system bus (event-driven "connected/disconnected")
+    constexpr const char* kService = "net.reikooters.Kerything1";
+    m_daemonWatcher = new QDBusServiceWatcher(
+        QString::fromLatin1(kService),
+        QDBusConnection::systemBus(),
+        QDBusServiceWatcher::WatchForRegistration | QDBusServiceWatcher::WatchForUnregistration,
+        this
+    );
+    connect(m_daemonWatcher, &QDBusServiceWatcher::serviceRegistered,
+            this, &MainWindow::onDaemonServiceRegistered);
+    connect(m_daemonWatcher, &QDBusServiceWatcher::serviceUnregistered,
+            this, &MainWindow::onDaemonServiceUnregistered);
+
+    // Initial daemon setup
+    {
+        QString err;
+        auto ping = m_dbus->ping(&err);
+        if (ping) {
+            // Enable daemon-backed search mode
+            m_useDaemonSearch = true;
+            remoteModel = new RemoteFileModel(m_dbus.get(), this);
+            tableView->setModel(remoteModel);
+
+            // Surface daemon paging failures to the user (without making the UI noisy).
+            connect(remoteModel, &RemoteFileModel::transientError, this, [this](const QString& msg) {
+                statusBar()->showMessage(msg, 5000);
+            });
+
+            tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
+            remoteModel->setSort(0, Qt::AscendingOrder);
+
+            // Listen for index updates to refresh UI hints / counts
+            constexpr const char* kPath    = "/net/reikooters/Kerything1";
+            constexpr const char* kIface   = "net.reikooters.Kerything1.Indexer";
+
+            const bool ok = QDBusConnection::systemBus().connect(
+                QString::fromLatin1(kService),
+                QString::fromLatin1(kPath),
+                QString::fromLatin1(kIface),
+                QStringLiteral("DeviceIndexUpdated"),
+                this,
+                SLOT(onDeviceIndexUpdated(QString,quint64,quint64))
+            );
+
+            if (!ok) {
+                daemonStatusLabel->setText("Warning: failed to connect to daemon DeviceIndexUpdated signal.");
+            }
+
+            // Permanent daemon/index summary in the label
+            refreshDaemonStatusLabel();
+
+            // Initial: if nothing is indexed yet, tell the user what to do.
+            QString idxErr;
+            auto indexedOpt = m_dbus->listIndexedDevices(&idxErr);
+            if (indexedOpt && indexedOpt->isEmpty()) {
+                statusBar()->showMessage("No partitions are indexed yet. Use “Change Partition” to index one.", 0);
+            } else {
+                // Start with empty query = "everything"
+                updateSearch("");
+            }
+        } else {
+            //daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
+            daemonStatusLabel->setText(QString("Daemon: disconnected • live updates paused (%1)").arg(err));
+        }
+    }
+
+    // Debounce index update refreshes (fanotify-friendly)
+    m_indexUpdateDebounceTimer = new QTimer(this);
+    m_indexUpdateDebounceTimer->setSingleShot(true);
+    m_indexUpdateDebounceTimer->setInterval(250);
+
+    connect(m_indexUpdateDebounceTimer, &QTimer::timeout, this, [this]() {
+        if (!m_indexUpdatePending) return;
+        m_indexUpdatePending = false;
+
+        if (m_useDaemonSearch && remoteModel) {
+            remoteModel->invalidate();
+            statusBar()->showMessage(
+                QString("%L1 objects found").arg(remoteModel->totalHits()),
+                0
+            );
+        }
+    });
 
     setCentralWidget(centralWidget);
     resize(1200, 800);
@@ -311,11 +401,98 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     // Start with a full list, sorted by name ascending
     tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
-    updateSearch("");
 
-    // At the end of the constructor, trigger the partition selection
-    // We use a QTimer to call it after the window is shown
-    QTimer::singleShot(0, this, &MainWindow::changePartition);
+    // Only open partition dialog in local mode
+    if (!m_useDaemonSearch) {
+        // Keep the initial search stats in the *message* area,
+        // so we don't overwrite the permanent daemon label.
+        statusBar()->showMessage("Select a partition to begin.", 0);
+
+        // At the end of the constructor, trigger the partition selection
+        // We use a QTimer to call it after the window is shown
+        QTimer::singleShot(0, this, &MainWindow::changePartition);
+    }
+}
+
+void MainWindow::refreshDaemonStatusLabel() {
+    if (!daemonStatusLabel) return;
+
+    if (!m_dbus) {
+        daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
+        return;
+    }
+
+    QString pingErr;
+    const auto ping = m_dbus->ping(&pingErr);
+    if (!ping) {
+        daemonStatusLabel->setText(QString("Daemon: disconnected • live updates paused (%1)").arg(pingErr));
+        return;
+    }
+
+    QString idxErr;
+    const auto indexedOpt = m_dbus->listIndexedDevices(&idxErr);
+    if (!indexedOpt) {
+        daemonStatusLabel->setText(QString("Daemon: connected • indexes unavailable (%1)").arg(idxErr));
+        return;
+    }
+
+    quint64 totalEntries = 0;
+    for (const QVariant& v : *indexedOpt) {
+        const QVariantMap m = v.toMap();
+        totalEntries += m.value(QStringLiteral("entryCount")).toULongLong();
+    }
+
+    daemonStatusLabel->setText(
+        QString("Daemon: connected • %1 partition(s) • %2 objects")
+            .arg(indexedOpt->size())
+            .arg(QLocale().toString(static_cast<qulonglong>(totalEntries)))
+    );
+}
+
+void MainWindow::onDaemonServiceRegistered(const QString& serviceName) {
+    Q_UNUSED(serviceName);
+
+    // Daemon appeared (or restarted). Refresh summary and refresh the current query page.
+    refreshDaemonStatusLabel();
+
+    if (m_useDaemonSearch && remoteModel) {
+        remoteModel->setOffline(false);
+        updateSearch(searchLine->text());
+    }
+}
+
+void MainWindow::onDaemonServiceUnregistered(const QString& serviceName) {
+    Q_UNUSED(serviceName);
+
+    // Daemon vanished. Update the permanent label so users know background updates can't occur.
+    if (daemonStatusLabel) {
+        daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
+    }
+
+    if (m_useDaemonSearch && remoteModel) {
+        remoteModel->setOffline(true); // empty table
+    }
+
+    statusBar()->showMessage(QStringLiteral("Daemon disconnected • live updates paused"), 5000);
+}
+
+void MainWindow::onDeviceIndexUpdated(const QString& deviceId, quint64 generation, quint64 entryCount) {
+    Q_UNUSED(deviceId);
+    Q_UNUSED(generation);
+    Q_UNUSED(entryCount);
+
+    // Keep the permanent label in sync with daemon state.
+    refreshDaemonStatusLabel();
+
+    if (!(m_useDaemonSearch && remoteModel)) {
+        return;
+    }
+
+    // Coalesce bursts (multiple partitions, rapid fanotify batches, etc.)
+    m_indexUpdatePending = true;
+    if (!m_indexUpdateDebounceTimer->isActive()) {
+        m_indexUpdateDebounceTimer->start();
+    }
 }
 
 void MainWindow::onTableHovered(const QModelIndex& index) {
@@ -395,14 +572,17 @@ void MainWindow::rescanPartition() {
             QString("Cannot rescan because the filesystem type is not supported for raw scanning.\n\nDetected: %1")
                 .arg(m_fsType)
         );
-        statusLabel->setText("Rescan unavailable (unsupported filesystem).");
+        statusBar()->showMessage("Rescan unavailable (unsupported filesystem).", 0);
         return;
     }
 
     ScannerManager manager(this);
 
     // Connect progress messages to the status bar
-    connect(&manager, &ScannerManager::progressMessage, statusLabel, &QLabel::setText);
+    connect(&manager, &ScannerManager::progressMessage,
+            this, [this](const QString& msg) {
+                statusBar()->showMessage(msg, 0); // 0 = show until replaced/cleared
+            });
 
     // Connect error messages to show a critical message box
     connect(&manager, &ScannerManager::errorMessage, this, [](const QString &title, const QString &msg) {
@@ -414,7 +594,7 @@ void MainWindow::rescanPartition() {
     if (newDb) {
         setDatabase(std::move(*newDb), m_mountPath, m_devicePath, m_fsType);
     } else {
-        statusLabel->setText("Rescan failed or cancelled.");
+        statusBar()->showMessage("Rescan failed or cancelled.", 0);
     }
 }
 
@@ -425,6 +605,11 @@ void MainWindow::showAbout() {
 }
 
 void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     // Map the position correctly to the viewport
     // This ensures the row index is perfectly aligned with the mouse
     QPoint viewportPos = tableView->viewport()->mapFrom(this, event->pos());
@@ -499,6 +684,11 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
 }
 
 void MainWindow::openFile(const QModelIndex &index) {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     if (!index.isValid()) {
         return;
     }
@@ -517,6 +707,11 @@ void MainWindow::openFile(const QModelIndex &index) {
 }
 
 void MainWindow::openSelectedFiles() {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     // Handle unmounted drives
     if (m_mountPath.isEmpty()) {
         QMessageBox::information(this, "Drive Not Mounted",
@@ -568,6 +763,11 @@ void MainWindow::openSelectedFiles() {
 }
 
 void MainWindow::openSelectedLocation() {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
@@ -587,6 +787,11 @@ void MainWindow::openSelectedLocation() {
 }
 
 void MainWindow::copyFileNames() {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
@@ -607,6 +812,11 @@ void MainWindow::copyFileNames() {
 }
 
 void MainWindow::copyPaths() {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
@@ -628,6 +838,11 @@ void MainWindow::copyPaths() {
 }
 
 void MainWindow::copyFiles() {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
@@ -656,6 +871,11 @@ void MainWindow::copyFiles() {
 }
 
 void MainWindow::openTerminal() {
+    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
+    if (m_useDaemonSearch) {
+        return;
+    }
+
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
@@ -828,6 +1048,28 @@ std::vector<uint32_t> MainWindow::performTrigramSearch(const std::string& query)
 }
 
 void MainWindow::updateSearch(const QString &text) {
+    if (m_useDaemonSearch && remoteModel) {
+        auto start = std::chrono::steady_clock::now();
+
+        const int sortCol = tableView->horizontalHeader()->sortIndicatorSection();
+        const auto sortOrder = tableView->horizontalHeader()->sortIndicatorOrder();
+
+        remoteModel->setSort(sortCol, sortOrder);
+        remoteModel->setQuery(text);
+
+        auto end = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = end - start;
+
+        statusBar()->showMessage(
+            QString("%L1 objects found (daemon) in %2s")
+                .arg(remoteModel->totalHits())
+                .arg(elapsed.count(), 0, 'f', 4),
+            0
+        );
+        return;
+    }
+
+    // Local search
     auto start = std::chrono::steady_clock::now();
 
     auto results = performTrigramSearch(text.toStdString());
@@ -839,8 +1081,7 @@ void MainWindow::updateSearch(const QString &text) {
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end - start;
 
-    // Update status bar
-    statusLabel->setText(QString("%L1 objects found in %2s")
+    statusBar()->showMessage(QString("%L1 objects found in %2s")
         .arg(model->rowCount())
-        .arg(elapsed.count(), 0, 'f', 4));
+        .arg(elapsed.count(), 0, 'f', 4), 0);
 }

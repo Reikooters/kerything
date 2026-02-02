@@ -10,6 +10,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QProgressBar>
+#include <QVariantMap>
+#include <QtDBus/QDBusServiceWatcher>
 #include <vector>
 #include <optional>
 #include "ScannerEngine.h"
@@ -19,10 +21,11 @@
  * @brief Represents basic information about a detected disk partition.
  */
 struct PartitionInfo {
-    QString fsType;
-    QString name;
-    QString devicePath;
-    QString mountPoint;
+    QString deviceId;   // e.g. "partuuid:...." (daemon identity)
+    QString fsType;     // e.g. "ntfs" / "ext4"
+    QString name;       // label or human-friendly string
+    QString devicePath; // current /dev/... node
+    QString mountPoint; // primary mount point or "Not Mounted"
 };
 
 /**
@@ -78,7 +81,14 @@ public:
     //  */
     // QList<PartitionInfo> getSelectedPartitions();
 
+private slots:
+    void onDaemonJobProgress(quint64 jobId, quint32 percent, const QVariantMap& props);
+    void onDaemonJobFinished(quint64 jobId, const QString& status, const QString& message, const QVariantMap& props);
+    void onDaemonVanished(const QString& serviceName);
+
 private:
+    void connectDaemonSignals();
+
     std::optional<ScannerEngine::SearchDatabase> m_scannedDb; ///< Storage for the database returned by the helper
     std::unique_ptr<ScannerManager> m_manager; ///< Helper process manager
     bool m_isHandlingClick = false; ///< Prevents re-entrant clicks
@@ -88,6 +98,13 @@ private:
     QPushButton *refreshBtn; ///< Action button (Refresh)
     std::vector<PartitionInfo> partitions; ///< Internal metadata for the list items
     QProgressBar *progressBar; ///< Progress bar showing scanner progress
+
+    // Daemon job state (Phase 1 verification)
+    bool m_daemonSignalsConnected = false;
+    bool m_isDaemonScanActive = false;
+    quint64 m_activeJobId = 0;
+
+    QDBusServiceWatcher* m_daemonWatcher = nullptr;
 };
 
 #endif //KERYTHING_PARTITIONDIALOG_H

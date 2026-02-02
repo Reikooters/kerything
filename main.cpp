@@ -2,11 +2,21 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include <QApplication>
+#include <QDebug>
 #include <KAboutData>
+#include <QtDBus/QDBusVariant>
+#include "DbusIndexerClient.h"
 #include "ScannerEngine.h"
 #include "PartitionDialog.h"
 #include "MainWindow.h"
 #include "Version.h"
+
+static QVariant unwrapOne(const QVariant& v) {
+    if (v.canConvert<QDBusVariant>()) {
+        return qvariant_cast<QDBusVariant>(v).variant();
+    }
+    return v;
+}
 
 int main(int argc, char* argv[])
 {
@@ -42,6 +52,31 @@ int main(int argc, char* argv[])
 
     // Set window icon
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("kerything")));
+
+    // Debug verification: ListKnownDevices() from the daemon
+    {
+        DbusIndexerClient client;
+        QString err;
+        auto devicesOpt = client.listKnownDevices(&err);
+        if (!devicesOpt) {
+            qWarning().noquote() << "ListKnownDevices() failed:" << err;
+        } else {
+            const QVariantList devices = *devicesOpt;
+            qInfo() << "ListKnownDevices() returned" << devices.size() << "device(s)";
+            for (const QVariant& raw : devices) {
+                const QVariant v = unwrapOne(raw);
+                const QVariantMap m = v.toMap();
+
+                qInfo().noquote()
+                    << " -"
+                    << m.value(QStringLiteral("deviceId")).toString()
+                    << m.value(QStringLiteral("devNode")).toString()
+                    << "fsType=" << m.value(QStringLiteral("fsType")).toString()
+                    << "mounted=" << m.value(QStringLiteral("mounted")).toBool()
+                    << "primaryMountPoint=" << m.value(QStringLiteral("primaryMountPoint")).toString();
+            }
+        }
+    }
 
     MainWindow window;
     window.show();

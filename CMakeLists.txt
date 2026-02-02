@@ -15,7 +15,10 @@ set(CMAKE_AUTORCC ON)
 find_package(TBB REQUIRED)
 
 # Find Qt6 components
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS
+        Widgets
+        DBus
+)
 
 # Find KDE Frameworks components
 find_package(ECM REQUIRED NO_MODULE)
@@ -34,6 +37,24 @@ find_package(PkgConfig REQUIRED)
 
 # Check for both ext2fs and com_err
 pkg_check_modules(EXT2FS REQUIRED ext2fs com_err)
+
+# libblkid (util-linux) for device inventory in the daemon
+pkg_check_modules(BLKID REQUIRED blkid)
+
+# 0. THE DAEMON (System service)
+add_executable(kerythingd
+        kerythingd/main.cpp
+        kerythingd/IndexerService.h
+        kerythingd/IndexerService.cpp
+)
+
+target_link_libraries(kerythingd
+        PRIVATE
+        TBB::tbb # Parallelism
+        Qt6::DBus # D-Bus
+        ${BLKID_LIBRARIES}
+)
+target_include_directories(kerythingd PRIVATE ${BLKID_INCLUDE_DIRS})
 
 # 1. THE HELPER (The disk scanner - runs as root via pkexec)
 add_executable(kerything-scanner-helper
@@ -58,6 +79,8 @@ target_include_directories(kerything-scanner-helper PRIVATE ${EXT2FS_INCLUDE_DIR
 # 2. THE GUI (The user interface - runs as normal user)
 add_executable(kerything
         main.cpp
+        DbusIndexerClient.cpp
+        DbusIndexerClient.h
         FileModel.cpp
         FileModel.h
         GuiUtils.cpp
@@ -66,6 +89,8 @@ add_executable(kerything
         MainWindow.h
         PartitionDialog.cpp
         PartitionDialog.h
+        RemoteFileModel.cpp
+        RemoteFileModel.h
         ScannerEngine.h # Need the structs for the DB
         ScannerManager.cpp
         ScannerManager.h
@@ -76,6 +101,7 @@ target_link_libraries(kerything
         PRIVATE
         TBB::tbb # Parallelism
         Qt6::Widgets # GUI widgets
+        Qt6::DBus # Communication between GUI and background service daemon
         KF6::WidgetsAddons # TODO: Check whether this can be removed
         KF6::CoreAddons # TODO: Check whether this can be removed
         KF6::Solid # For querying list of partitions
@@ -89,7 +115,7 @@ include(KDEInstallDirs)
 include(ECMInstallIcons)
 
 # Install the binaries
-install(TARGETS kerything kerything-scanner-helper DESTINATION ${KDE_INSTALL_BINDIR})
+install(TARGETS kerything kerythingd kerything-scanner-helper DESTINATION ${KDE_INSTALL_BINDIR})
 
 # Install the icon
 # KDE looks for icons in specific size folders (hicolor theme)
@@ -106,6 +132,13 @@ install(FILES net.reikooters.kerything.policy DESTINATION ${KDE_INSTALL_DATADIR}
 
 # Install the license file
 install(FILES LICENSE DESTINATION share/licenses/kerything)
+
+# D-Bus system service activation + policy for kerythingd
+install(FILES net.reikooters.Kerything1.service
+        DESTINATION ${KDE_INSTALL_DATADIR}/dbus-1/system-services)
+
+install(FILES net.reikooters.Kerything1.conf
+        DESTINATION ${KDE_INSTALL_DATADIR}/dbus-1/system.d)
 
 # Add an uninstall target
 if(NOT TARGET uninstall)

@@ -2,4 +2,4 @@
 Name=net.reikooters.Kerything1
 Exec=/usr/bin/kerythingd
 User=root
-SystemdService=
+SystemdService=kerythingd.service

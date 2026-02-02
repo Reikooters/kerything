@@ -140,6 +140,10 @@ install(FILES net.reikooters.Kerything1.service
 install(FILES net.reikooters.Kerything1.conf
         DESTINATION ${KDE_INSTALL_DATADIR}/dbus-1/system.d)
 
+# systemd unit (for dbus-broker/systemd activation)
+install(FILES kerythingd.service
+        DESTINATION ${KDE_INSTALL_LIBDIR}/systemd/system)
+
 # Add an uninstall target
 if(NOT TARGET uninstall)
     configure_file(

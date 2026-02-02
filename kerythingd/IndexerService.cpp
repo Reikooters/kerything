@@ -21,10 +21,23 @@
 #include <QDataStream>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
+#include <QCryptographicHash>
+#include <QDateTime>
+
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusConnectionInterface>
+
 #include <blkid/blkid.h>
 
 static constexpr quint32 kFlagIsDir = 1u << 0;
 static constexpr quint32 kFlagIsSymlink = 1u << 1;
+
+static constexpr quint32 kSnapshotVersion = 2;
+static constexpr quint64 kSnapshotMagic   = 0x4B4552595448494EULL; // "KERYTHIN" (8 bytes)
 
 static QString lower(QString s) {
     for (QChar& c : s) c = c.toLower();
@@ -395,6 +408,229 @@ IndexerService::~IndexerService() {
     m_jobs.clear();
 }
 
+// --- Begin: Persistence helpers ---
+
+quint32 IndexerService::callerUidOr0() const {
+    if (!calledFromDBus()) return 0;
+
+    const QString callerService = message().service(); // unique name like ":1.42"
+    auto* iface = connection().interface();
+    if (!iface) return 0;
+
+    const uint uid = iface->serviceUid(callerService);
+    if (uid == static_cast<uint>(-1)) return 0;
+    return static_cast<quint32>(uid);
+}
+
+QString IndexerService::escapeDeviceIdForFilename(const QString& deviceId) {
+    // Stable + filesystem-safe: sha1 hex of deviceId
+    const QByteArray h = QCryptographicHash::hash(deviceId.toUtf8(), QCryptographicHash::Sha1);
+    return QString::fromLatin1(h.toHex());
+}
+
+QString IndexerService::baseIndexDirForUid(quint32 uid) {
+    return QStringLiteral("/var/lib/kerything/indexes/%1").arg(uid);
+}
+
+QString IndexerService::snapshotPathFor(quint32 uid, const QString& deviceId) {
+    const QString base = baseIndexDirForUid(uid);
+    const QString name = escapeDeviceIdForFilename(deviceId) + QStringLiteral(".kix");
+    return QDir(base).filePath(name);
+}
+
+void IndexerService::ensureLoadedForUid(quint32 uid) const {
+    if (m_loadedUids.contains(uid)) return;
+    loadSnapshotsForUid(uid);
+    m_loadedUids.insert(uid);
+}
+
+void IndexerService::loadSnapshotsForUid(quint32 uid) const {
+    const QString dirPath = baseIndexDirForUid(uid);
+    QDir dir(dirPath);
+    if (!dir.exists()) {
+        return;
+    }
+
+    const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.kix"),
+                                            QDir::Files | QDir::Readable,
+                                            QDir::Name);
+
+    for (const QString& fn : files) {
+        const QString fullPath = dir.filePath(fn);
+
+        QString deviceId;
+        QString err;
+        auto idxOpt = loadSnapshotFile(fullPath, &deviceId, &err);
+        if (!idxOpt) {
+            // Ignore bad/corrupt files for now (can log later)
+            continue;
+        }
+
+        DeviceIndex idx = std::move(*idxOpt);
+        idx.dirPathCache.clear();
+
+        // Rebuild acceleration structures (v1)
+        buildTrigramIndex(idx);
+        buildSortOrders(idx);
+
+        m_indexesByUid[uid][deviceId] = std::move(idx);
+    }
+}
+
+bool IndexerService::saveSnapshot(quint32 uid, const QString& deviceId, const DeviceIndex& idx, QString* errorOut) const {
+    const QString dirPath = baseIndexDirForUid(uid);
+    QDir().mkpath(dirPath);
+
+    const QString path = snapshotPathFor(uid, deviceId);
+
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        if (errorOut) *errorOut = QStringLiteral("Failed to open snapshot for writing: %1").arg(path);
+        return false;
+    }
+
+    QDataStream s(&f);
+    s.setByteOrder(QDataStream::LittleEndian);
+
+    s << static_cast<quint64>(kSnapshotMagic);
+    s << static_cast<quint32>(kSnapshotVersion);
+
+    const QByteArray devIdBytes = deviceId.toUtf8();
+    const QByteArray fsTypeBytes = idx.fsType.toUtf8();
+
+    s << static_cast<quint32>(devIdBytes.size());
+    if (devIdBytes.size() > 0) s.writeRawData(devIdBytes.constData(), devIdBytes.size());
+
+    s << static_cast<quint32>(fsTypeBytes.size());
+    if (fsTypeBytes.size() > 0) s.writeRawData(fsTypeBytes.constData(), fsTypeBytes.size());
+
+    s << static_cast<quint64>(idx.generation);
+
+    // v2: lastIndexedTime (unix seconds)
+    s << static_cast<qint64>(idx.lastIndexedTime);
+
+    s << static_cast<quint64>(idx.records.size());
+    if (!idx.records.empty()) {
+        const auto bytes = static_cast<qint64>(idx.records.size() * sizeof(ScannerEngine::FileRecord));
+        s.writeRawData(reinterpret_cast<const char*>(idx.records.data()), bytes);
+    }
+
+    s << static_cast<quint64>(idx.stringPool.size());
+    if (!idx.stringPool.empty()) {
+        const auto bytes = static_cast<qint64>(idx.stringPool.size());
+        s.writeRawData(idx.stringPool.data(), bytes);
+    }
+
+    if (s.status() != QDataStream::Ok) {
+        if (errorOut) *errorOut = QStringLiteral("Failed while writing snapshot stream.");
+        return false;
+    }
+
+    if (!f.commit()) {
+        if (errorOut) *errorOut = QStringLiteral("Failed to commit snapshot atomically.");
+        return false;
+    }
+
+    return true;
+}
+
+std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(const QString& path,
+                                                                            QString* deviceIdOut,
+                                                                            QString* errorOut) const {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (errorOut) *errorOut = QStringLiteral("Failed to open snapshot: %1").arg(path);
+        return std::nullopt;
+    }
+
+    QDataStream s(&f);
+    s.setByteOrder(QDataStream::LittleEndian);
+
+    quint64 magic = 0;
+    quint32 ver = 0;
+    s >> magic >> ver;
+
+    if (magic != kSnapshotMagic || (ver != 1 && ver != 2)) {
+        if (errorOut) *errorOut = QStringLiteral("Snapshot header/version mismatch.");
+        return std::nullopt;
+    }
+
+    auto readBytes = [&](quint32 maxBytes, QByteArray& out) -> bool {
+        quint32 n = 0;
+        s >> n;
+        if (n == 0) { out.clear(); return true; }
+        if (n > maxBytes) return false;
+        out.resize(static_cast<int>(n));
+        return s.readRawData(out.data(), static_cast<int>(n)) == static_cast<int>(n);
+    };
+
+    QByteArray devIdBytes;
+    if (!readBytes(4096, devIdBytes)) return std::nullopt;
+
+    QByteArray fsTypeBytes;
+    if (!readBytes(256, fsTypeBytes)) return std::nullopt;
+
+    quint64 generation = 0;
+    s >> generation;
+
+    qint64 lastIndexedTime = 0;
+    if (ver >= 2) {
+        s >> lastIndexedTime;
+    }
+
+    quint64 recordCount = 0;
+    s >> recordCount;
+
+    static constexpr quint64 kMaxRecords = 500'000'000ULL;
+    if (recordCount == 0 || recordCount > kMaxRecords) {
+        if (errorOut) *errorOut = QStringLiteral("Invalid recordCount in snapshot.");
+        return std::nullopt;
+    }
+
+    DeviceIndex idx;
+    idx.generation = generation;
+    idx.lastIndexedTime = lastIndexedTime;
+    idx.fsType = QString::fromUtf8(fsTypeBytes);
+
+    idx.records.resize(static_cast<size_t>(recordCount));
+    const qint64 recordBytes = static_cast<qint64>(recordCount * sizeof(ScannerEngine::FileRecord));
+    if (s.readRawData(reinterpret_cast<char*>(idx.records.data()), recordBytes) != recordBytes) {
+        if (errorOut) *errorOut = QStringLiteral("Truncated snapshot (records).");
+        return std::nullopt;
+    }
+
+    quint64 poolSize = 0;
+    s >> poolSize;
+
+    static constexpr quint64 kMaxPoolBytes = 8ULL * 1024 * 1024 * 1024;
+    if (poolSize == 0 || poolSize > kMaxPoolBytes) {
+        if (errorOut) *errorOut = QStringLiteral("Invalid string pool size in snapshot.");
+        return std::nullopt;
+    }
+
+    idx.stringPool.resize(static_cast<size_t>(poolSize));
+    const qint64 poolBytes = static_cast<qint64>(poolSize);
+    if (s.readRawData(idx.stringPool.data(), poolBytes) != poolBytes) {
+        if (errorOut) *errorOut = QStringLiteral("Truncated snapshot (string pool).");
+        return std::nullopt;
+    }
+
+    // Basic sanity: ensure name ranges are in-bounds
+    for (size_t i = 0; i < idx.records.size(); ++i) {
+        const auto& r = idx.records[i];
+        const quint64 end = static_cast<quint64>(r.nameOffset) + static_cast<quint64>(r.nameLen);
+        if (end > poolSize) {
+            if (errorOut) *errorOut = QStringLiteral("Corrupt snapshot: name range out of bounds.");
+            return std::nullopt;
+        }
+    }
+
+    if (deviceIdOut) *deviceIdOut = QString::fromUtf8(devIdBytes);
+    return idx;
+}
+
+// --- End: Persistence helpers ---
+
 /**
  * Generates a unique entry identifier based on the provided device ID and record index.
  *
@@ -521,17 +757,26 @@ IndexerService::ParsedScan IndexerService::parseHelperStdout(const QByteArray& r
 }
 
 /**
- * Resolves and constructs the path to a directory within a device index using its unique directory ID.
+ * Constructs the file system path for a given directory ID within the index associated
+ * with a specific user ID and device ID.
  *
- * @param deviceId The identifier of the device as a QString.
- * @param dirId The unique identifier of the directory within the device index.
- * @return The absolute path of the directory as a QString. If the device ID is not found,
- *         the directory ID is invalid, or any other error occurs, a fallback value (e.g., "…" or "/")
- *         is returned.
+ * This method retrieves and builds the path structure by walking up the parent directory
+ * references from the provided directory ID. If the directory ID is set to a special value
+ * or is invalid, a fallback path is returned. Results may be cached for subsequent lookups.
+ *
+ * @param uid The unique identifier of the user owning the device index.
+ * @param deviceId The identifier of the device containing the directory.
+ * @param dirId The directory ID whose path should be resolved. A special value of 0xFFFFFFFFu
+ *              is treated as the root directory.
+ * @return A QString representing the resolved directory path. If the user ID, device ID,
+ *         or directory ID is not found, a placeholder string ("…") is returned.
  */
-QString IndexerService::dirPathFor(const QString& deviceId, quint32 dirId) const {
-    auto it = m_indexes.find(deviceId);
-    if (it == m_indexes.end()) return QStringLiteral("…");
+QString IndexerService::dirPathFor(quint32 uid, const QString& deviceId, quint32 dirId) const {
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return QStringLiteral("…");
+
+    auto it = uidIt->second.find(deviceId);
+    if (it == uidIt->second.end()) return QStringLiteral("…");
 
     const DeviceIndex& idx = it->second;
 
@@ -653,9 +898,16 @@ void IndexerService::ListKnownDevices(QVariantList& devicesOut) const {
 
 void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
     indexedOut.clear();
-    indexedOut.reserve(static_cast<int>(m_indexes.size()));
 
-    for (const auto& kv : m_indexes) {
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return;
+
+    indexedOut.reserve(static_cast<int>(uidIt->second.size()));
+
+    for (const auto& kv : uidIt->second) {
         const QString& deviceId = kv.first;
         const DeviceIndex& idx = kv.second;
 
@@ -664,6 +916,7 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         m.insert(QStringLiteral("fsType"), idx.fsType);
         m.insert(QStringLiteral("generation"), QVariant::fromValue<qulonglong>(idx.generation));
         m.insert(QStringLiteral("entryCount"), QVariant::fromValue<qulonglong>(idx.records.size()));
+        m.insert(QStringLiteral("lastIndexedTime"), QVariant::fromValue<qlonglong>(idx.lastIndexedTime));
 
         indexedOut.push_back(m);
     }
@@ -682,6 +935,9 @@ std::optional<QVariantMap> IndexerService::findDeviceById(const QString& deviceI
 }
 
 quint64 IndexerService::StartIndex(const QString& deviceId) {
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
     const auto devOpt = findDeviceById(deviceId);
     if (!devOpt) {
         // Emit a finished signal immediately so the GUI has something deterministic to react to.
@@ -701,6 +957,7 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
 
     auto job = std::make_unique<Job>();
     job->jobId = jobId;
+    job->ownerUid = uid;
     job->deviceId = deviceId;
     job->devNode = devNode;
     job->fsType = fsType;
@@ -814,7 +1071,7 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
                                            QStringLiteral("Failed to parse scan output: %1").arg(parsed.error),
                                            props);
                     } else {
-                        DeviceIndex& idx = m_indexes[j.deviceId];
+                        DeviceIndex& idx = m_indexesByUid[j.ownerUid][j.deviceId];
                         idx.fsType = j.fsType;
                         idx.generation += 1;
                         idx.records = std::move(parsed.records);
@@ -824,18 +1081,29 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
                         buildTrigramIndex(idx);
                         buildSortOrders(idx);
 
-                        // notify clients that the index has changed
-                        Q_EMIT DeviceIndexUpdated(j.deviceId,
-                                                  static_cast<quint64>(idx.generation),
-                                                  static_cast<quint64>(idx.records.size()));
+                        // Set lastIndexedTime only when we successfully persist the snapshot.
+                        idx.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
 
-                        Q_EMIT JobProgress(jobId, 100, props);
-                        Q_EMIT JobFinished(jobId,
-                                           QStringLiteral("ok"),
-                                           QStringLiteral("Indexed %1 entries (generation %2)")
-                                               .arg(static_cast<qulonglong>(idx.records.size()))
-                                               .arg(static_cast<qulonglong>(idx.generation)),
-                                           props);
+                        QString saveErr;
+                        if (!saveSnapshot(j.ownerUid, j.deviceId, idx, &saveErr)) {
+                            Q_EMIT JobFinished(jobId,
+                                               QStringLiteral("error"),
+                                               QStringLiteral("Indexed, but failed to save snapshot: %1").arg(saveErr),
+                                               props);
+                        } else {
+                            // notify clients that the index has changed
+                            Q_EMIT DeviceIndexUpdated(j.deviceId,
+                                                      static_cast<quint64>(idx.generation),
+                                                      static_cast<quint64>(idx.records.size()));
+
+                            Q_EMIT JobProgress(jobId, 100, props);
+                            Q_EMIT JobFinished(jobId,
+                                               QStringLiteral("ok"),
+                                               QStringLiteral("Indexed %1 entries (generation %2)")
+                                                   .arg(static_cast<qulonglong>(idx.records.size()))
+                                                   .arg(static_cast<qulonglong>(idx.generation)),
+                                               props);
+                        }
                     }
                 }
 
@@ -908,7 +1176,17 @@ void IndexerService::Search(const QString& query,
                             QVariantList& rowsOut) const {
     Q_UNUSED(options);
 
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
     rowsOut.clear();
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) {
+        totalHitsOut = 0;
+        return;
+    }
+    const auto& indexes = uidIt->second;
 
     const bool desc = (sortDir.compare(QStringLiteral("desc"), Qt::CaseInsensitive) == 0);
     const QStringList tokens = tokenizeQuery(query);
@@ -920,6 +1198,7 @@ void IndexerService::Search(const QString& query,
     // ---- Fast path: empty query ----
     if (tokens.isEmpty()) {
         quint64 total = 0;
+
         struct Cursor {
             const QString* deviceId = nullptr;
             const DeviceIndex* idx = nullptr;
@@ -927,7 +1206,7 @@ void IndexerService::Search(const QString& query,
             quint32 pos = 0;
         };
         std::vector<Cursor> cursors;
-        cursors.reserve(m_indexes.size());
+        cursors.reserve(indexes.size());
 
         auto pickOrder = [&](const DeviceIndex& idx) -> const std::vector<quint32>* {
             if (sortKey.compare(QStringLiteral("size"), Qt::CaseInsensitive) == 0) return &idx.orderBySize;
@@ -936,7 +1215,7 @@ void IndexerService::Search(const QString& query,
             return &idx.orderByName; // default
         };
 
-        for (const auto& kv : m_indexes) {
+        for (const auto& kv : indexes) {
             if (!deviceAllowed(kv.first)) continue;
             const DeviceIndex& idx = kv.second;
             total += static_cast<quint64>(idx.records.size());
@@ -1056,11 +1335,11 @@ void IndexerService::Search(const QString& query,
     }();
 
     std::vector<DeviceHits> perDev;
-    perDev.reserve(m_indexes.size());
+    perDev.reserve(indexes.size());
 
     totalHitsOut = 0;
 
-    for (const auto& kv : m_indexes) {
+    for (const auto& kv : indexes) {
         const QString& devId = kv.first;
         if (!deviceAllowed(devId)) continue;
 
@@ -1215,22 +1494,63 @@ void IndexerService::Search(const QString& query,
 void IndexerService::ResolveDirectories(const QString& deviceId,
                                        const QVariantList& dirIds,
                                        QVariantList& out) const {
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
     out.clear();
     out.reserve(dirIds.size());
 
     // Only resolve if we have an index for this device
-    if (m_indexes.find(deviceId) == m_indexes.end()) {
-        return;
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return;
+    if (uidIt->second.find(deviceId) == uidIt->second.end()) return;
+
+    // Build a display prefix for this device (mountpoint preferred)
+    QString prefix;
+    {
+        const auto devOpt = findDeviceById(deviceId);
+        if (devOpt) {
+            const QVariantMap dev = *devOpt;
+            const bool mounted = dev.value(QStringLiteral("mounted")).toBool();
+            const QString mp = dev.value(QStringLiteral("primaryMountPoint")).toString().trimmed();
+            const QString label = dev.value(QStringLiteral("label")).toString().trimmed();
+
+            if (mounted && !mp.isEmpty()) {
+                prefix = mp;
+            } else if (!label.isEmpty()) {
+                prefix = QStringLiteral("[") + label + QStringLiteral("]");
+            } else {
+                prefix = QStringLiteral("[") + deviceId + QStringLiteral("]");
+            }
+        } else {
+            prefix = QStringLiteral("[") + deviceId + QStringLiteral("]");
+        }
     }
+
+    auto joinPrefix = [&](const QString& internalPath) -> QString {
+        // internalPath is like "/foo/bar" or "/"
+        if (prefix.isEmpty()) return internalPath;
+
+        // If prefix is a mount point like "/mnt/Data", prefer "/mnt/Data" + "/foo"
+        if (prefix.startsWith('/')) {
+            if (internalPath == QStringLiteral("/")) return prefix;
+            return prefix + internalPath;
+        }
+
+        // If prefix is "[Label]" use "[Label]/foo"
+        if (internalPath == QStringLiteral("/")) return prefix + QStringLiteral("/");
+        return prefix + internalPath;
+    };
 
     for (const QVariant& v : dirIds) {
         const quint32 id = v.toUInt();
-        const QString path = dirPathFor(deviceId, id);
+        const QString internal = dirPathFor(uid, deviceId, id);
+        const QString shown = joinPrefix(internal);
 
         QVariantList pair;
         pair.reserve(2);
         pair << QVariant::fromValue(id)
-             << QVariant::fromValue(path);
+             << QVariant::fromValue(shown);
 
         out.push_back(pair);
     }

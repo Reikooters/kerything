@@ -10,6 +10,19 @@ namespace NtfsScannerEngine {
     std::vector<MftRun> mftRuns;
     std::unordered_map<uint64_t, std::vector<ExtensionFileInfo>> extensionRecordFileInfos;
 
+    static uint64_t ntfsFiletimeToUnixSeconds(uint64_t filetime100ns) {
+        // NTFS FILETIME: 100ns intervals since 1601-01-01 (UTC)
+        // Unix time: seconds since 1970-01-01 (UTC)
+        static constexpr uint64_t kUnixEpochInFiletime100ns = 116444736000000000ULL; // 1970-01-01 in FILETIME units
+        static constexpr uint64_t kTicksPerSecond = 10000000ULL;
+
+        if (filetime100ns < kUnixEpochInFiletime100ns) {
+            return 0;
+        }
+
+        return (filetime100ns - kUnixEpochInFiletime100ns) / kTicksPerSecond;
+    }
+
     void finalizeAndAddFile(FileInfo& info, const std::vector<TempFileLink>& allNames, bool dataAttrFound, uint64_t sizeFromData, NtfsDatabase& db, uint64_t index) {
         // NTFS Gotcha: Files can have multiple names (Hard Links or DOS 8.3 aliases).
         // We filter out the DOS names to avoid duplicates in the complete file list.
@@ -35,7 +48,8 @@ namespace NtfsScannerEngine {
                 // Prefer metadata from Win32 or Win32/DOS combined namespaces
                 // Namespace: 0=POSIX, 1=Win32, 2=DOS, 3=Win32&DOS
                 if (info.modificationTime == 0 || entry.namespaceType == 1 || entry.namespaceType == 3) {
-                    info.modificationTime = entry.modTime;
+                    // Convert NTFS FILETIME -> unix seconds (so UI/daemon can treat all fs the same)
+                    info.modificationTime = ntfsFiletimeToUnixSeconds(entry.modTime);
                     sizeFromFileName = entry.dataSize;
                 }
             }

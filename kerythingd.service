@@ -1,0 +1,24 @@
+[Unit]
+Description=Kerything indexing daemon
+Documentation=https://github.com/Reikooters
+After=dbus.service
+Wants=dbus.service
+
+[Service]
+Type=dbus
+BusName=net.reikooters.Kerything1
+ExecStart=/usr/bin/kerythingd
+User=root
+Group=root
+
+# Hardening (safe defaults; adjust later if needed)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target

@@ -17,11 +17,14 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#include <QtDBus/QDBusContext>
 
 #include "../ScannerEngine.h"
 
-class IndexerService final : public QObject {
+class IndexerService final : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "net.reikooters.Kerything1.Indexer")
 
@@ -73,6 +76,7 @@ public slots:
     //    fsType: string
     //    generation: uint64
     //    entryCount: uint64
+    //    lastIndexedTime: int64 (unix seconds; 0 = unknown)
     /**
      * Retrieves a list of devices that currently have an in-memory index in this daemon instance.
      *
@@ -82,6 +86,7 @@ public slots:
      *                   - fsType: A string representing the file system type of the device (e.g., "ext4", "ntfs").
      *                   - generation: A 64-bit unsigned integer representing the generation of the index.
      *                   - entryCount: A 64-bit unsigned integer representing the number of entries in the index.
+     *                   - lastIndexedTime: A 64-bit signed integer representing the last indexed time in Unix seconds (0 = unknown).
      */
     void ListIndexedDevices(QVariantList& indexedOut) const;
 
@@ -165,6 +170,10 @@ private:
     struct DeviceIndex {
         QString fsType;
         quint64 generation = 0;
+
+        // unix seconds; 0 means unknown (e.g. loaded from v1 snapshot)
+        qint64 lastIndexedTime = 0;
+
         std::vector<ScannerEngine::FileRecord> records;
         std::vector<char> stringPool;
 
@@ -191,6 +200,8 @@ private:
         enum class State : quint8 { Running, Cancelling };
 
         quint64 jobId = 0;
+        quint32 ownerUid = 0;
+
         QString deviceId;
         QString devNode;
         QString fsType;
@@ -209,6 +220,18 @@ private:
         QString error;
     };
 
+    [[nodiscard]] quint32 callerUidOr0() const;
+
+    void ensureLoadedForUid(quint32 uid) const;
+    void loadSnapshotsForUid(quint32 uid) const;
+
+    [[nodiscard]] static QString baseIndexDirForUid(quint32 uid);
+    [[nodiscard]] static QString snapshotPathFor(quint32 uid, const QString& deviceId);
+    [[nodiscard]] static QString escapeDeviceIdForFilename(const QString& deviceId);
+
+    bool saveSnapshot(quint32 uid, const QString& deviceId, const DeviceIndex& idx, QString* errorOut = nullptr) const;
+    [[nodiscard]] std::optional<DeviceIndex> loadSnapshotFile(const QString& path, QString* deviceIdOut, QString* errorOut = nullptr) const;
+
     [[nodiscard]] std::optional<QVariantMap> findDeviceById(const QString& deviceId) const;
 
     [[nodiscard]] static quint64 makeEntryId(const QString& deviceId, quint32 recordIdx);
@@ -221,7 +244,7 @@ private:
     static void buildTrigramIndex(DeviceIndex& idx);
     static void buildSortOrders(DeviceIndex& idx);
 
-    [[nodiscard]] QString dirPathFor(const QString& deviceId, quint32 dirId) const;
+    [[nodiscard]] QString dirPathFor(quint32 uid, const QString& deviceId, quint32 dirId) const;
 
     // Helpers for fast searching
     static QStringList tokenizeQuery(const QString& query);
@@ -230,8 +253,9 @@ private:
     std::unordered_map<quint64, std::unique_ptr<Job>> m_jobs;
     quint64 m_nextJobId = 1;
 
-    // deviceId -> in-memory index
-    std::unordered_map<QString, DeviceIndex> m_indexes;
+    // uid -> (deviceId -> in-memory index)
+    mutable std::unordered_map<quint32, std::unordered_map<QString, DeviceIndex>> m_indexesByUid;
+    mutable std::unordered_set<quint32> m_loadedUids;
 };
 
 #endif //KERYTHING_KERYTHINGD_INDEXERSERVICE_H

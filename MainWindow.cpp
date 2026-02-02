@@ -19,6 +19,8 @@
 #include <QStyledItemDelegate>
 #include <QEvent>
 #include <QPainter>
+#include <QDateTime>
+#include <QLocale>
 #include <QtDBus/QDBusConnection>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
@@ -420,6 +422,7 @@ void MainWindow::refreshDaemonStatusLabel() {
 
     if (!m_dbus) {
         daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
+        daemonStatusLabel->setToolTip(QString());
         return;
     }
 
@@ -427,6 +430,7 @@ void MainWindow::refreshDaemonStatusLabel() {
     const auto ping = m_dbus->ping(&pingErr);
     if (!ping) {
         daemonStatusLabel->setText(QString("Daemon: disconnected • live updates paused (%1)").arg(pingErr));
+        daemonStatusLabel->setToolTip(QString());
         return;
     }
 
@@ -434,13 +438,36 @@ void MainWindow::refreshDaemonStatusLabel() {
     const auto indexedOpt = m_dbus->listIndexedDevices(&idxErr);
     if (!indexedOpt) {
         daemonStatusLabel->setText(QString("Daemon: connected • indexes unavailable (%1)").arg(idxErr));
+        daemonStatusLabel->setToolTip(QString());
         return;
     }
 
     quint64 totalEntries = 0;
+    QStringList tooltipLines;
+    tooltipLines << QStringLiteral("Indexed partitions:");
+
     for (const QVariant& v : *indexedOpt) {
         const QVariantMap m = v.toMap();
-        totalEntries += m.value(QStringLiteral("entryCount")).toULongLong();
+
+        const QString deviceId = m.value(QStringLiteral("deviceId")).toString();
+        const quint64 entryCount = m.value(QStringLiteral("entryCount")).toULongLong();
+        const qint64 t = m.value(QStringLiteral("lastIndexedTime")).toLongLong();
+
+        totalEntries += entryCount;
+
+        QString when;
+        if (t > 0) {
+            // const QDateTime dt = QDateTime::fromSecsSinceEpoch(t);
+            // when = QLocale().toString(dt, QLocale::ShortFormat);
+            when = QString::fromStdString(GuiUtils::uint64ToFormattedTime(t));
+        } else {
+            when = QStringLiteral("unknown");
+        }
+
+        tooltipLines << QStringLiteral("%1 • %2 entries • %3")
+                            .arg(deviceId)
+                            .arg(QLocale().toString(static_cast<qulonglong>(entryCount)))
+                            .arg(when);
     }
 
     daemonStatusLabel->setText(
@@ -448,6 +475,7 @@ void MainWindow::refreshDaemonStatusLabel() {
             .arg(indexedOpt->size())
             .arg(QLocale().toString(static_cast<qulonglong>(totalEntries)))
     );
+    daemonStatusLabel->setToolTip(tooltipLines.join('\n'));
 }
 
 void MainWindow::onDaemonServiceRegistered(const QString& serviceName) {

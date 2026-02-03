@@ -52,6 +52,8 @@ public:
                                                    const QList<quint32>& dirIds,
                                                    QString* errorOut = nullptr) const;
 
+    bool forgetIndex(const QString& deviceId, QString* errorOut = nullptr) const;
+
 private:
     QString m_service;
     QString m_path;

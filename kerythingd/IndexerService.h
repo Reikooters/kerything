@@ -77,6 +77,8 @@ public slots:
     //    generation: uint64
     //    entryCount: uint64
     //    lastIndexedTime: int64 (unix seconds; 0 = unknown)
+    //    label: string (last known label; may be stale if device not present)
+    //    uuid: string  (last known filesystem UUID; may be stale if device not present)
     /**
      * Retrieves a list of devices that currently have an in-memory index in this daemon instance.
      *
@@ -87,6 +89,8 @@ public slots:
      *                   - generation: A 64-bit unsigned integer representing the generation of the index.
      *                   - entryCount: A 64-bit unsigned integer representing the number of entries in the index.
      *                   - lastIndexedTime: A 64-bit signed integer representing the last indexed time in Unix seconds (0 = unknown).
+     *                   - label: A string representing the last known label of the device (may be stale if device not present).
+     *                   - uuid: A string representing the last known filesystem UUID of the device (may be stale if device not present).
      */
     void ListIndexedDevices(QVariantList& indexedOut) const;
 
@@ -158,6 +162,15 @@ public slots:
                             const QVariantList& dirIds,
                             QVariantList& out) const;
 
+    /**
+     * Removes an index for the given deviceId for the calling user:
+     * - drops in-memory index
+     * - deletes persisted snapshot (if any)
+     *
+     * If an indexing job is currently running for the same uid+deviceId, this method fails.
+     */
+    void ForgetIndex(const QString& deviceId);
+
 signals:
     void JobAdded(quint64 jobId, const QVariantMap& props);
     void JobProgress(quint64 jobId, quint32 percent, const QVariantMap& props);
@@ -166,13 +179,20 @@ signals:
     // emitted when a device index is updated in memory
     void DeviceIndexUpdated(const QString& deviceId, quint64 generation, quint64 entryCount);
 
+    // emitted when a device index is removed for this uid
+    void DeviceIndexRemoved(const QString& deviceId);
+
 private:
     struct DeviceIndex {
         QString fsType;
         quint64 generation = 0;
 
-        // unix seconds; 0 means unknown (e.g. loaded from v1 snapshot)
+        // unix seconds; 0 means unknown (e.g. loaded from older snapshot)
         qint64 lastIndexedTime = 0;
+
+        // “Last known” display metadata (may be stale if device not present)
+        QString labelLastKnown;
+        QString uuidLastKnown;
 
         std::vector<ScannerEngine::FileRecord> records;
         std::vector<char> stringPool;

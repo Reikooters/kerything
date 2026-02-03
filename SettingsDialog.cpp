@@ -78,6 +78,11 @@ SettingsDialog::SettingsDialog(DbusIndexerClient* dbusClient, QWidget* parent)
     connect(m_startBtn, &QPushButton::clicked, this, &SettingsDialog::onStartOrRescanClicked);
     btnRow->addWidget(m_startBtn);
 
+    m_forgetBtn = new QPushButton(QIcon::fromTheme("edit-delete"), QStringLiteral("Forget Index"), this);
+    connect(m_forgetBtn, &QPushButton::clicked, this, &SettingsDialog::onForgetClicked);
+    m_forgetBtn->setEnabled(false);
+    btnRow->addWidget(m_forgetBtn);
+
     m_cancelBtn = new QPushButton(QIcon::fromTheme("process-stop"), QStringLiteral("Cancel"), this);
     connect(m_cancelBtn, &QPushButton::clicked, this, &SettingsDialog::onCancelClicked);
     m_cancelBtn->setEnabled(false);
@@ -129,7 +134,16 @@ void SettingsDialog::connectDaemonSignals() {
         SLOT(onDeviceIndexUpdated(QString,quint64,quint64))
     );
 
-    m_daemonSignalsConnected = (c1 && c2 && c3);
+    const bool c4 = conn.connect(
+        QString::fromLatin1(kService),
+        QString::fromLatin1(kPath),
+        QString::fromLatin1(kIface),
+        QStringLiteral("DeviceIndexRemoved"),
+        this,
+        SLOT(onDeviceIndexRemoved(QString))
+    );
+
+    m_daemonSignalsConnected = (c1 && c2 && c3 && c4);
 }
 
 void SettingsDialog::setBusy(bool busy, const QString& text) {
@@ -189,35 +203,57 @@ void SettingsDialog::refresh() {
         const QVariantMap m = v.toMap();
         RowState st;
         st.deviceId = m.value(QStringLiteral("deviceId")).toString();
+        st.fsType = m.value(QStringLiteral("fsType")).toString();
+        st.labelLastKnown = m.value(QStringLiteral("label")).toString();
+        st.uuidLastKnown  = m.value(QStringLiteral("uuid")).toString();
         st.indexed = true;
         st.entryCount = m.value(QStringLiteral("entryCount")).toULongLong();
         st.lastIndexedTime = m.value(QStringLiteral("lastIndexedTime")).toLongLong();
         idxMap.insert(st.deviceId, st);
     }
 
+    // Track which deviceIds are present in the "known" list
+    QSet<QString> knownIds;
+    knownIds.reserve(knownOpt->size());
+
     m_tree->clear();
 
+    // 1) Known devices (merge indexed metadata if present)
     for (const QVariant& v : *knownOpt) {
         const QVariantMap m = v.toMap();
 
-        const QString deviceId = m.value(QStringLiteral("deviceId")).toString();
-        const QString devNode  = m.value(QStringLiteral("devNode")).toString();
-        const QString fsType   = m.value(QStringLiteral("fsType")).toString();
-        const QString label    = m.value(QStringLiteral("label")).toString();
-        const bool mounted     = m.value(QStringLiteral("mounted")).toBool();
-        const QString mp       = m.value(QStringLiteral("primaryMountPoint")).toString();
+        const QString deviceId  = m.value(QStringLiteral("deviceId")).toString();
+        const QString devNode   = m.value(QStringLiteral("devNode")).toString();
+        const QString fsType    = m.value(QStringLiteral("fsType")).toString();
+        const QString label     = m.value(QStringLiteral("label")).toString();
+        const QString liveLabel = m.value(QStringLiteral("label")).toString();
+        const QString liveUuid  = m.value(QStringLiteral("uuid")).toString();
+        const bool mounted      = m.value(QStringLiteral("mounted")).toBool();
+        const QString mp        = m.value(QStringLiteral("primaryMountPoint")).toString();
 
-        RowState st = idxMap.value(deviceId, RowState{deviceId, false, 0, 0});
+        knownIds.insert(deviceId);
+
+        RowState st = idxMap.value(deviceId, RowState{deviceId, QString(), QString(), QString(), false, 0, 0});
 
         auto* item = new QTreeWidgetItem(m_tree);
-        item->setText(ColIndexed, boolToYesNo(st.indexed));
-        item->setText(ColFs, fsType);
-        item->setText(ColLabel, label.isEmpty() ? QStringLiteral("—") : label);
+        item->setText(ColIndexed, st.indexed ? QStringLiteral("Yes") : QStringLiteral("No"));
+        item->setText(ColFs, fsType.isEmpty() ? QStringLiteral("—") : fsType);
+
+        // Prefer live label when available
+        const QString shownLabel = liveLabel.isEmpty() ? QStringLiteral("—") : liveLabel;
+        item->setText(ColLabel, shownLabel);
+
         item->setText(ColMount, mounted ? (mp.isEmpty() ? QStringLiteral("(mounted)") : mp) : QStringLiteral("(not mounted)"));
         item->setText(ColEntries, st.indexed ? QLocale().toString(static_cast<qulonglong>(st.entryCount)) : QStringLiteral("—"));
         item->setText(ColLastIndexed, st.indexed ? formatLastIndexedTime(st.lastIndexedTime) : QStringLiteral("—"));
         item->setText(ColDeviceId, deviceId);
-        item->setText(ColDevNode, devNode);
+        item->setText(ColDevNode, devNode.isEmpty() ? QStringLiteral("—") : devNode);
+
+        // UUID as tooltip (useful, but doesn’t clutter UI)
+        if (!liveUuid.isEmpty()) {
+            item->setToolTip(ColLabel, QStringLiteral("UUID: %1").arg(liveUuid));
+            item->setToolTip(ColDeviceId, QStringLiteral("UUID: %1").arg(liveUuid));
+        }
 
         // Store deviceId for selection logic (don’t rely on text)
         item->setData(ColDeviceId, Qt::UserRole, deviceId);
@@ -227,12 +263,50 @@ void SettingsDialog::refresh() {
         }
     }
 
+    // 2) Indexed-only devices (not currently known)
+    for (auto it = idxMap.constBegin(); it != idxMap.constEnd(); ++it) {
+        const QString deviceId = it.key();
+        const RowState st = it.value();
+
+        if (knownIds.contains(deviceId)) continue;
+
+        auto* item = new QTreeWidgetItem(m_tree);
+        item->setText(ColIndexed, QStringLiteral("Yes"));
+        item->setText(ColFs, st.fsType.isEmpty() ? QStringLiteral("—") : st.fsType);
+
+        const QString shownLabel = st.labelLastKnown.isEmpty() ? QStringLiteral("—") : st.labelLastKnown;
+        item->setText(ColLabel, shownLabel);
+
+        item->setText(ColMount, QStringLiteral("(not present)"));
+        item->setText(ColEntries, QLocale().toString(static_cast<qulonglong>(st.entryCount)));
+        item->setText(ColLastIndexed, formatLastIndexedTime(st.lastIndexedTime));
+        item->setText(ColDeviceId, deviceId);
+        item->setText(ColDevNode, QStringLiteral("—"));
+
+        if (!st.uuidLastKnown.isEmpty()) {
+            item->setToolTip(ColLabel, QStringLiteral("UUID: %1").arg(st.uuidLastKnown));
+            item->setToolTip(ColDeviceId, QStringLiteral("UUID: %1").arg(st.uuidLastKnown));
+        }
+
+        item->setData(ColDeviceId, Qt::UserRole, deviceId);
+
+        // Grey out to indicate it's not currently available as a block device
+        for (int c = 0; c < ColCount; ++c) item->setForeground(c, QBrush(Qt::gray));
+    }
+
     m_status->setText(QStringLiteral("Loaded %1 device(s).").arg(m_tree->topLevelItemCount()));
 }
 
 void SettingsDialog::onSelectionChanged() {
     const bool hasSelection = !selectedDeviceId().isEmpty();
     m_startBtn->setEnabled(hasSelection && !m_jobActive);
+
+    // Enable forget only if selected row is indexed
+    bool indexed = false;
+    if (auto* item = m_tree->currentItem()) {
+        indexed = (item->text(ColIndexed).compare(QStringLiteral("Yes"), Qt::CaseInsensitive) == 0);
+    }
+    m_forgetBtn->setEnabled(hasSelection && indexed && !m_jobActive);
 }
 
 void SettingsDialog::onStartOrRescanClicked() {
@@ -256,6 +330,39 @@ void SettingsDialog::onStartOrRescanClicked() {
     m_jobId = *jobIdOpt;
     setBusy(true, QStringLiteral("Indexing started…"));
     m_progress->setValue(0);
+}
+
+void SettingsDialog::onForgetClicked() {
+    if (!m_client || !m_client->isAvailable()) {
+        QMessageBox::warning(this, QStringLiteral("Daemon unavailable"),
+                             QStringLiteral("The daemon is not available."));
+        return;
+    }
+
+    const QString deviceId = selectedDeviceId();
+    if (deviceId.isEmpty()) return;
+
+    const auto reply = QMessageBox::question(
+        this,
+        QStringLiteral("Forget index?"),
+        QStringLiteral("Forget the index for:\n\n%1\n\nThis will remove it from memory and delete its snapshot.")
+            .arg(deviceId),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No
+    );
+
+    if (reply != QMessageBox::Yes) return;
+
+    QString err;
+    if (!m_client->forgetIndex(deviceId, &err)) {
+        QMessageBox::warning(this,
+                             QStringLiteral("Forget failed"),
+                             err.isEmpty() ? QStringLiteral("Failed to forget index.") : err);
+        return;
+    }
+
+    m_status->setText(QStringLiteral("Index forgotten."));
+    refresh();
 }
 
 void SettingsDialog::onCancelClicked() {
@@ -297,6 +404,11 @@ void SettingsDialog::onDaemonJobFinished(quint64 jobId, const QString& status, c
 
 void SettingsDialog::onDeviceIndexUpdated(const QString&, quint64, quint64) {
     // Keep view in sync if fanotify or another client triggers updates.
+    if (m_jobActive) return;
+    refresh();
+}
+
+void SettingsDialog::onDeviceIndexRemoved(const QString&) {
     if (m_jobActive) return;
     refresh();
 }

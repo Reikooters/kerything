@@ -25,11 +25,13 @@ private slots:
     void refresh();
 
     void onStartOrRescanClicked();
+    void onForgetClicked();
     void onCancelClicked();
 
     void onDaemonJobProgress(quint64 jobId, quint32 percent, const QVariantMap& props);
     void onDaemonJobFinished(quint64 jobId, const QString& status, const QString& message, const QVariantMap& props);
     void onDeviceIndexUpdated(const QString& deviceId, quint64 generation, quint64 entryCount);
+    void onDeviceIndexRemoved(const QString& deviceId);
 
     void onDaemonVanished(const QString& serviceName);
     void onSelectionChanged();
@@ -37,6 +39,9 @@ private slots:
 private:
     struct RowState {
         QString deviceId;
+        QString fsType;
+        QString labelLastKnown;
+        QString uuidLastKnown;
         bool indexed = false;
         quint64 entryCount = 0;
         qint64 lastIndexedTime = 0;
@@ -56,6 +61,7 @@ private:
 
     QPushButton* m_refreshBtn = nullptr;
     QPushButton* m_startBtn = nullptr;
+    QPushButton* m_forgetBtn = nullptr;
     QPushButton* m_cancelBtn = nullptr;
 
     bool m_daemonSignalsConnected = false;

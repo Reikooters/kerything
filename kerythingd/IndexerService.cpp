@@ -30,13 +30,14 @@
 
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusConnectionInterface>
+#include <QtDBus/QDBusError>
 
 #include <blkid/blkid.h>
 
 static constexpr quint32 kFlagIsDir = 1u << 0;
 static constexpr quint32 kFlagIsSymlink = 1u << 1;
 
-static constexpr quint32 kSnapshotVersion = 2;
+static constexpr quint32 kSnapshotVersion = 3;
 static constexpr quint64 kSnapshotMagic   = 0x4B4552595448494EULL; // "KERYTHIN" (8 bytes)
 
 static QString lower(QString s) {
@@ -504,9 +505,19 @@ bool IndexerService::saveSnapshot(quint32 uid, const QString& deviceId, const De
     s << static_cast<quint32>(fsTypeBytes.size());
     if (fsTypeBytes.size() > 0) s.writeRawData(fsTypeBytes.constData(), fsTypeBytes.size());
 
+    // v3: labelLastKnown + uuidLastKnown (UTF-8 blobs)
+    const QByteArray labelBytes = idx.labelLastKnown.toUtf8();
+    const QByteArray uuidBytes  = idx.uuidLastKnown.toUtf8();
+
+    s << static_cast<quint32>(labelBytes.size());
+    if (labelBytes.size() > 0) s.writeRawData(labelBytes.constData(), labelBytes.size());
+
+    s << static_cast<quint32>(uuidBytes.size());
+    if (uuidBytes.size() > 0) s.writeRawData(uuidBytes.constData(), uuidBytes.size());
+
     s << static_cast<quint64>(idx.generation);
 
-    // v2: lastIndexedTime (unix seconds)
+    // v2+: lastIndexedTime (unix seconds)
     s << static_cast<qint64>(idx.lastIndexedTime);
 
     s << static_cast<quint64>(idx.records.size());
@@ -550,7 +561,7 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
     quint32 ver = 0;
     s >> magic >> ver;
 
-    if (magic != kSnapshotMagic || (ver != 1 && ver != 2)) {
+    if (magic != kSnapshotMagic || (ver != 1 && ver != 2 && ver != 3)) {
         if (errorOut) *errorOut = QStringLiteral("Snapshot header/version mismatch.");
         return std::nullopt;
     }
@@ -569,6 +580,13 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
 
     QByteArray fsTypeBytes;
     if (!readBytes(256, fsTypeBytes)) return std::nullopt;
+
+    QByteArray labelBytes;
+    QByteArray uuidBytes;
+    if (ver >= 3) {
+        if (!readBytes(4096, labelBytes)) return std::nullopt;
+        if (!readBytes(4096, uuidBytes)) return std::nullopt;
+    }
 
     quint64 generation = 0;
     s >> generation;
@@ -591,6 +609,11 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
     idx.generation = generation;
     idx.lastIndexedTime = lastIndexedTime;
     idx.fsType = QString::fromUtf8(fsTypeBytes);
+
+    if (ver >= 3) {
+        idx.labelLastKnown = QString::fromUtf8(labelBytes);
+        idx.uuidLastKnown  = QString::fromUtf8(uuidBytes);
+    }
 
     idx.records.resize(static_cast<size_t>(recordCount));
     const qint64 recordBytes = static_cast<qint64>(recordCount * sizeof(ScannerEngine::FileRecord));
@@ -917,6 +940,8 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         m.insert(QStringLiteral("generation"), QVariant::fromValue<qulonglong>(idx.generation));
         m.insert(QStringLiteral("entryCount"), QVariant::fromValue<qulonglong>(idx.records.size()));
         m.insert(QStringLiteral("lastIndexedTime"), QVariant::fromValue<qlonglong>(idx.lastIndexedTime));
+        m.insert(QStringLiteral("label"), idx.labelLastKnown);
+        m.insert(QStringLiteral("uuid"), idx.uuidLastKnown);
 
         indexedOut.push_back(m);
     }
@@ -1083,6 +1108,16 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
 
                         // Set lastIndexedTime only when we successfully persist the snapshot.
                         idx.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
+
+                        const auto devOpt = findDeviceById(j.deviceId);
+                        if (devOpt) {
+                            const QVariantMap dev = *devOpt;
+                            idx.labelLastKnown = dev.value(QStringLiteral("label")).toString();
+                            idx.uuidLastKnown = dev.value(QStringLiteral("uuid")).toString();
+                        } else {
+                            idx.labelLastKnown.clear();
+                            idx.uuidLastKnown.clear();
+                        }
 
                         QString saveErr;
                         if (!saveSnapshot(j.ownerUid, j.deviceId, idx, &saveErr)) {
@@ -1554,4 +1589,60 @@ void IndexerService::ResolveDirectories(const QString& deviceId,
 
         out.push_back(pair);
     }
+}
+
+void IndexerService::ForgetIndex(const QString& deviceId) {
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
+    // Refuse if there is a running job for this uid+deviceId (user should cancel first).
+    for (const auto& kv : m_jobs) {
+        if (!kv.second) continue;
+        const Job& j = *kv.second;
+        if (j.ownerUid == uid && j.deviceId == deviceId && j.proc && j.proc->state() != QProcess::NotRunning) {
+            sendErrorReply(QDBusError::Failed, QStringLiteral("Indexing job is running for this device. Cancel it first."));
+            return;
+        }
+    }
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) {
+        // Nothing loaded; still attempt snapshot deletion.
+        uidIt = m_indexesByUid.emplace(uid, std::unordered_map<QString, DeviceIndex>{}).first;
+    }
+
+    bool removed = false;
+
+    // 1) Drop in-memory index
+    {
+        auto& map = uidIt->second;
+        auto it = map.find(deviceId);
+        if (it != map.end()) {
+            map.erase(it);
+            removed = true;
+        }
+    }
+
+    // 2) Delete snapshot file (best-effort)
+    {
+        const QString snap = snapshotPathFor(uid, deviceId);
+        QFile f(snap);
+        if (f.exists()) {
+            if (!f.remove()) {
+                // If we removed from memory but couldn't remove file, report error to caller.
+                // (Keeps behavior explicit; avoids “it came back after reboot” surprises.)
+                sendErrorReply(QDBusError::Failed,
+                               QStringLiteral("Removed in-memory index but failed to delete snapshot: %1").arg(snap));
+                return;
+            }
+            removed = true;
+        }
+    }
+
+    if (!removed) {
+        // Not an error: idempotent
+        return;
+    }
+
+    Q_EMIT DeviceIndexRemoved(deviceId);
 }

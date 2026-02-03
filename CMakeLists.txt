@@ -94,6 +94,8 @@ add_executable(kerything
         ScannerEngine.h # Need the structs for the DB
         ScannerManager.cpp
         ScannerManager.h
+        SettingsDialog.cpp
+        SettingsDialog.h
         Version.h
 )
 

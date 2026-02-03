@@ -119,6 +119,16 @@ private slots:
     void updateSearch(const QString &text);
 
     /**
+     * @brief Opens the settings dialog for modifying application preferences.
+     *
+     * This method displays the settings dialog, allowing the user to configure
+     * application preferences. If no D-Bus client is available, a warning is
+     * displayed. After the settings are modified, the daemon status label is
+     * refreshed, and remote search results are invalidated if applicable.
+     */
+    void openSettings();
+
+    /**
      * @brief Shows a placeholder for the change partition logic.
      */
     void changePartition();
@@ -193,6 +203,12 @@ private:
      *   partitions and total objects indexed by the daemon.
      */
     void refreshDaemonStatusLabel();
+
+    void updateLegacyPartitionActions();
+
+    QAction* m_settingsAction = nullptr;
+    QAction* m_changePartitionAction = nullptr;
+    QAction* m_rescanPartitionAction = nullptr;
 
     bool m_useDaemonSearch = false;
 

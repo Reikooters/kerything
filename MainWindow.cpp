@@ -39,6 +39,7 @@
 #include "FileModel.h"
 #include "GuiUtils.h"
 #include "PartitionDialog.h"
+#include "SettingsDialog.h"
 #include "ScannerManager.h"
 #include "RemoteFileModel.h"
 #include "DbusIndexerClient.h"
@@ -92,17 +93,23 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // --- Burger Menu Setup ---
     auto *menu = new QMenu(this);
 
-    auto *changePartitionAct = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
-    connect(changePartitionAct, &QAction::triggered, this, &MainWindow::changePartition);
-    changePartitionAct->setShortcut(QKeySequence::Open);
-    menu->addAction(changePartitionAct);
-    addAction(changePartitionAct); // Register with window for shortcuts
+    m_settingsAction = new QAction(QIcon::fromTheme("settings-configure"), "Settings", this);
+    connect(m_settingsAction, &QAction::triggered, this, &MainWindow::openSettings);
+    menu->addAction(m_settingsAction);
 
-    auto *rescanPartitionAct = new QAction(QIcon::fromTheme("view-refresh"), "Rescan Partition", this);
-    connect(rescanPartitionAct, &QAction::triggered, this, &MainWindow::rescanPartition);
-    rescanPartitionAct->setShortcut(QKeySequence::Refresh);
-    menu->addAction(rescanPartitionAct);
-    addAction(rescanPartitionAct); // Register with window for shortcuts
+    menu->addSeparator();
+
+    m_changePartitionAction = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
+    connect(m_changePartitionAction, &QAction::triggered, this, &MainWindow::changePartition);
+    m_changePartitionAction->setShortcut(QKeySequence::Open);
+    menu->addAction(m_changePartitionAction);
+    addAction(m_changePartitionAction); // Register with window for shortcuts
+
+    m_rescanPartitionAction = new QAction(QIcon::fromTheme("view-refresh"), "Rescan Partition", this);
+    connect(m_rescanPartitionAction, &QAction::triggered, this, &MainWindow::rescanPartition);
+    m_rescanPartitionAction->setShortcut(QKeySequence::Refresh);
+    menu->addAction(m_rescanPartitionAction);
+    addAction(m_rescanPartitionAction); // Register with window for shortcuts
 
     menu->addSeparator();
 
@@ -405,6 +412,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Start with a full list, sorted by name ascending
     tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
 
+    updateLegacyPartitionActions();
+
     // Only open partition dialog in local mode
     if (!m_useDaemonSearch) {
         // Keep the initial search stats in the *message* area,
@@ -576,7 +585,44 @@ void MainWindow::setDatabase(ScannerEngine::SearchDatabase&& database, QString m
     updateSearch(searchLine->text());
 }
 
+void MainWindow::openSettings() {
+    if (!m_dbus) {
+        QMessageBox::warning(this, QStringLiteral("Daemon unavailable"),
+                             QStringLiteral("No D-Bus client available."));
+        return;
+    }
+
+    SettingsDialog dlg(m_dbus.get(), this);
+    dlg.exec();
+
+    // After settings changes (new indexing), refresh daemon label + refresh results
+    refreshDaemonStatusLabel();
+    if (m_useDaemonSearch && remoteModel) {
+        remoteModel->invalidate();
+    }
+}
+
+void MainWindow::updateLegacyPartitionActions() {
+    if (!m_changePartitionAction || !m_rescanPartitionAction) return;
+
+    if (m_useDaemonSearch) {
+        // Legacy actions become entry points to the new settings UX.
+        m_changePartitionAction->setText("Manage Indexes…");
+        m_rescanPartitionAction->setText("Rescan / Index…");
+    } else {
+        m_changePartitionAction->setText("Change Partition");
+        m_rescanPartitionAction->setText("Rescan Partition");
+    }
+}
+
 void MainWindow::changePartition() {
+    // In daemon mode, "Change Partition" is legacy UI.
+    // Redirect to the new Settings dialog where partitions/indexes are managed.
+    if (m_useDaemonSearch) {
+        openSettings();
+        return;
+    }
+
     PartitionDialog dlg(this);
 
     if (dlg.exec() == QDialog::Accepted) {
@@ -595,6 +641,12 @@ void MainWindow::changePartition() {
 }
 
 void MainWindow::rescanPartition() {
+    // In daemon mode, redirect to Settings (user can pick partition and index/rescan).
+    if (m_useDaemonSearch) {
+        openSettings();
+        return;
+    }
+
     if (m_devicePath.isEmpty()) {
         changePartition();
         return;

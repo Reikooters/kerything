@@ -302,6 +302,45 @@ std::optional<QVariantList> DbusIndexerClient::resolveDirectories(const QString&
     return toVariantListLoose(args[0]);
 }
 
+std::optional<QVariantList> DbusIndexerClient::resolveEntries(const QList<quint64>& entryIds,
+                                                              QString* errorOut) const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+    if (!iface.isValid()) {
+        if (errorOut) *errorOut = iface.lastError().message();
+        return std::nullopt;
+    }
+
+    QVariantList ids;
+    ids.reserve(entryIds.size());
+    for (quint64 id : entryIds) {
+        ids << QVariant::fromValue<qulonglong>(id);
+    }
+
+    QDBusMessage reply = iface.call(QStringLiteral("ResolveEntries"), ids);
+
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        if (errorOut) *errorOut = reply.errorMessage();
+        return std::nullopt;
+    }
+
+    const auto args = reply.arguments();
+    if (args.size() < 1) {
+        if (errorOut) *errorOut = QStringLiteral("ResolveEntries(): unexpected reply shape");
+        return std::nullopt;
+    }
+
+    const QVariantList rawList = toVariantListLoose(args[0]);
+
+    // Normalize: ensure each element is a plain QVariantMap for consumers.
+    QVariantList normalized;
+    normalized.reserve(rawList.size());
+    for (const QVariant& elem : rawList) {
+        normalized.push_back(toVariantMapLoose(elem));
+    }
+
+    return normalized;
+}
+
 bool DbusIndexerClient::forgetIndex(const QString& deviceId, QString* errorOut) const {
     QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
     if (!iface.isValid()) {

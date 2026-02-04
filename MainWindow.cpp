@@ -693,11 +693,6 @@ void MainWindow::showAbout() {
 }
 
 void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     // Map the position correctly to the viewport
     // This ensures the row index is perfectly aligned with the mouse
     QPoint viewportPos = tableView->viewport()->mapFrom(this, event->pos());
@@ -715,36 +710,88 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
     }
 
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
-    bool isMounted = !m_mountPath.isEmpty();
 
     QMenu menu(this);
     KFileItemActions menuActions;
 
-    if (isMounted) {
-        KFileItemList items;
+    // ---- Daemon mode: resolve entries and build a KFileItemList for mounted items only ----
+    QList<QUrl> mountedUrls;
+    bool anyUnmounted = false;
 
-        // Process all selected items
-        for (const QModelIndex &index : selectedRows) {
-            uint32_t recordIdx = model->getRecordIndex(index.row());
-            const auto& rec = db.records[recordIdx];
+    if (m_useDaemonSearch && remoteModel && m_dbus) {
+        QList<quint64> entryIds;
+        entryIds.reserve(selectedRows.size());
 
-            QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
-            QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
-
-            QString fullPath = QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName);
-
-            QUrl url = QUrl::fromLocalFile(fullPath);
-
-            // Explicitly create a KFileItem and determine MIME type
-            // This is so the context menu will have the correct options
-            KFileItem fileItem(url);
-            fileItem.determineMimeType();
-            items.append(fileItem);
+        for (const QModelIndex& idx : selectedRows) {
+            auto idOpt = remoteModel->entryIdAtRow(idx.row());
+            if (idOpt) entryIds.push_back(*idOpt);
         }
 
-        menuActions.setItemListProperties(KFileItemListProperties(items));
-        menuActions.insertOpenWithActionsTo(nullptr, &menu, QStringList());
+        QString err;
+        auto resolved = m_dbus->resolveEntries(entryIds, &err);
+        if (resolved) {
+            for (const QVariant& v : *resolved) {
+                const QVariantMap m = v.toMap();
+                const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+                const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+                const QString internalPath = m.value(QStringLiteral("internalPath")).toString();
+
+                if (mounted && !mp.isEmpty() && !internalPath.isEmpty()) {
+                    mountedUrls.push_back(QUrl::fromLocalFile(QDir::cleanPath(mp + internalPath)));
+                } else {
+                    anyUnmounted = true;
+                }
+            }
+        } else {
+            // If resolve fails, we still show basic menu; “Open With” etc. will be limited.
+            statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+        }
+
+        if (!mountedUrls.isEmpty()) {
+            KFileItemList items;
+            items.reserve(mountedUrls.size());
+            for (const QUrl& url : mountedUrls) {
+                KFileItem fileItem(url);
+                fileItem.determineMimeType();
+                items.append(fileItem);
+            }
+            menuActions.setItemListProperties(KFileItemListProperties(items));
+            menuActions.insertOpenWithActionsTo(nullptr, &menu, QStringList());
+        }
     }
+
+    // ---- Local mode ----
+    if (!m_useDaemonSearch) {
+        const bool isMounted = !m_mountPath.isEmpty();
+
+        if (isMounted) {
+            KFileItemList items;
+
+            // Process all selected items
+            for (const QModelIndex &index : selectedRows) {
+                uint32_t recordIdx = model->getRecordIndex(index.row());
+                const auto& rec = db.records[recordIdx];
+
+                QString fileName = QString::fromUtf8(&db.stringPool[rec.nameOffset], rec.nameLen);
+                QString internalPath = QString::fromStdString(db.getFullPath(rec.parentRecordIdx));
+
+                QString fullPath = QDir::cleanPath(m_mountPath + "/" + internalPath + "/" + fileName);
+
+                QUrl url = QUrl::fromLocalFile(fullPath);
+
+                // Explicitly create a KFileItem and determine MIME type
+                // This is so the context menu will have the correct options
+                KFileItem fileItem(url);
+                fileItem.determineMimeType();
+                items.append(fileItem);
+            }
+
+            menuActions.setItemListProperties(KFileItemListProperties(items));
+            menuActions.insertOpenWithActionsTo(nullptr, &menu, QStringList());
+        }
+    }
+
+    // ---- Common actions ----
 
     // Add the actions we defined in the constructor
     // This automatically handles the text, icons, and showing the shortcuts
@@ -757,35 +804,99 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
     menu.addSeparator();
     menu.addAction(findChild<QAction*>("copyFilesAction"));
     menu.addAction(findChild<QAction*>("copyFileNamesAction"));
-    menu.addAction(findChild<QAction*>("copyPathsAction"));
+
+    // Copy path actions: daemon mode gets split actions when unmounted is involved
+    QAction* copyPathsAction = findChild<QAction*>("copyPathsAction");
+    if (m_useDaemonSearch && anyUnmounted) {
+        // Hide the single “Copy Full Path” semantics in mixed/unmounted case:
+        // expose two explicit options.
+        auto* copyDisplay = menu.addAction(QIcon::fromTheme("edit-copy"), "Copy Display Path");
+        connect(copyDisplay, &QAction::triggered, this, [this]() {
+            const QModelIndexList rows = tableView->selectionModel()->selectedRows();
+            if (!remoteModel || !m_dbus || rows.isEmpty()) return;
+
+            QList<quint64> entryIds;
+            entryIds.reserve(rows.size());
+            for (const auto& idx : rows) {
+                auto idOpt = remoteModel->entryIdAtRow(idx.row());
+                if (idOpt) entryIds.push_back(*idOpt);
+            }
+
+            QString err;
+            auto resolved = m_dbus->resolveEntries(entryIds, &err);
+            if (!resolved) {
+                statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+                return;
+            }
+
+            QStringList lines;
+            for (const QVariant& v : *resolved) {
+                const QVariantMap m = v.toMap();
+                const QString s = m.value(QStringLiteral("displayPath")).toString();
+                if (!s.isEmpty()) lines << s;
+            }
+            QGuiApplication::clipboard()->setText(lines.join('\n'));
+        });
+
+        auto* copyInternal = menu.addAction(QIcon::fromTheme("edit-copy"), "Copy Internal Path");
+        connect(copyInternal, &QAction::triggered, this, [this]() {
+            const QModelIndexList rows = tableView->selectionModel()->selectedRows();
+            if (!remoteModel || !m_dbus || rows.isEmpty()) return;
+
+            QList<quint64> entryIds;
+            entryIds.reserve(rows.size());
+            for (const auto& idx : rows) {
+                auto idOpt = remoteModel->entryIdAtRow(idx.row());
+                if (idOpt) entryIds.push_back(*idOpt);
+            }
+
+            QString err;
+            auto resolved = m_dbus->resolveEntries(entryIds, &err);
+            if (!resolved) {
+                statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+                return;
+            }
+
+            QStringList lines;
+            for (const QVariant& v : *resolved) {
+                const QVariantMap m = v.toMap();
+                const QString s = m.value(QStringLiteral("internalPath")).toString();
+                if (!s.isEmpty()) lines << s;
+            }
+            QGuiApplication::clipboard()->setText(lines.join('\n'));
+        });
+
+        if (copyPathsAction) copyPathsAction->setVisible(false);
+    } else {
+        if (copyPathsAction) {
+            copyPathsAction->setVisible(true);
+            menu.addAction(copyPathsAction);
+        }
+    }
 
     menu.addSeparator();
 
-    // Add the KDE "Open With" and system actions
-    if (isMounted) {
-        menuActions.addActionsTo(&menu);
+    // KDE “Open With” and other actions: only meaningful when we have real file URLs
+    if (m_useDaemonSearch) {
+        if (!mountedUrls.isEmpty()) {
+            menuActions.addActionsTo(&menu);
+        } else {
+            menu.addAction("Metadata/Actions unavailable (Unmounted)")->setEnabled(false);
+        }
     } else {
-        menu.addAction("Metadata/Actions unavailable (Unmounted)")->setEnabled(false);
+        const bool isMounted = !m_mountPath.isEmpty();
+        if (isMounted) {
+            menuActions.addActionsTo(&menu);
+        } else {
+            menu.addAction("Metadata/Actions unavailable (Unmounted)")->setEnabled(false);
+        }
     }
 
     menu.exec(event->globalPos());
 }
 
 void MainWindow::openFile(const QModelIndex &index) {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     if (!index.isValid()) {
-        return;
-    }
-
-    // Handle unmounted drives
-    if (m_mountPath.isEmpty()) {
-        QMessageBox::information(this, "Drive Not Mounted",
-            "This partition is not currently mounted in Linux.\n\n"
-            "Please mount it first then rescan the partition to open files.");
         return;
     }
 
@@ -795,23 +906,92 @@ void MainWindow::openFile(const QModelIndex &index) {
 }
 
 void MainWindow::openSelectedFiles() {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
+    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
+
+    // If nothing is selected, don't open anything
+    if (selectedRows.isEmpty()) {
         return;
     }
+
+    // ---- Daemon mode ----
+    if (m_useDaemonSearch) {
+        if (!remoteModel || !m_dbus) return;
+
+        QList<quint64> entryIds;
+        entryIds.reserve(selectedRows.size());
+        for (const auto& idx : selectedRows) {
+            auto idOpt = remoteModel->entryIdAtRow(idx.row());
+            if (idOpt) entryIds.push_back(*idOpt);
+        }
+
+        QString err;
+        auto resolved = m_dbus->resolveEntries(entryIds, &err);
+        if (!resolved) {
+            statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+            return;
+        }
+
+        QList<QUrl> urls;
+        bool skipped = false;
+
+        for (const QVariant& v : *resolved) {
+            const QVariantMap m = v.toMap();
+            const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+            const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+            const QString internalPath = m.value(QStringLiteral("internalPath")).toString();
+
+            if (mounted && !mp.isEmpty() && !internalPath.isEmpty()) {
+                urls.push_back(QUrl::fromLocalFile(QDir::cleanPath(mp + internalPath)));
+            } else {
+                skipped = true;
+            }
+        }
+
+        if (urls.isEmpty()) {
+            QMessageBox::information(this, "Drive Not Mounted",
+                                     "These results are from partitions that are not currently mounted.\n\n"
+                                     "Mount the partition to open files.");
+            return;
+        }
+
+        if (skipped) {
+            statusBar()->showMessage("Some selected items were skipped because they are unmounted.", 5000);
+        }
+
+        // Group by MIME type and launch
+        QMimeDatabase mimeDb;
+        QMap<QString, QList<QUrl>> mimeGroups;
+
+        for (const QUrl& url : urls) {
+            const QString mimeType = mimeDb.mimeTypeForUrl(url).name();
+            mimeGroups[mimeType].append(url);
+        }
+
+        for (auto it = mimeGroups.begin(); it != mimeGroups.end(); ++it) {
+            const QString &mimeType = it.key();
+            const QList<QUrl> &groupUrls = it.value();
+
+            KService::Ptr service = KApplicationTrader::preferredService(mimeType);
+
+            auto *job = service ? new KIO::ApplicationLauncherJob(service)
+                                : new KIO::ApplicationLauncherJob();
+
+            job->setUrls(groupUrls);
+            job->setAutoDelete(true);
+            job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));
+            job->start();
+        }
+
+        return;
+    }
+
+    // ---- Local mode ----
 
     // Handle unmounted drives
     if (m_mountPath.isEmpty()) {
         QMessageBox::information(this, "Drive Not Mounted",
             "This partition is not currently mounted in Linux.\n\n"
             "Please mount it first then rescan the partition to open files.");
-        return;
-    }
-
-    const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
-
-    // If nothing is selected, don't open anything
-    if (selectedRows.isEmpty()) {
         return;
     }
 
@@ -851,16 +1031,38 @@ void MainWindow::openSelectedFiles() {
 }
 
 void MainWindow::openSelectedLocation() {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
         return;
     }
+
+    // ---- Daemon mode ----
+    if (m_useDaemonSearch) {
+        if (!remoteModel || !m_dbus) return;
+
+        auto idOpt = remoteModel->entryIdAtRow(selectedRows.first().row());
+        if (!idOpt) return;
+
+        QString err;
+        auto resolved = m_dbus->resolveEntries(QList<quint64>{*idOpt}, &err);
+        if (!resolved || resolved->isEmpty()) {
+            statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+            return;
+        }
+
+        const QVariantMap m = resolved->first().toMap();
+        const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+        const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+        const QString internalDir = m.value(QStringLiteral("internalDir")).toString();
+
+        if (!mounted || mp.isEmpty() || internalDir.isEmpty()) return;
+
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QDir::cleanPath(mp + internalDir)));
+        return;
+    }
+
+    // ---- Local mode ----
 
     // Opening the selected file's directory only makes sense when the partition is mounted
     if (m_mountPath.isEmpty()) {
@@ -875,14 +1077,21 @@ void MainWindow::openSelectedLocation() {
 }
 
 void MainWindow::copyFileNames() {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    // In daemon mode, Name is already in the model, so the existing approach works
+    // if we just read column 0.
+    if (m_useDaemonSearch) {
+        QStringList names;
+        names.reserve(selectedRows.size());
+        for (const auto& idx : selectedRows) {
+            names << tableView->model()->data(tableView->model()->index(idx.row(), 0), Qt::DisplayRole).toString();
+        }
+        QGuiApplication::clipboard()->setText(names.join('\n'));
         return;
     }
 
@@ -900,16 +1109,57 @@ void MainWindow::copyFileNames() {
 }
 
 void MainWindow::copyPaths() {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
         return;
     }
+
+    // ---- Daemon mode: “Copy Full Path” means real paths for mounted items only ----
+    if (m_useDaemonSearch) {
+        if (!remoteModel || !m_dbus) return;
+
+        QList<quint64> entryIds;
+        entryIds.reserve(selectedRows.size());
+        for (const auto& idx : selectedRows) {
+            auto idOpt = remoteModel->entryIdAtRow(idx.row());
+            if (idOpt) entryIds.push_back(*idOpt);
+        }
+
+        QString err;
+        auto resolved = m_dbus->resolveEntries(entryIds, &err);
+        if (!resolved) {
+            statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+            return;
+        }
+
+        QStringList paths;
+        bool skipped = false;
+
+        for (const QVariant& v : *resolved) {
+            const QVariantMap m = v.toMap();
+            const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+            const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+            const QString internalPath = m.value(QStringLiteral("internalPath")).toString();
+
+            if (mounted && !mp.isEmpty() && !internalPath.isEmpty()) {
+                paths << QDir::cleanPath(mp + internalPath);
+            } else {
+                skipped = true;
+            }
+        }
+
+        if (paths.isEmpty()) return;
+
+        if (skipped) {
+            statusBar()->showMessage("Some selected items were skipped because they are unmounted.", 5000);
+        }
+
+        QGuiApplication::clipboard()->setText(paths.join('\n'));
+        return;
+    }
+
+    // ---- Local mode ----
 
     QStringList paths;
     paths.reserve(selectedRows.size());
@@ -926,16 +1176,59 @@ void MainWindow::copyPaths() {
 }
 
 void MainWindow::copyFiles() {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
         return;
     }
+
+    // ---- Daemon mode: copy URLs for mounted entries only ----
+    if (m_useDaemonSearch) {
+        if (!remoteModel || !m_dbus) return;
+
+        QList<quint64> entryIds;
+        entryIds.reserve(selectedRows.size());
+        for (const auto& idx : selectedRows) {
+            auto idOpt = remoteModel->entryIdAtRow(idx.row());
+            if (idOpt) entryIds.push_back(*idOpt);
+        }
+
+        QString err;
+        auto resolved = m_dbus->resolveEntries(entryIds, &err);
+        if (!resolved) {
+            statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+            return;
+        }
+
+        QList<QUrl> urls;
+        bool skipped = false;
+
+        for (const QVariant& v : *resolved) {
+            const QVariantMap m = v.toMap();
+            const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+            const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+            const QString internalPath = m.value(QStringLiteral("internalPath")).toString();
+
+            if (mounted && !mp.isEmpty() && !internalPath.isEmpty()) {
+                urls.push_back(QUrl::fromLocalFile(QDir::cleanPath(mp + internalPath)));
+            } else {
+                skipped = true;
+            }
+        }
+
+        if (urls.isEmpty()) return;
+
+        if (skipped) {
+            statusBar()->showMessage("Some selected items were skipped because they are unmounted.", 5000);
+        }
+
+        auto *mimeData = new QMimeData();
+        mimeData->setUrls(urls);
+        QGuiApplication::clipboard()->setMimeData(mimeData);
+        return;
+    }
+
+    // ---- Local mode ----
 
     // Copying file objects (URLs) only makes sense when the partition is mounted
     if (m_mountPath.isEmpty()) {
@@ -959,16 +1252,44 @@ void MainWindow::copyFiles() {
 }
 
 void MainWindow::openTerminal() {
-    // --- Guard local-only features for now (until we add ResolveEntryPath etc.) ---
-    if (m_useDaemonSearch) {
-        return;
-    }
-
     const QModelIndexList selectedRows = tableView->selectionModel()->selectedRows();
 
     if (selectedRows.isEmpty()) {
         return;
     }
+
+    // ---- Daemon mode ----
+    if (m_useDaemonSearch) {
+        if (!remoteModel || !m_dbus) return;
+
+        auto idOpt = remoteModel->entryIdAtRow(selectedRows.first().row());
+        if (!idOpt) return;
+
+        QString err;
+        auto resolved = m_dbus->resolveEntries(QList<quint64>{*idOpt}, &err);
+        if (!resolved || resolved->isEmpty()) {
+            statusBar()->showMessage(QStringLiteral("Daemon error: ") + err, 5000);
+            return;
+        }
+
+        const QVariantMap m = resolved->first().toMap();
+        const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+        const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+        const QString internalDir = m.value(QStringLiteral("internalDir")).toString();
+
+        if (!mounted || mp.isEmpty() || internalDir.isEmpty()) return;
+
+        const QString fullDirPath = QDir::cleanPath(mp + internalDir);
+
+        auto *job = new KTerminalLauncherJob(QString());
+        job->setWorkingDirectory(fullDirPath);
+        job->setAutoDelete(true);
+        job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));
+        job->start();
+        return;
+    }
+
+    // ---- Local mode ----
 
     // Opening the terminal in the selected file's directory only makes sense when the partition is mounted
     if (m_mountPath.isEmpty()) {

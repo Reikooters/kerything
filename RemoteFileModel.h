@@ -28,6 +28,8 @@ public:
 
     [[nodiscard]] quint64 totalHits() const { return m_totalHits; }
 
+    [[nodiscard]] std::optional<quint64> entryIdAtRow(int row) const;
+
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
     int columnCount(const QModelIndex& parent = QModelIndex()) const override;
 
@@ -35,6 +37,10 @@ public:
     QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
 
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
+
+    QStringList mimeTypes() const override;
+    QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    Qt::ItemFlags flags(const QModelIndex& index) const override;
 
 signals:
     void transientError(const QString& message);

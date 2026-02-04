@@ -52,6 +52,9 @@ public:
                                                    const QList<quint32>& dirIds,
                                                    QString* errorOut = nullptr) const;
 
+    std::optional<QVariantList> resolveEntries(const QList<quint64>& entryIds,
+                                               QString* errorOut = nullptr) const;
+
     bool forgetIndex(const QString& deviceId, QString* errorOut = nullptr) const;
 
 private:

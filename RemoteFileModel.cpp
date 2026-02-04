@@ -3,6 +3,9 @@
 
 #include <iostream>
 #include <QDateTime>
+#include <QDir>
+#include <QMimeData>
+#include <QUrl>
 #include <limits>
 #include <QtDBus/QDBusArgument>
 #include <QtDBus/QDBusVariant>
@@ -14,6 +17,24 @@ static constexpr quint32 kFlagIsDir = 1u << 0;
 
 RemoteFileModel::RemoteFileModel(DbusIndexerClient* client, QObject* parent)
     : QAbstractTableModel(parent), m_client(client) {}
+
+std::optional<quint64> RemoteFileModel::entryIdAtRow(int row) const {
+    if (row < 0) return std::nullopt;
+    if (m_offline) return std::nullopt;
+
+    const quint32 pageIndex = static_cast<quint32>(row) / kPageSize;
+    const quint32 inPage = static_cast<quint32>(row) % kPageSize;
+
+    ensurePageLoaded(pageIndex);
+
+    const auto pit = m_pages.find(pageIndex);
+    if (pit == m_pages.end()) return std::nullopt;
+
+    const auto& page = pit.value();
+    if (inPage >= static_cast<quint32>(page.size())) return std::nullopt;
+
+    return page[static_cast<int>(inPage)].entryId;
+}
 
 int RemoteFileModel::rowCount(const QModelIndex& parent) const {
     if (parent.isValid()) return 0;
@@ -129,6 +150,66 @@ void RemoteFileModel::setSort(int column, Qt::SortOrder order) {
 
 void RemoteFileModel::sort(int column, Qt::SortOrder order) {
     setSort(column, order);
+}
+
+QStringList RemoteFileModel::mimeTypes() const {
+    return {QStringLiteral("text/uri-list")};
+}
+
+QMimeData* RemoteFileModel::mimeData(const QModelIndexList& indexes) const {
+    auto* md = new QMimeData();
+    if (m_offline || !m_client) return md;
+
+    // Collect unique rows
+    QSet<int> rows;
+    for (const auto& idx : indexes) {
+        if (!idx.isValid()) continue;
+        rows.insert(idx.row());
+    }
+
+    QList<quint64> entryIds;
+    entryIds.reserve(rows.size());
+    for (int r : rows) {
+        auto idOpt = entryIdAtRow(r);
+        if (idOpt) entryIds.push_back(*idOpt);
+    }
+
+    if (entryIds.isEmpty()) return md;
+
+    QString err;
+    auto resolved = m_client->resolveEntries(entryIds, &err);
+    if (!resolved) {
+        // Best-effort: if we can't resolve, provide empty mime data
+        return md;
+    }
+
+    QList<QUrl> urls;
+    urls.reserve(resolved->size());
+
+    for (const QVariant& v : *resolved) {
+        const QVariantMap m = v.toMap();
+        const bool mounted = m.value(QStringLiteral("mounted")).toBool();
+        if (!mounted) continue;
+
+        const QString mp = m.value(QStringLiteral("primaryMountPoint")).toString();
+        const QString internalPath = m.value(QStringLiteral("internalPath")).toString();
+        if (mp.isEmpty() || internalPath.isEmpty()) continue;
+
+        urls.push_back(QUrl::fromLocalFile(QDir::cleanPath(mp + internalPath)));
+    }
+
+    md->setUrls(urls);
+    return md;
+}
+
+Qt::ItemFlags RemoteFileModel::flags(const QModelIndex& index) const {
+    Qt::ItemFlags f = QAbstractTableModel::flags(index);
+
+    // Allow dragging rows out of the view (Dolphin, desktop, etc.)
+    if (index.isValid() && !m_offline) {
+        f |= Qt::ItemIsDragEnabled;
+    }
+    return f;
 }
 
 static QVariant unwrapDbusVariant(const QVariant& v) {

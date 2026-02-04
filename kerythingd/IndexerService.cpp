@@ -676,6 +676,27 @@ quint64 IndexerService::makeEntryId(const QString& deviceId, quint32 recordIdx) 
     return (static_cast<quint64>(h) << 32) | static_cast<quint64>(recordIdx);
 }
 
+quint32 IndexerService::deviceHash32(const QString& deviceId) {
+    // Must match the high-32 bits used by makeEntryId()
+    quint32 h = 2166136261u;
+    for (QChar qc : deviceId) {
+        const quint16 ch = qc.unicode();
+        h ^= static_cast<quint8>(ch & 0xFFu);
+        h *= 16777619u;
+        h ^= static_cast<quint8>((ch >> 8) & 0xFFu);
+        h *= 16777619u;
+    }
+    return h;
+}
+
+QString IndexerService::joinInternalPath(const QString& internalDir, const QString& name) {
+    // internalDir is like "/" or "/foo/bar"
+    if (internalDir.isEmpty() || internalDir == QStringLiteral("/")) {
+        return QStringLiteral("/") + name;
+    }
+    return internalDir + QStringLiteral("/") + name;
+}
+
 bool IndexerService::nameContainsCaseInsensitive(std::string_view haystack, std::string_view needle) {
     if (needle.empty()) return true;
 
@@ -1588,6 +1609,142 @@ void IndexerService::ResolveDirectories(const QString& deviceId,
              << QVariant::fromValue(shown);
 
         out.push_back(pair);
+    }
+}
+
+void IndexerService::ResolveEntries(const QVariantList& entryIds,
+                                    QVariantList& out) const {
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
+    out.clear();
+    out.reserve(entryIds.size());
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return;
+
+    const auto& indexes = uidIt->second;
+
+    // Cache device inventory lookups per call
+    QHash<QString, QVariantMap> deviceInfoCache;
+
+    auto getDeviceInfo = [&](const QString& deviceId) -> QVariantMap {
+        auto it = deviceInfoCache.find(deviceId);
+        if (it != deviceInfoCache.end()) return *it;
+
+        QVariantMap info;
+        const auto devOpt = findDeviceById(deviceId);
+        if (devOpt) {
+            info = *devOpt;
+        }
+        deviceInfoCache.insert(deviceId, info);
+        return info;
+    };
+
+    auto makeDisplayPrefix = [&](const QString& deviceId, const DeviceIndex& idx) -> QString {
+        const QVariantMap dev = getDeviceInfo(deviceId);
+        if (!dev.isEmpty()) {
+            const bool mounted = dev.value(QStringLiteral("mounted")).toBool();
+            const QString mp = dev.value(QStringLiteral("primaryMountPoint")).toString().trimmed();
+            const QString label = dev.value(QStringLiteral("label")).toString().trimmed();
+
+            if (mounted && !mp.isEmpty()) return mp;
+            if (!label.isEmpty()) return QStringLiteral("[") + label + QStringLiteral("]");
+        }
+
+        // Fallback to snapshot metadata if available
+        if (!idx.labelLastKnown.trimmed().isEmpty()) {
+            return QStringLiteral("[") + idx.labelLastKnown.trimmed() + QStringLiteral("]");
+        }
+
+        return QStringLiteral("[") + deviceId + QStringLiteral("]");
+    };
+
+    auto joinPrefix = [&](const QString& prefix, const QString& internalPath) -> QString {
+        // internalPath is like "/foo/bar" or "/"
+        if (prefix.isEmpty()) return internalPath;
+
+        // Prefix is a mount point like "/mnt/Data": "/mnt/Data" + "/foo"
+        if (prefix.startsWith('/')) {
+            if (internalPath == QStringLiteral("/")) return prefix;
+            return prefix + internalPath;
+        }
+
+        // Prefix is "[Label]": "[Label]/foo"
+        if (internalPath == QStringLiteral("/")) return prefix + QStringLiteral("/");
+        return prefix + internalPath;
+    };
+
+    for (const QVariant& v : entryIds) {
+        const quint64 entryId = v.toULongLong();
+        const quint32 wantHash = static_cast<quint32>(entryId >> 32);
+        const quint32 recordIdx = static_cast<quint32>(entryId & 0xFFFFFFFFu);
+
+        // Find matching device by hash (then verify exact entryId)
+        const QString* matchedDeviceId = nullptr;
+        const DeviceIndex* matchedIdx = nullptr;
+
+        for (const auto& kv : indexes) {
+            const QString& devId = kv.first;
+            const DeviceIndex& idx = kv.second;
+
+            if (deviceHash32(devId) != wantHash) continue;
+            if (recordIdx >= idx.records.size()) continue;
+            if (makeEntryId(devId, recordIdx) != entryId) continue;
+
+            matchedDeviceId = &devId;
+            matchedIdx = &idx;
+            break;
+        }
+
+        if (!matchedDeviceId || !matchedIdx) {
+            // Unknown / stale entryId. Return a minimal record so GUI can skip gracefully.
+            QVariantMap m;
+            m.insert(QStringLiteral("entryId"), QVariant::fromValue<qulonglong>(entryId));
+            m.insert(QStringLiteral("deviceId"), QString());
+            m.insert(QStringLiteral("name"), QString());
+            m.insert(QStringLiteral("isDir"), false);
+            m.insert(QStringLiteral("mounted"), false);
+            m.insert(QStringLiteral("primaryMountPoint"), QString());
+            m.insert(QStringLiteral("internalPath"), QString());
+            m.insert(QStringLiteral("displayPath"), QString());
+            m.insert(QStringLiteral("internalDir"), QString());
+            m.insert(QStringLiteral("displayDir"), QString());
+            out.push_back(m);
+            continue;
+        }
+
+        const QString& deviceId = *matchedDeviceId;
+        const DeviceIndex& idx = *matchedIdx;
+        const auto& rec = idx.records[recordIdx];
+
+        const QString name = QString::fromUtf8(idx.stringPool.data() + rec.nameOffset,
+                                              static_cast<int>(rec.nameLen));
+
+        const QString internalDir = dirPathFor(uid, deviceId, rec.parentRecordIdx);
+        const QString internalPath = joinInternalPath(internalDir, name);
+
+        const QVariantMap dev = getDeviceInfo(deviceId);
+        const bool mounted = dev.value(QStringLiteral("mounted")).toBool();
+        const QString primaryMountPoint = dev.value(QStringLiteral("primaryMountPoint")).toString();
+
+        const QString prefix = makeDisplayPrefix(deviceId, idx);
+        const QString displayDir = joinPrefix(prefix, internalDir);
+        const QString displayPath = joinPrefix(prefix, internalPath);
+
+        QVariantMap m;
+        m.insert(QStringLiteral("entryId"), QVariant::fromValue<qulonglong>(entryId));
+        m.insert(QStringLiteral("deviceId"), deviceId);
+        m.insert(QStringLiteral("name"), name);
+        m.insert(QStringLiteral("isDir"), rec.isDir);
+        m.insert(QStringLiteral("mounted"), mounted && !primaryMountPoint.trimmed().isEmpty());
+        m.insert(QStringLiteral("primaryMountPoint"), primaryMountPoint);
+        m.insert(QStringLiteral("internalPath"), internalPath);
+        m.insert(QStringLiteral("displayPath"), displayPath);
+        m.insert(QStringLiteral("internalDir"), internalDir);
+        m.insert(QStringLiteral("displayDir"), displayDir);
+
+        out.push_back(m);
     }
 }
 

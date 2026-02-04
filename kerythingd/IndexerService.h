@@ -163,6 +163,26 @@ public slots:
                             QVariantList& out) const;
 
     /**
+     * Resolve one or more search result entries to usable paths + mount state.
+     *
+     * entryIds: list of uint64 values (QVariant holding ulonglong).
+     *
+     * out: array of dicts (a{sv}) encoded as QVariantMap, each containing:
+     *  entryId: uint64
+     *  deviceId: string
+     *  name: string
+     *  isDir: bool
+     *  mounted: bool
+     *  primaryMountPoint: string
+     *  internalPath: string  (e.g. "/foo/bar.txt")
+     *  displayPath: string   (e.g. "/mnt/Data/foo/bar.txt" or "[Label]/foo/bar.txt")
+     *  internalDir: string   (e.g. "/foo")
+     *  displayDir: string    (e.g. "/mnt/Data/foo" or "[Label]/foo")
+     */
+    void ResolveEntries(const QVariantList& entryIds,
+                        QVariantList& out) const;
+
+    /**
      * Removes an index for the given deviceId for the calling user:
      * - drops in-memory index
      * - deletes persisted snapshot (if any)
@@ -255,6 +275,9 @@ private:
     [[nodiscard]] std::optional<QVariantMap> findDeviceById(const QString& deviceId) const;
 
     [[nodiscard]] static quint64 makeEntryId(const QString& deviceId, quint32 recordIdx);
+
+    [[nodiscard]] static quint32 deviceHash32(const QString& deviceId);
+    [[nodiscard]] static QString joinInternalPath(const QString& internalDir, const QString& name);
 
     [[nodiscard]] static bool nameContainsCaseInsensitive(std::string_view haystack, std::string_view needle);
 

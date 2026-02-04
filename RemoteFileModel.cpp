@@ -105,7 +105,7 @@ void RemoteFileModel::invalidate() {
     m_pages.clear();
     m_pagesLoading.clear();
     m_pagesFailed.clear();
-    m_dirCache.clear();
+    m_dirCache.clear(); // index changed -> paths may change
     m_totalHits = 0;
     endResetModel();
 
@@ -130,7 +130,7 @@ void RemoteFileModel::setQuery(const QString& query) {
     m_pages.clear();
     m_pagesLoading.clear();
     m_pagesFailed.clear();
-    m_dirCache.clear();
+    //m_dirCache.clear(); // Don't clear directory cache between search queries
     m_totalHits = 0;
     endResetModel();
 

@@ -60,6 +60,8 @@ private:
     };
 
     void clearAll();
+    bool rowsEqual(const Row& a, const Row& b) const;
+    bool pageEqual(const QVector<Row>& a, const QVector<Row>& b) const;
     void ensurePageLoaded(quint32 pageIndex) const;
 
     [[nodiscard]] QString sortKeyForColumn(int column) const;
@@ -89,6 +91,10 @@ private:
 
     // Timing for async searches (serial -> start time in nanoseconds since steady epoch)
     mutable QHash<quint64, qint64> m_searchStartNsBySerial;
+
+    // Which querySerial the current m_pages represent.
+    // If this differs from m_querySerial, the cache is considered stale.
+    mutable quint64 m_pagesSerial = 0;
 
     mutable quint64 m_querySerial = 0; // increments each setQuery/setSort/invalidate; used to drop stale async replies
 };

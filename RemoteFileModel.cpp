@@ -106,19 +106,18 @@ void RemoteFileModel::invalidate() {
 
     ++m_querySerial;
 
-    beginResetModel();
-    m_pages.clear();
+    // Don't reset the whole model (causes visible flicker).
+    // Mark current cached pages stale and clear only what is logically invalid.
     m_pagesLoading.clear();
     m_pagesFailed.clear();
     m_dirCache.clear(); // index changed -> paths may change
-    m_totalHits = 0;
-    endResetModel();
+    m_searchStartNsBySerial.clear();
+
+    // Keep showing whatever is currently on screen until new page 0 arrives.
+    // Force a reload by invalidating the pages serial.
+    m_pagesSerial = 0;
 
     ensurePageLoaded(0);
-
-    // Refresh view to reflect new rowCount()/data availability.
-    beginResetModel();
-    endResetModel();
 }
 
 void RemoteFileModel::setQuery(const QString& query) {
@@ -132,19 +131,16 @@ void RemoteFileModel::setQuery(const QString& query) {
 
     ++m_querySerial;
 
-    // Reset and load first page so rowCount becomes meaningful.
-    beginResetModel();
-    m_pages.clear();
+    // Don't reset the model here either.
     m_pagesLoading.clear();
     m_pagesFailed.clear();
     //m_dirCache.clear(); // Don't clear directory cache between search queries
-    m_totalHits = 0;
-    endResetModel();
+    m_searchStartNsBySerial.clear();
+
+    // Mark cached pages as stale so ensurePageLoaded() will refetch.
+    m_pagesSerial = 0;
 
     ensurePageLoaded(0);
-    // After first fetch, rowCount changes -> reset to update view properly.
-    beginResetModel();
-    endResetModel();
 }
 
 void RemoteFileModel::setSort(int column, Qt::SortOrder order) {
@@ -317,11 +313,31 @@ std::optional<RemoteFileModel::Row> RemoteFileModel::parseRow(const QVariant& in
     return r;
 }
 
+bool RemoteFileModel::rowsEqual(const Row& a, const Row& b) const {
+    return a.entryId == b.entryId &&
+           a.deviceId == b.deviceId &&
+           a.name == b.name &&
+           a.dirId == b.dirId &&
+           a.size == b.size &&
+           a.mtime == b.mtime &&
+           a.flags == b.flags;
+}
+
+bool RemoteFileModel::pageEqual(const QVector<Row>& a, const QVector<Row>& b) const {
+    if (a.size() != b.size()) return false;
+    for (int i = 0; i < a.size(); ++i) {
+        if (!rowsEqual(a[i], b[i])) return false;
+    }
+    return true;
+}
+
 void RemoteFileModel::ensurePageLoaded(quint32 pageIndex) const {
     if (m_offline) return;
     if (!m_client) return;
 
-    if (m_pages.contains(pageIndex)) return;
+    const bool cacheValidForQuery = (m_pagesSerial == m_querySerial);
+
+    if (cacheValidForQuery && m_pages.contains(pageIndex)) return;
     if (m_pagesLoading.contains(pageIndex)) return;
 
     auto* self = const_cast<RemoteFileModel*>(this);
@@ -365,13 +381,12 @@ void RemoteFileModel::ensurePageLoaded(quint32 pageIndex) const {
 
             if (!m_pagesFailed.contains(pageIndex)) {
                 m_pagesFailed.insert(pageIndex);
-                const QString msg = QStringLiteral("Daemon error: ") + reply.error().message();
-                Q_EMIT self->transientError(msg);
+                Q_EMIT self->transientError(QStringLiteral("Daemon error: ") + reply.error().message());
             }
             return;
         }
 
-        const quint64 totalHits = static_cast<quint64>(reply.argumentAt<0>());
+        const quint64 newTotalHits = static_cast<quint64>(reply.argumentAt<0>());
         const QVariantList rowsList = reply.argumentAt<1>();
 
         QVector<Row> parsed;
@@ -392,22 +407,46 @@ void RemoteFileModel::ensurePageLoaded(quint32 pageIndex) const {
             }
         }
 
-        const quint64 oldTotal = m_totalHits;
-        m_totalHits = totalHits;
-        m_pages.insert(pageIndex, std::move(parsed));
-        m_pagesLoading.remove(pageIndex);
-
-        // Update the view:
-        // Avoid a full model reset here (it contributes to the “flicker” feeling).
-        // We still need the view to notice rowCount may have changed.
-        if (oldTotal != m_totalHits) {
-            Q_EMIT self->layoutChanged();
+        // If this is the first accepted reply for this serial, switch cache ownership now.
+        // (We kept showing old results until now to avoid flicker.)
+        if (m_pagesSerial != serial) {
+            m_pages.clear();
+            m_pagesSerial = serial;
         }
 
-        {
+        // Update row count changes using insert/remove rows (less repaint than layoutChanged()).
+        if (pageIndex == 0) {
+            const int oldCount = self->rowCount();
+            const quint64 oldTotalHits = m_totalHits;
+
+            m_totalHits = newTotalHits;
+
+            const int newCount = self->rowCount(); // uses updated m_totalHits
+
+            if (newCount > oldCount) {
+                self->beginInsertRows(QModelIndex(), oldCount, newCount - 1);
+                self->endInsertRows();
+            } else if (newCount < oldCount) {
+                self->beginRemoveRows(QModelIndex(), newCount, oldCount - 1);
+                self->endRemoveRows();
+            }
+
+            Q_UNUSED(oldTotalHits);
+        }
+
+        // Update cached page and notify only if it actually changed.
+        const bool hadPage = m_pages.contains(pageIndex);
+        const QVector<Row> oldPage = hadPage ? m_pages.value(pageIndex) : QVector<Row>{};
+
+        m_pages.insert(pageIndex, parsed);
+        m_pagesLoading.remove(pageIndex);
+
+        const QVector<Row>& newPage = m_pages.value(pageIndex);
+        const bool changed = !hadPage || !pageEqual(oldPage, newPage);
+
+        if (changed) {
             const int startRow = static_cast<int>(pageIndex * kPageSize);
-            const auto pit = m_pages.find(pageIndex);
-            const int count = (pit == m_pages.end()) ? 0 : pit.value().size();
+            const int count = newPage.size();
             if (count > 0) {
                 const QModelIndex topLeft = self->index(startRow, 0);
                 const QModelIndex bottomRight = self->index(startRow + count - 1, 3);

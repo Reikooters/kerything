@@ -1479,10 +1479,6 @@ void MainWindow::updateSearch(const QString &text) {
     if (m_useDaemonSearch && remoteModel) {
         auto start = std::chrono::steady_clock::now();
 
-        const int sortCol = tableView->horizontalHeader()->sortIndicatorSection();
-        const auto sortOrder = tableView->horizontalHeader()->sortIndicatorOrder();
-
-        remoteModel->setSort(sortCol, sortOrder);
         remoteModel->setQuery(text);
 
         auto end = std::chrono::steady_clock::now();

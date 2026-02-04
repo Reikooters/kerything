@@ -615,6 +615,25 @@ void MainWindow::updateLegacyPartitionActions() {
     }
 }
 
+void MainWindow::showBaselineStatus(const QString& msg) {
+    m_statusBaseline = msg;
+    statusBar()->showMessage(msg, 0);
+}
+
+void MainWindow::showTransientStatus(const QString& msg, int timeoutMs) {
+    const quint64 token = ++m_statusMessageToken;
+    statusBar()->showMessage(msg, timeoutMs);
+
+    QTimer::singleShot(timeoutMs, this, [this, token]() {
+        if (token != m_statusMessageToken) return; // newer message happened
+        if (!m_statusBaseline.isEmpty()) {
+            statusBar()->showMessage(m_statusBaseline, 0);
+        } else {
+            statusBar()->clearMessage();
+        }
+    });
+}
+
 void MainWindow::changePartition() {
     // In daemon mode, "Change Partition" is legacy UI.
     // Redirect to the new Settings dialog where partitions/indexes are managed.
@@ -1469,11 +1488,10 @@ void MainWindow::updateSearch(const QString &text) {
         auto end = std::chrono::steady_clock::now();
         std::chrono::duration<double> elapsed = end - start;
 
-        statusBar()->showMessage(
+        showBaselineStatus(
             QString("%L1 objects found (daemon) in %2s")
                 .arg(remoteModel->totalHits())
-                .arg(elapsed.count(), 0, 'f', 4),
-            0
+                .arg(elapsed.count(), 0, 'f', 4)
         );
         return;
     }
@@ -1490,7 +1508,7 @@ void MainWindow::updateSearch(const QString &text) {
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = end - start;
 
-    statusBar()->showMessage(QString("%L1 objects found in %2s")
+    showBaselineStatus(QString("%L1 objects found in %2s")
         .arg(model->rowCount())
-        .arg(elapsed.count(), 0, 'f', 4), 0);
+        .arg(elapsed.count(), 0, 'f', 4));
 }

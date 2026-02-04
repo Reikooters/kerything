@@ -206,6 +206,9 @@ private:
 
     void updateLegacyPartitionActions();
 
+    void showBaselineStatus(const QString& msg);
+    void showTransientStatus(const QString& msg, int timeoutMs);
+
     QAction* m_settingsAction = nullptr;
     QAction* m_changePartitionAction = nullptr;
     QAction* m_rescanPartitionAction = nullptr;
@@ -232,6 +235,9 @@ private:
     bool m_indexUpdatePending = false;
 
     int m_hoveredRow = -1;
+
+    QString m_statusBaseline;
+    quint64 m_statusMessageToken = 0;
 };
 
 #endif //KERYTHING_MAINWINDOW_H

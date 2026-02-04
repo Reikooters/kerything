@@ -45,6 +45,9 @@ public:
 signals:
     void transientError(const QString& message);
 
+    // Emitted when the async search for the current query has produced totalHits (page 0 returned).
+    void searchCompleted(quint64 totalHits, double elapsedSeconds);
+
 private:
     struct Row {
         quint64 entryId = 0;
@@ -83,6 +86,11 @@ private:
     mutable QHash<QString, QHash<quint32, QString>> m_dirCache;
 
     mutable quint64 m_totalHits = 0;
+
+    // Timing for async searches (serial -> start time in nanoseconds since steady epoch)
+    mutable QHash<quint64, qint64> m_searchStartNsBySerial;
+
+    mutable quint64 m_querySerial = 0; // increments each setQuery/setSort/invalidate; used to drop stale async replies
 };
 
 #endif //KERYTHING_REMOTEFILEMODEL_H

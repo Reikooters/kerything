@@ -263,6 +263,25 @@ std::optional<DbusIndexerClient::SearchResult> DbusIndexerClient::search(const Q
     return r;
 }
 
+QDBusPendingCall DbusIndexerClient::searchAsync(const QString& query,
+                                                const QStringList& deviceIds,
+                                                const QString& sortKey,
+                                                const QString& sortDir,
+                                                quint32 offset,
+                                                quint32 limit,
+                                                const QVariantMap& options) const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+    // Even if iface isn't valid, asyncCall will produce an error reply we can handle in watcher.
+    return iface.asyncCall(QStringLiteral("Search"),
+                          query,
+                          deviceIds,
+                          sortKey,
+                          sortDir,
+                          offset,
+                          limit,
+                          options);
+}
+
 std::optional<QVariantList> DbusIndexerClient::resolveDirectories(const QString& deviceId,
                                                                   const QList<quint32>& dirIds,
                                                                   QString* errorOut) const {
@@ -300,6 +319,20 @@ std::optional<QVariantList> DbusIndexerClient::resolveDirectories(const QString&
     }
 
     return toVariantListLoose(args[0]);
+}
+
+QDBusPendingCall DbusIndexerClient::resolveDirectoriesAsync(const QString& deviceId,
+                                                           const QList<quint32>& dirIds) const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+
+    // Marshal as QVariantList of ints (same as sync version).
+    QVariantList ids;
+    ids.reserve(dirIds.size());
+    for (quint32 id : dirIds) {
+        ids << QVariant::fromValue(id);
+    }
+
+    return iface.asyncCall(QStringLiteral("ResolveDirectories"), deviceId, ids);
 }
 
 std::optional<QVariantList> DbusIndexerClient::resolveEntries(const QList<quint64>& entryIds,

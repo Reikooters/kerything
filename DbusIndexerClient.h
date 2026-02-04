@@ -10,6 +10,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <optional>
+#include <QtDBus/QDBusPendingCall>
 
 class DbusIndexerClient final : public QObject {
     Q_OBJECT
@@ -48,9 +49,20 @@ public:
                                        const QVariantMap& options = {},
                                        QString* errorOut = nullptr) const;
 
+    QDBusPendingCall searchAsync(const QString& query,
+                             const QStringList& deviceIds,
+                             const QString& sortKey,
+                             const QString& sortDir,
+                             quint32 offset,
+                             quint32 limit,
+                             const QVariantMap& options = {}) const;
+
     std::optional<QVariantList> resolveDirectories(const QString& deviceId,
                                                    const QList<quint32>& dirIds,
                                                    QString* errorOut = nullptr) const;
+
+    QDBusPendingCall resolveDirectoriesAsync(const QString& deviceId,
+                                        const QList<quint32>& dirIds) const;
 
     std::optional<QVariantList> resolveEntries(const QList<quint64>& entryIds,
                                                QString* errorOut = nullptr) const;

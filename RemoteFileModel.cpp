@@ -2,6 +2,7 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include <iostream>
+#include <chrono>
 #include <QDateTime>
 #include <QDir>
 #include <QMimeData>
@@ -9,6 +10,8 @@
 #include <limits>
 #include <QtDBus/QDBusArgument>
 #include <QtDBus/QDBusVariant>
+#include <QtDBus/QDBusPendingCallWatcher>
+#include <QtDBus/QDBusPendingReply>
 #include "RemoteFileModel.h"
 #include "DbusIndexerClient.h"
 #include "GuiUtils.h"
@@ -101,6 +104,8 @@ void RemoteFileModel::invalidate() {
         return;
     }
 
+    ++m_querySerial;
+
     beginResetModel();
     m_pages.clear();
     m_pagesLoading.clear();
@@ -124,6 +129,8 @@ void RemoteFileModel::setQuery(const QString& query) {
         clearAll();
         return;
     }
+
+    ++m_querySerial;
 
     // Reset and load first page so rowCount becomes meaningful.
     beginResetModel();
@@ -317,98 +324,181 @@ void RemoteFileModel::ensurePageLoaded(quint32 pageIndex) const {
     if (m_pages.contains(pageIndex)) return;
     if (m_pagesLoading.contains(pageIndex)) return;
 
+    auto* self = const_cast<RemoteFileModel*>(this);
+
     m_pagesLoading.insert(pageIndex);
 
     const quint32 offset = pageIndex * kPageSize;
     const quint32 limit  = kPageSize;
 
-    QString err;
-    auto sr = m_client->search(m_query, m_deviceIds, m_sortKey, m_sortDir, offset, limit, {}, &err);
-    if (!sr) {
-        m_pagesLoading.remove(pageIndex);
+    const quint64 serial = m_querySerial;
 
-        if (!m_pagesFailed.contains(pageIndex)) {
-            m_pagesFailed.insert(pageIndex);
-
-            const QString msg = err.trimmed().isEmpty()
-                ? QStringLiteral("Failed to fetch results from daemon • live updates paused")
-                : (QStringLiteral("Daemon error: ") + err);
-
-            Q_EMIT const_cast<RemoteFileModel*>(this)->transientError(msg);
-        }
-
-        return;
+    // Start timing only once per serial (page 0 is what we care about for status)
+    if (pageIndex == 0 && !m_searchStartNsBySerial.contains(serial)) {
+        const auto now = std::chrono::steady_clock::now().time_since_epoch();
+        const qint64 nowNs = static_cast<qint64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
+        );
+        m_searchStartNsBySerial.insert(serial, nowNs);
     }
 
-    m_totalHits = sr->totalHits;
+    auto* watcher = new QDBusPendingCallWatcher(
+        m_client->searchAsync(m_query, m_deviceIds, m_sortKey, m_sortDir, offset, limit, {}),
+        self
+    );
 
-    QVector<Row> parsed;
-    parsed.reserve(sr->rows.size());
+    QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
+                     self,
+                     [this, self, watcher, pageIndex, serial]() {
+        watcher->deleteLater();
 
-    // Collect dirIds per device to resolve in batches
-    QHash<QString, QSet<quint32>> toResolve;
-
-    for (const auto& item : sr->rows) {
-        QString parseErr;
-        auto rowOpt = parseRow(item, &parseErr);
-        if (!rowOpt) {
-            continue;
+        // Drop stale replies (query changed while call was in-flight)
+        if (serial != m_querySerial) {
+            m_pagesLoading.remove(pageIndex);
+            return;
         }
 
-        Row r = *rowOpt;
-        parsed.push_back(r);
+        // Search reply is (t, av) => <qulonglong, QVariantList>
+        QDBusPendingReply<qulonglong, QVariantList> reply = *watcher;
+        if (!reply.isValid()) {
+            m_pagesLoading.remove(pageIndex);
 
-        if (!m_dirCache[r.deviceId].contains(r.dirId)) {
-            toResolve[r.deviceId].insert(r.dirId);
-        }
-    }
-
-    m_pages.insert(pageIndex, std::move(parsed));
-
-    // Resolve directory paths per device (path pooling)
-    for (auto it = toResolve.begin(); it != toResolve.end(); ++it) {
-        const QString deviceId = it.key();
-        const QList<quint32> dirIds = it.value().values();
-
-        QString err2;
-        auto pairs = m_client->resolveDirectories(deviceId, dirIds, &err2);
-        if (!pairs) {
-            // Not fatal; keep placeholders. Surface a one-shot message for this page.
             if (!m_pagesFailed.contains(pageIndex)) {
                 m_pagesFailed.insert(pageIndex);
-
-                const QString msg = err2.trimmed().isEmpty()
-                    ? QStringLiteral("Failed to resolve paths from daemon • live updates paused")
-                    : (QStringLiteral("Daemon error: ") + err2);
-
-                Q_EMIT const_cast<RemoteFileModel*>(this)->transientError(msg);
+                const QString msg = QStringLiteral("Daemon error: ") + reply.error().message();
+                Q_EMIT self->transientError(msg);
             }
-            continue;
+            return;
         }
 
-        for (const auto& p : *pairs) {
-            const QVariant pv = unwrapDbusVariant(p);
+        const quint64 totalHits = static_cast<quint64>(reply.argumentAt<0>());
+        const QVariantList rowsList = reply.argumentAt<1>();
 
-            if (pv.canConvert<QDBusArgument>()) {
-                quint32 dirId = 0;
-                QString path;
-                if (decodeDirPairFromDbusArgument(qvariant_cast<QDBusArgument>(pv), dirId, path)) {
-                    m_dirCache[deviceId].insert(dirId, path);
+        QVector<Row> parsed;
+        parsed.reserve(rowsList.size());
+
+        QHash<QString, QSet<quint32>> toResolve;
+
+        for (const auto& item : rowsList) {
+            QString parseErr;
+            auto rowOpt = parseRow(item, &parseErr);
+            if (!rowOpt) continue;
+
+            Row r = *rowOpt;
+            parsed.push_back(r);
+
+            if (!m_dirCache[r.deviceId].contains(r.dirId)) {
+                toResolve[r.deviceId].insert(r.dirId);
+            }
+        }
+
+        const quint64 oldTotal = m_totalHits;
+        m_totalHits = totalHits;
+        m_pages.insert(pageIndex, std::move(parsed));
+        m_pagesLoading.remove(pageIndex);
+
+        // Update the view:
+        // Avoid a full model reset here (it contributes to the “flicker” feeling).
+        // We still need the view to notice rowCount may have changed.
+        if (oldTotal != m_totalHits) {
+            Q_EMIT self->layoutChanged();
+        }
+
+        {
+            const int startRow = static_cast<int>(pageIndex * kPageSize);
+            const auto pit = m_pages.find(pageIndex);
+            const int count = (pit == m_pages.end()) ? 0 : pit.value().size();
+            if (count > 0) {
+                const QModelIndex topLeft = self->index(startRow, 0);
+                const QModelIndex bottomRight = self->index(startRow + count - 1, 3);
+                Q_EMIT self->dataChanged(topLeft, bottomRight, {Qt::DisplayRole});
+            }
+        }
+
+        // Emit Option B status update when page 0 arrives
+        if (pageIndex == 0) {
+            const auto now = std::chrono::steady_clock::now().time_since_epoch();
+            const qint64 nowNs = static_cast<qint64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
+            );
+
+            double elapsed = 0.0;
+            const auto it = m_searchStartNsBySerial.find(serial);
+            if (it != m_searchStartNsBySerial.end()) {
+                elapsed = static_cast<double>(nowNs - it.value()) / 1e9;
+                m_searchStartNsBySerial.erase(it);
+            }
+
+            Q_EMIT self->searchCompleted(m_totalHits, elapsed);
+        }
+
+        // Async resolve directories (path column fill-in)
+        if (toResolve.isEmpty()) return;
+
+        auto pending = std::make_shared<int>(toResolve.size());
+
+        for (auto it = toResolve.begin(); it != toResolve.end(); ++it) {
+            const QString deviceId = it.key();
+            const QList<quint32> dirIds = it.value().values();
+
+            auto* w2 = new QDBusPendingCallWatcher(
+                m_client->resolveDirectoriesAsync(deviceId, dirIds),
+                self
+            );
+
+            QObject::connect(w2, &QDBusPendingCallWatcher::finished,
+                             self,
+                             [this, self, w2, deviceId, pageIndex, serial, pending]() {
+                w2->deleteLater();
+
+                if (serial != m_querySerial) {
+                    (*pending)--;
+                    return;
                 }
-                continue;
-            }
 
-            // Fallback if it arrives as a list
-            const QVariantList pair = pv.toList();
-            if (pair.size() != 2) continue;
+                // ResolveDirectories reply is (av) => <QVariantList>
+                QDBusPendingReply<QVariantList> rep2 = *w2;
+                if (rep2.isValid()) {
+                    const QVariantList pairs = rep2.argumentAt<0>();
 
-            const quint32 dirId = unwrapDbusVariant(pair[0]).toUInt();
-            const QString path = unwrapDbusVariant(pair[1]).toString();
-            m_dirCache[deviceId].insert(dirId, path);
+                    for (const auto& p : pairs) {
+                        const QVariant pv = p.canConvert<QDBusVariant>()
+                            ? qvariant_cast<QDBusVariant>(p).variant()
+                            : p;
+
+                        if (pv.canConvert<QDBusArgument>()) {
+                            quint32 dirId = 0;
+                            QString path;
+                            if (decodeDirPairFromDbusArgument(qvariant_cast<QDBusArgument>(pv), dirId, path)) {
+                                m_dirCache[deviceId].insert(dirId, path);
+                            }
+                        } else {
+                            const QVariantList pair = pv.toList();
+                            if (pair.size() == 2) {
+                                const quint32 dirId = pair[0].toUInt();
+                                const QString path = pair[1].toString();
+                                m_dirCache[deviceId].insert(dirId, path);
+                            }
+                        }
+                    }
+                }
+
+                (*pending)--;
+
+                // Update only the Path column for this page
+                if (*pending <= 0) {
+                    const int startRow = static_cast<int>(pageIndex * kPageSize);
+                    const auto pit = m_pages.find(pageIndex);
+                    const int count = (pit == m_pages.end()) ? 0 : pit.value().size();
+                    if (count > 0) {
+                        const QModelIndex topLeft = self->index(startRow, 1);
+                        const QModelIndex bottomRight = self->index(startRow + count - 1, 1);
+                        Q_EMIT self->dataChanged(topLeft, bottomRight, {Qt::DisplayRole});
+                    }
+                }
+            });
         }
-    }
-
-    m_pagesLoading.remove(pageIndex);
+    });
 }
 
 QVariant RemoteFileModel::data(const QModelIndex& index, int role) const {

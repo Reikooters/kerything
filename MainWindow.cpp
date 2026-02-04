@@ -268,6 +268,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 statusBar()->showMessage(msg, 5000);
             });
 
+            // Update baseline status with search results count from daemon when search completes
+            connect(remoteModel, &RemoteFileModel::searchCompleted, this,
+                    [this](quint64 totalHits, double elapsedSeconds) {
+                        showBaselineStatus(
+                            QString("%L1 objects found (daemon) in %2s")
+                                .arg(totalHits)
+                                .arg(elapsedSeconds, 0, 'f', 4)
+                        );
+                    });
+
             tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
             remoteModel->setSort(0, Qt::AscendingOrder);
 
@@ -1477,19 +1487,8 @@ std::vector<uint32_t> MainWindow::performTrigramSearch(const std::string& query)
 
 void MainWindow::updateSearch(const QString &text) {
     if (m_useDaemonSearch && remoteModel) {
-        auto start = std::chrono::steady_clock::now();
-
         remoteModel->setQuery(text);
-
-        auto end = std::chrono::steady_clock::now();
-        std::chrono::duration<double> elapsed = end - start;
-
-        showBaselineStatus(
-            QString("%L1 objects found (daemon) in %2s")
-                .arg(remoteModel->totalHits())
-                .arg(elapsed.count(), 0, 'f', 4)
-        );
-        return;
+        return; // status will update on RemoteFileModel::searchCompleted
     }
 
     // Local search

@@ -863,7 +863,7 @@ QVariant RemoteFileModel::data(const QModelIndex& index, int role) const {
             if (r.flags & kFlagIsDir) return QStringLiteral("<DIR>");
             return QLocale().toString(static_cast<qlonglong>(r.size));
         case 3: {
-            if (r.mtime <= 0) return QStringLiteral("invalid-time");
+            if (r.mtime < 0) return QStringLiteral("invalid-time");
             // const QDateTime dt = QDateTime::fromSecsSinceEpoch(r.mtime);
             // return QLocale().toString(dt, QLocale::ShortFormat);
             return QString::fromStdString(GuiUtils::uint64ToFormattedTime(r.mtime));

@@ -362,7 +362,16 @@ void SettingsDialog::onForgetClicked() {
     }
 
     m_status->setText(QStringLiteral("Index forgotten."));
+
+    // Refresh the list and clear selection so action buttons don't remain enabled
+    // for a row that no longer exists / is no longer indexed.
     refresh();
+
+    if (m_tree) {
+        m_tree->clearSelection();
+        m_tree->setCurrentItem(nullptr);
+    }
+    onSelectionChanged();
 }
 
 void SettingsDialog::onCancelClicked() {

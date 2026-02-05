@@ -353,7 +353,11 @@ void RemoteFileModel::ensurePageLoaded(quint32 pageIndex) const {
     if (m_pagesLoading.contains(pageIndex)) return;
 
     // Coalesce: record intent, let dispatcher decide when to actually fire requests.
+    // Also prefetch neighbors for a more “Everything-like” feel during fast scroll/jumps.
     m_pagesWanted.insert(pageIndex);
+    if (pageIndex > 0) m_pagesWanted.insert(pageIndex - 1);
+    m_pagesWanted.insert(pageIndex + 1);
+
     m_lastWantedPage = pageIndex;
     scheduleDispatch();
 }
@@ -375,17 +379,27 @@ void RemoteFileModel::dispatchPendingLoads() const {
     if (m_offline) return;
     if (!m_client) return;
 
+    auto pickClosestWanted = [&]() -> quint32 {
+        // Prefer the page nearest to the most recently requested page.
+        quint32 best = *m_pagesWanted.constBegin();
+        quint32 bestDist = (best > m_lastWantedPage) ? (best - m_lastWantedPage) : (m_lastWantedPage - best);
+
+        for (auto it = m_pagesWanted.constBegin(); it != m_pagesWanted.constEnd(); ++it) {
+            const quint32 p = *it;
+            const quint32 d = (p > m_lastWantedPage) ? (p - m_lastWantedPage) : (m_lastWantedPage - p);
+            if (d < bestDist) {
+                bestDist = d;
+                best = p;
+                if (bestDist == 0) break;
+            }
+        }
+        return best;
+    };
+
     // Start up to N concurrent page loads.
     while (m_inFlightPageLoads < kMaxInFlightPageLoads && !m_pagesWanted.isEmpty()) {
-        // Prefer the most recently requested page (good for thumb dragging),
-        // then expand outward as more requests arrive.
-        quint32 pick = m_lastWantedPage;
-        if (!m_pagesWanted.contains(pick)) {
-            // If lastWanted no longer pending, just take an arbitrary one (QSet iteration).
-            pick = *m_pagesWanted.constBegin();
-        }
+        const quint32 pick = pickClosestWanted();
         m_pagesWanted.remove(pick);
-
         startLoadPage(pick);
     }
 }

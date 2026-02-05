@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QString>
 #include <QTimer>
+#include <QComboBox>
 #include <QtDBus/QDBusServiceWatcher>
 #include <vector>
 #include <string>
@@ -204,6 +205,8 @@ private:
      */
     void refreshDaemonStatusLabel();
 
+    void refreshDeviceScopeCombo();
+
     void updateLegacyPartitionActions();
 
     void showBaselineStatus(const QString& msg);
@@ -221,6 +224,9 @@ private:
     QString m_devicePath;
 
     QLineEdit *searchLine = nullptr;
+    QComboBox* m_deviceScopeCombo = nullptr;
+    QString m_selectedDeviceScopeId; // empty = all devices
+
     QTableView *tableView = nullptr;
 
     FileModel *model = nullptr; // local model

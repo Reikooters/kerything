@@ -26,6 +26,8 @@ public:
     void setOffline(bool offline);
     void invalidate(); // clear cached pages/paths and reload page 0 for current query/sort
 
+    void setDeviceIds(const QStringList& deviceIds);
+
     [[nodiscard]] quint64 totalHits() const { return m_totalHits; }
 
     [[nodiscard]] std::optional<quint64> entryIdAtRow(int row) const;

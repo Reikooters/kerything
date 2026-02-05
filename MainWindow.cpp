@@ -9,6 +9,7 @@
 #include <QMessageBox>
 #include <QContextMenuEvent>
 #include <QMenu>
+#include <QComboBox>
 #include <QMimeData>
 #include <QClipboard>
 #include <QShortcut>
@@ -90,6 +91,35 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Add magnifying glass icon to the search bar
     searchLine->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
 
+    // --- Device Scope + Search Row ---
+    auto* topRow = new QHBoxLayout();
+    layout->addLayout(topRow);
+
+    m_deviceScopeCombo = new QComboBox(centralWidget);
+    m_deviceScopeCombo->setMinimumContentsLength(22);
+    m_deviceScopeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_deviceScopeCombo->setToolTip(QStringLiteral("Limit search to a specific indexed device"));
+    topRow->addWidget(m_deviceScopeCombo);
+
+    topRow->addWidget(searchLine, 1);
+
+    connect(m_deviceScopeCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        if (!m_useDaemonSearch || !remoteModel || !m_deviceScopeCombo) return;
+
+        const QString deviceId = m_deviceScopeCombo->itemData(idx).toString();
+        m_selectedDeviceScopeId = deviceId;
+
+        if (deviceId.isEmpty()) {
+            remoteModel->setDeviceIds({});
+        } else {
+            remoteModel->setDeviceIds(QStringList{deviceId});
+        }
+
+        // Keep the existing query text; just refresh results under the new scope.
+        updateSearch(searchLine ? searchLine->text() : QString());
+    });
+    // --- End Device Scope + Search Row ---
+
     // --- Burger Menu Setup ---
     auto *menu = new QMenu(this);
 
@@ -130,8 +160,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         menu->exec(QCursor::pos());
     });
     // ---------------------
-
-    layout->addWidget(searchLine);
 
     tableView = new QTableView(centralWidget);
     model = new FileModel(this);
@@ -300,6 +328,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
             // Permanent daemon/index summary in the label
             refreshDaemonStatusLabel();
+            refreshDeviceScopeCombo();
 
             // Initial: if nothing is indexed yet, tell the user what to do.
             QString idxErr;
@@ -497,11 +526,85 @@ void MainWindow::refreshDaemonStatusLabel() {
     daemonStatusLabel->setToolTip(tooltipLines.join('\n'));
 }
 
+void MainWindow::refreshDeviceScopeCombo() {
+    if (!m_deviceScopeCombo) return;
+
+    // Only meaningful in daemon mode
+    m_deviceScopeCombo->setVisible(m_useDaemonSearch);
+    if (!m_useDaemonSearch) return;
+
+    if (!m_dbus) {
+        m_deviceScopeCombo->setEnabled(false);
+        m_deviceScopeCombo->clear();
+        m_deviceScopeCombo->addItem(QStringLiteral("All indexed devices"), QString());
+        return;
+    }
+
+    QString err;
+    const auto indexedOpt = m_dbus->listIndexedDevices(&err);
+    if (!indexedOpt) {
+        m_deviceScopeCombo->setEnabled(false);
+        m_deviceScopeCombo->clear();
+        m_deviceScopeCombo->addItem(QStringLiteral("All indexed devices"), QString());
+        return;
+    }
+
+    m_deviceScopeCombo->setEnabled(true);
+
+    const QString prev = m_selectedDeviceScopeId;
+
+    m_deviceScopeCombo->blockSignals(true);
+    m_deviceScopeCombo->clear();
+
+    // Entry 0: all devices (empty deviceId)
+    m_deviceScopeCombo->addItem(QStringLiteral("All indexed devices"), QString());
+
+    int restoreIndex = 0;
+
+    for (const QVariant& v : *indexedOpt) {
+        const QVariantMap m = v.toMap();
+        const QString deviceId = m.value(QStringLiteral("deviceId")).toString();
+        const QString label = m.value(QStringLiteral("label")).toString().trimmed();
+        const QString fsType = m.value(QStringLiteral("fsType")).toString().trimmed();
+
+        QString text;
+        if (!label.isEmpty()) {
+            text = QStringLiteral("%1 (%2)").arg(label, deviceId);
+        } else if (!fsType.isEmpty()) {
+            text = QStringLiteral("%1 (%2)").arg(fsType, deviceId);
+        } else {
+            text = deviceId;
+        }
+
+        m_deviceScopeCombo->addItem(text, deviceId);
+
+        if (!prev.isEmpty() && deviceId == prev) {
+            restoreIndex = m_deviceScopeCombo->count() - 1;
+        }
+    }
+
+    m_deviceScopeCombo->setCurrentIndex(restoreIndex);
+    m_deviceScopeCombo->blockSignals(false);
+
+    // If the previous device no longer exists, revert to "all" and apply filter.
+    const QString now = m_deviceScopeCombo->currentData().toString();
+    m_selectedDeviceScopeId = now;
+
+    if (m_useDaemonSearch && remoteModel) {
+        if (now.isEmpty()) {
+            remoteModel->setDeviceIds({});
+        } else {
+            remoteModel->setDeviceIds(QStringList{now});
+        }
+    }
+}
+
 void MainWindow::onDaemonServiceRegistered(const QString& serviceName) {
     Q_UNUSED(serviceName);
 
-    // Daemon appeared (or restarted). Refresh summary and refresh the current query page.
+    // Daemon appeared (or restarted). Refresh summary, device dropdown and refresh the current query page.
     refreshDaemonStatusLabel();
+    refreshDeviceScopeCombo();
 
     if (m_useDaemonSearch && remoteModel) {
         remoteModel->setOffline(false);
@@ -517,6 +620,11 @@ void MainWindow::onDaemonServiceUnregistered(const QString& serviceName) {
         daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
     }
 
+    // Also disable the device dropdown.
+    if (m_deviceScopeCombo) {
+        m_deviceScopeCombo->setEnabled(false);
+    }
+
     if (m_useDaemonSearch && remoteModel) {
         remoteModel->setOffline(true); // empty table
     }
@@ -529,8 +637,9 @@ void MainWindow::onDeviceIndexUpdated(const QString& deviceId, quint64 generatio
     Q_UNUSED(generation);
     Q_UNUSED(entryCount);
 
-    // Keep the permanent label in sync with daemon state.
+    // Keep the permanent label and device dropdown in sync with daemon state.
     refreshDaemonStatusLabel();
+    refreshDeviceScopeCombo();
 
     if (!(m_useDaemonSearch && remoteModel)) {
         return;
@@ -605,8 +714,9 @@ void MainWindow::openSettings() {
     SettingsDialog dlg(m_dbus.get(), this);
     dlg.exec();
 
-    // After settings changes (new indexing), refresh daemon label + refresh results
+    // After settings changes (new indexing), refresh daemon label and device dropdown + refresh results
     refreshDaemonStatusLabel();
+    refreshDeviceScopeCombo();
     if (m_useDaemonSearch && remoteModel) {
         remoteModel->invalidate();
     }

@@ -128,6 +128,15 @@ void RemoteFileModel::invalidate() {
     ensurePageLoaded(0);
 }
 
+void RemoteFileModel::setDeviceIds(const QStringList& deviceIds) {
+    if (m_deviceIds == deviceIds) return;
+
+    m_deviceIds = deviceIds;
+
+    // Changing scope changes results; treat it like a query change but keep current query string.
+    setQuery(m_query);
+}
+
 void RemoteFileModel::setQuery(const QString& query) {
     m_query = query;
 

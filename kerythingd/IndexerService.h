@@ -253,8 +253,12 @@ private:
     const GlobalOrderCache* globalOrderForUid(quint32 uid, const QString& sortKey) const;
     void rebuildGlobalOrderForUid(quint32 uid, const QString& sortKey) const;
 
+    // Simple warm-up scheduling (no threads): prevents repeated scheduling storms.
+    [[nodiscard]] static QString warmKey(quint32 uid, quint64 epoch, const QString& sortKey);
+
     mutable std::unordered_map<quint32, quint64> m_uidEpoch;
     mutable std::unordered_map<quint32, std::unordered_map<QString, GlobalOrderCache>> m_globalOrderByUid;
+    mutable std::unordered_set<QString> m_globalWarmScheduled;
 
     // --- End: Empty-query global-order cache ---
 

@@ -414,6 +414,16 @@ IndexerService::~IndexerService() {
 void IndexerService::bumpUidEpoch(quint32 uid) const {
     m_uidEpoch[uid] = m_uidEpoch[uid] + 1;
     m_globalOrderByUid.erase(uid); // drop caches; they'll be rebuilt lazily
+
+    // Also drop any queued warm-ups for this uid (epoch changed, so they’re stale anyway).
+    // Keep it simple: linear scan is fine (small set).
+    for (auto it = m_globalWarmScheduled.begin(); it != m_globalWarmScheduled.end(); ) {
+        if (it->startsWith(QStringLiteral("%1:").arg(uid))) {
+            it = m_globalWarmScheduled.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 const IndexerService::GlobalOrderCache* IndexerService::globalOrderForUid(quint32 uid, const QString& sortKey) const {
@@ -525,6 +535,10 @@ void IndexerService::rebuildGlobalOrderForUid(quint32 uid, const QString& sortKe
     }
 
     m_globalOrderByUid[uid][sortKey] = std::move(cache);
+}
+
+QString IndexerService::warmKey(quint32 uid, quint64 epoch, const QString& sortKey) {
+    return QStringLiteral("%1:%2:%3").arg(uid).arg(epoch).arg(sortKey);
 }
 
 // --- End: Empty-query global-order cache ---
@@ -1397,6 +1411,35 @@ void IndexerService::Search(const QString& query,
                                        (static_cast<quint64>(offset) >= (totalAll / 4ULL));
 
             const bool shouldUseCache = farByOffset || farByFraction;
+
+            // ---- Opportunistic warm-up for the common initial empty-query page ----
+            // Goal: after daemon restart, the *first big jump* becomes instant without adding threads.
+            if (offset == 0 && totalAll >= 1'000'000ULL) {
+                const quint64 epoch = m_uidEpoch.contains(uid) ? m_uidEpoch.at(uid) : 0;
+                const QString wk = warmKey(uid, epoch, key);
+
+                // Only schedule if cache is missing and we haven’t already queued it for this epoch.
+                if (!globalOrderForUid(uid, key) && !m_globalWarmScheduled.contains(wk)) {
+                    m_globalWarmScheduled.insert(wk);
+
+                    // Defer build until after we return this D-Bus reply.
+                    QTimer::singleShot(0, const_cast<IndexerService*>(this), [this, uid, key, epoch, wk]() {
+                        // If indexes changed since scheduling, skip.
+                        const quint64 curEpoch = m_uidEpoch.contains(uid) ? m_uidEpoch.at(uid) : 0;
+                        if (curEpoch != epoch) {
+                            m_globalWarmScheduled.erase(wk);
+                            return;
+                        }
+
+                        // If somebody already built it, nothing to do.
+                        if (!globalOrderForUid(uid, key)) {
+                            rebuildGlobalOrderForUid(uid, key);
+                        }
+
+                        m_globalWarmScheduled.erase(wk);
+                    });
+                }
+            }
 
             if (shouldUseCache) {
                 const auto* cache = globalOrderForUid(uid, key);

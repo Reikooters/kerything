@@ -236,6 +236,28 @@ private:
         mutable std::unordered_map<quint32, QString> dirPathCache;
     };
 
+    // --- Begin: Empty-query global-order cache (for fast jump paging) ---
+
+    struct GlobalOrderEntry {
+        QString deviceId;
+        quint32 recordIdx = 0;
+    };
+
+    struct GlobalOrderCache {
+        quint64 epoch = 0;                 // invalidated when indexes change for that uid
+        QString sortKey;                   // "name"/"path"/"size"/"mtime"
+        std::vector<GlobalOrderEntry> asc; // ascending global order (all devices)
+    };
+
+    void bumpUidEpoch(quint32 uid) const;
+    const GlobalOrderCache* globalOrderForUid(quint32 uid, const QString& sortKey) const;
+    void rebuildGlobalOrderForUid(quint32 uid, const QString& sortKey) const;
+
+    mutable std::unordered_map<quint32, quint64> m_uidEpoch;
+    mutable std::unordered_map<quint32, std::unordered_map<QString, GlobalOrderCache>> m_globalOrderByUid;
+
+    // --- End: Empty-query global-order cache ---
+
     struct Job {
         enum class State : quint8 { Running, Cancelling };
 

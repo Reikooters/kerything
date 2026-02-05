@@ -91,7 +91,7 @@ private:
     mutable QSet<quint32> m_pagesFailed;          // avoid spamming the same error
 
     // Coalescing state (prevents request storms during fast scroll/drag)
-    static constexpr int kMaxInFlightPageLoads = 2;
+    static constexpr int kMaxInFlightPageLoads = 4;
     mutable QSet<quint32> m_pagesWanted;
     mutable int m_inFlightPageLoads = 0;
     mutable bool m_dispatchScheduled = false;

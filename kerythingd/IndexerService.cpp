@@ -409,6 +409,126 @@ IndexerService::~IndexerService() {
     m_jobs.clear();
 }
 
+// --- Begin: Empty-query global-order cache ---
+
+void IndexerService::bumpUidEpoch(quint32 uid) const {
+    m_uidEpoch[uid] = m_uidEpoch[uid] + 1;
+    m_globalOrderByUid.erase(uid); // drop caches; they'll be rebuilt lazily
+}
+
+const IndexerService::GlobalOrderCache* IndexerService::globalOrderForUid(quint32 uid, const QString& sortKey) const {
+    const quint64 epoch = m_uidEpoch.contains(uid) ? m_uidEpoch.at(uid) : 0;
+
+    auto uIt = m_globalOrderByUid.find(uid);
+    if (uIt == m_globalOrderByUid.end()) return nullptr;
+
+    auto cIt = uIt->second.find(sortKey);
+    if (cIt == uIt->second.end()) return nullptr;
+
+    const GlobalOrderCache& c = cIt->second;
+    if (c.epoch != epoch) return nullptr;
+    if (c.asc.empty()) return nullptr;
+    return &c;
+}
+
+void IndexerService::rebuildGlobalOrderForUid(quint32 uid, const QString& sortKey) const {
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return;
+
+    const auto& indexes = uidIt->second;
+    const quint64 epoch = m_uidEpoch.contains(uid) ? m_uidEpoch.at(uid) : 0;
+
+    auto pickOrder = [&](const DeviceIndex& idx) -> const std::vector<quint32>* {
+        if (sortKey.compare(QStringLiteral("size"), Qt::CaseInsensitive) == 0) return &idx.orderBySize;
+        if (sortKey.compare(QStringLiteral("mtime"), Qt::CaseInsensitive) == 0) return &idx.orderByMtime;
+        if (sortKey.compare(QStringLiteral("path"), Qt::CaseInsensitive) == 0) return &idx.orderByPath;
+        return &idx.orderByName;
+    };
+
+    struct Cursor {
+        const QString* deviceId = nullptr;
+        const DeviceIndex* idx = nullptr;
+        const std::vector<quint32>* order = nullptr;
+        quint32 pos = 0;
+    };
+
+    std::vector<Cursor> cursors;
+    cursors.reserve(indexes.size());
+
+    quint64 total = 0;
+    for (const auto& kv : indexes) {
+        const auto* ord = pickOrder(kv.second);
+        if (!ord || ord->empty()) continue;
+
+        total += static_cast<quint64>(ord->size());
+
+        Cursor c;
+        c.deviceId = &kv.first;
+        c.idx = &kv.second;
+        c.order = ord;
+        c.pos = 0;
+        cursors.push_back(c);
+    }
+
+    if (total == 0 || cursors.empty()) return;
+
+    auto nameView = [&](const DeviceIndex& idx, quint32 recIdx) -> std::string_view {
+        const auto& r = idx.records[recIdx];
+        return std::string_view(idx.stringPool.data() + r.nameOffset, r.nameLen);
+    };
+
+    // NOTE: priority_queue is max-heap; comparator returns "a is worse than b" for min-heap behavior.
+    auto lessNode = [&](const Cursor& a, const Cursor& b) {
+        const quint32 ai = (*a.order)[a.pos];
+        const quint32 bi = (*b.order)[b.pos];
+
+        if (sortKey.compare(QStringLiteral("size"), Qt::CaseInsensitive) == 0) {
+            const auto sa = a.idx->records[ai].size;
+            const auto sb = b.idx->records[bi].size;
+            if (sa != sb) return sa > sb;
+        } else if (sortKey.compare(QStringLiteral("mtime"), Qt::CaseInsensitive) == 0) {
+            const auto ta = a.idx->records[ai].modificationTime;
+            const auto tb = b.idx->records[bi].modificationTime;
+            if (ta != tb) return ta > tb;
+        } else if (sortKey.compare(QStringLiteral("path"), Qt::CaseInsensitive) == 0) {
+            const auto pa = a.idx->records[ai].parentRecordIdx;
+            const auto pb = b.idx->records[bi].parentRecordIdx;
+            if (pa != pb) return pa > pb;
+        }
+
+        const int c = ciCompareBytes(nameView(*a.idx, ai), nameView(*b.idx, bi));
+        if (c != 0) return c > 0;
+
+        if (*a.deviceId != *b.deviceId) return *a.deviceId > *b.deviceId;
+        return ai > bi;
+    };
+
+    std::priority_queue<Cursor, std::vector<Cursor>, decltype(lessNode)> pq(lessNode);
+    for (const auto& c : cursors) pq.push(c);
+
+    GlobalOrderCache cache;
+    cache.epoch = epoch;
+    cache.sortKey = sortKey;
+    cache.asc.reserve(static_cast<size_t>(total));
+
+    while (!pq.empty()) {
+        Cursor cur = pq.top();
+        pq.pop();
+
+        const quint32 recIdx = (*cur.order)[cur.pos];
+        cache.asc.push_back(GlobalOrderEntry{*cur.deviceId, recIdx});
+
+        ++cur.pos;
+        if (cur.pos < cur.order->size()) {
+            pq.push(cur);
+        }
+    }
+
+    m_globalOrderByUid[uid][sortKey] = std::move(cache);
+}
+
+// --- End: Empty-query global-order cache ---
+
 // --- Begin: Persistence helpers ---
 
 quint32 IndexerService::callerUidOr0() const {
@@ -1127,6 +1247,9 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
                         buildTrigramIndex(idx);
                         buildSortOrders(idx);
 
+                        // Invalidate any cached global search orders for this uid (empty-query paging).
+                        bumpUidEpoch(j.ownerUid);
+
                         // Set lastIndexedTime only when we successfully persist the snapshot.
                         idx.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
 
@@ -1253,6 +1376,85 @@ void IndexerService::Search(const QString& query,
 
     // ---- Fast path: empty query ----
     if (tokens.isEmpty()) {
+        // If no device filter, use cached global order for O(limit) paging.
+        const QString key = sortKey.isEmpty() ? QStringLiteral("name") : sortKey.toLower();
+
+        if (deviceIds.isEmpty()) {
+            // Heuristic: only build global-order cache when the user is paging far enough down
+            // that the old O(offset) merge-walk becomes expensive.
+            quint64 totalAll = 0;
+            for (const auto& kv : indexes) {
+                totalAll += static_cast<quint64>(kv.second.records.size());
+            }
+            totalHitsOut = totalAll;
+
+            if (limit == 0 || totalAll == 0) return;
+
+            static constexpr quint64 kCacheOffsetThreshold = 100'000ULL;
+
+            const bool farByOffset = static_cast<quint64>(offset) >= kCacheOffsetThreshold;
+            const bool farByFraction = (totalAll >= 1'000'000ULL) &&
+                                       (static_cast<quint64>(offset) >= (totalAll / 4ULL));
+
+            const bool shouldUseCache = farByOffset || farByFraction;
+
+            if (shouldUseCache) {
+                const auto* cache = globalOrderForUid(uid, key);
+                if (!cache) {
+                    rebuildGlobalOrderForUid(uid, key);
+                    cache = globalOrderForUid(uid, key);
+                }
+
+                if (cache) {
+                    // Override totalHitsOut with cached size (should match totalAll, but cache is authoritative here)
+                    totalHitsOut = static_cast<quint64>(cache->asc.size());
+
+                    const quint64 start = static_cast<quint64>(offset);
+                    const quint64 end = std::min(start + static_cast<quint64>(limit), totalHitsOut);
+                    if (start >= end) return;
+
+                    rowsOut.reserve(static_cast<int>(end - start));
+
+                    // Re-find uidIt (safe; but cheap) for device lookup
+                    auto uidIt2 = m_indexesByUid.find(uid);
+                    if (uidIt2 == m_indexesByUid.end()) return;
+
+                    for (quint64 i = start; i < end; ++i) {
+                        const quint64 idxPos = desc ? (totalHitsOut - 1 - i) : i;
+                        const auto& e = cache->asc[static_cast<size_t>(idxPos)];
+
+                        auto devIt = uidIt2->second.find(e.deviceId);
+                        if (devIt == uidIt2->second.end()) continue;
+
+                        const DeviceIndex& devIdx = devIt->second;
+                        if (e.recordIdx >= devIdx.records.size()) continue;
+
+                        const auto& r = devIdx.records[e.recordIdx];
+                        std::string_view nm(devIdx.stringPool.data() + r.nameOffset, r.nameLen);
+
+                        const quint64 entryId = makeEntryId(e.deviceId, e.recordIdx);
+                        const quint32 flags = (r.isDir ? kFlagIsDir : 0u) | (r.isSymlink ? kFlagIsSymlink : 0u);
+
+                        QVariantList row;
+                        row.reserve(7);
+                        row << QVariant::fromValue(entryId)
+                            << QVariant::fromValue(e.deviceId)
+                            << QVariant::fromValue(QString::fromUtf8(nm.data(), static_cast<int>(nm.size())))
+                            << QVariant::fromValue(r.parentRecordIdx)
+                            << QVariant::fromValue(static_cast<quint64>(r.size))
+                            << QVariant::fromValue(static_cast<qint64>(r.modificationTime))
+                            << QVariant::fromValue(flags);
+
+                        rowsOut.push_back(row);
+                    }
+                    return;
+                }
+            }
+
+            // If heuristic says "not far" OR cache wasn't available, fall through to old merge path below.
+        }
+
+        // Fallback: old merge behavior (used when deviceIds filter is active, or cache rebuild failed)
         quint64 total = 0;
 
         struct Cursor {
@@ -1800,6 +2002,9 @@ void IndexerService::ForgetIndex(const QString& deviceId) {
         // Not an error: idempotent
         return;
     }
+
+    // Invalidate cached global search orders for this uid.
+    bumpUidEpoch(uid);
 
     Q_EMIT DeviceIndexRemoved(deviceId);
 }

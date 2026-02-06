@@ -1618,7 +1618,7 @@ void IndexerService::Search(const QString& query,
     struct DeviceHits {
         const QString* deviceId = nullptr;
         const DeviceIndex* idx = nullptr;
-        std::vector<quint32> hits; // recordIdx, sorted by rank
+        std::vector<quint32> hits; // recordIdx, sorted by rank (ascending)
     };
 
     auto pickRank = [&](const DeviceIndex& idx) -> const std::vector<quint32>& {
@@ -1718,15 +1718,24 @@ void IndexerService::Search(const QString& query,
     // k-way merge across devices for the requested page
     struct Node {
         size_t devIdx = 0;
-        quint32 pos = 0;
+        quint32 pos = 0; // position within that device's logical stream (asc or desc)
+    };
+
+    auto hitAt = [&](const DeviceHits& dh, quint32 pos) -> quint32 {
+        // dh.hits is always stored ascending by rank.
+        if (!desc) {
+            return dh.hits[pos];
+        }
+        const size_t n = dh.hits.size();
+        return dh.hits[(n - 1u) - static_cast<size_t>(pos)];
     };
 
     auto nodeLess = [&](const Node& a, const Node& b) {
         const DeviceHits& da = perDev[a.devIdx];
         const DeviceHits& db = perDev[b.devIdx];
 
-        const quint32 ra = da.hits[a.pos];
-        const quint32 rb = db.hits[b.pos];
+        const quint32 ra = hitAt(da, a.pos);
+        const quint32 rb = hitAt(db, b.pos);
 
         const auto& rankA = pickRank(*da.idx);
         const auto& rankB = pickRank(*db.idx);
@@ -1735,10 +1744,8 @@ void IndexerService::Search(const QString& query,
         const quint32 ka = rankA[ra];
         const quint32 kb = rankB[rb];
 
-        if (ka != kb) {
-            // priority_queue is max-heap; we invert comparisons accordingly
-            return desc ? (ka < kb) : (ka > kb);
-        }
+        // priority_queue is max-heap; return true when "a should come after b"
+        if (ka != kb) return ka > kb;
 
         // tie-breakers for deterministic paging
         if (*da.deviceId != *db.deviceId) {
@@ -1750,7 +1757,9 @@ void IndexerService::Search(const QString& query,
     std::priority_queue<Node, std::vector<Node>, decltype(nodeLess)> pq(nodeLess);
 
     for (size_t i = 0; i < perDev.size(); ++i) {
-        pq.push(Node{i, 0});
+        if (!perDev[i].hits.empty()) {
+            pq.push(Node{i, 0});
+        }
     }
 
     quint64 globalPos = 0;
@@ -1761,7 +1770,7 @@ void IndexerService::Search(const QString& query,
         pq.pop();
 
         DeviceHits& dh = perDev[n.devIdx];
-        const quint32 recIdx = dh.hits[n.pos];
+        const quint32 recIdx = hitAt(dh, n.pos);
         const auto& r = dh.idx->records[recIdx];
 
         if (globalPos >= offset) {
@@ -1786,7 +1795,7 @@ void IndexerService::Search(const QString& query,
         ++globalPos;
 
         ++n.pos;
-        if (n.pos < dh.hits.size()) {
+        if (n.pos < static_cast<quint32>(dh.hits.size())) {
             pq.push(n);
         }
     }

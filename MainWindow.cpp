@@ -22,6 +22,7 @@
 #include <QPainter>
 #include <QDateTime>
 #include <QLocale>
+#include <QSettings>
 #include <QtDBus/QDBusConnection>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
@@ -81,6 +82,9 @@ namespace {
 }
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+    // Restore persisted UI preferences (e.g. device scope selection).
+    loadUiSettings();
+
     auto *centralWidget = new QWidget(this);
     auto *layout = new QVBoxLayout(centralWidget);
 
@@ -108,6 +112,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
         const QString deviceId = m_deviceScopeCombo->itemData(idx).toString();
         m_selectedDeviceScopeId = deviceId;
+
+        saveUiSettings();
 
         if (deviceId.isEmpty()) {
             remoteModel->setDeviceIds({});
@@ -471,6 +477,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         // We use a QTimer to call it after the window is shown
         QTimer::singleShot(0, this, &MainWindow::changePartition);
     }
+}
+
+void MainWindow::loadUiSettings() {
+    QSettings s;
+    s.beginGroup(QStringLiteral("ui"));
+    m_selectedDeviceScopeId = s.value(QStringLiteral("deviceScopeDeviceId"), QString()).toString();
+    s.endGroup();
+}
+
+void MainWindow::saveUiSettings() const {
+    QSettings s;
+    s.beginGroup(QStringLiteral("ui"));
+    s.setValue(QStringLiteral("deviceScopeDeviceId"), m_selectedDeviceScopeId);
+    s.endGroup();
 }
 
 void MainWindow::refreshDaemonStatusLabel() {

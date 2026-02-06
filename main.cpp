@@ -29,6 +29,11 @@ int main(int argc, char* argv[])
 
     QApplication app(argc, argv);
 
+    // Make QSettings persistent and predictable.
+    // (Used for UI preferences like device scope selection.)
+    QCoreApplication::setOrganizationName(QStringLiteral("Reikooters"));
+    QCoreApplication::setApplicationName(QStringLiteral("kerything"));
+
     KAboutData aboutData(
         QStringLiteral("kerything"),
         QStringLiteral("Kerything"),

@@ -207,6 +207,9 @@ private:
 
     void refreshDeviceScopeCombo();
 
+    void loadUiSettings();
+    void saveUiSettings() const;
+
     void updateLegacyPartitionActions();
 
     void showBaselineStatus(const QString& msg);

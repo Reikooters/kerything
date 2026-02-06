@@ -122,7 +122,6 @@ SettingsDialog::SettingsDialog(DbusIndexerClient* dbusClient, QWidget* parent)
 
     connectDaemonSignals();
     refresh();
-    onSelectionChanged();
 }
 
 void SettingsDialog::connectDaemonSignals() {
@@ -319,6 +318,8 @@ void SettingsDialog::refresh() {
     }
 
     m_status->setText(QStringLiteral("Loaded %1 device(s).").arg(m_tree->topLevelItemCount()));
+
+    onSelectionChanged();
 }
 
 void SettingsDialog::onSelectionChanged() {

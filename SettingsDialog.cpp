@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QMessageBox>
 #include <QDateTime>
+#include <QSettings>
 #include <QtDBus/QDBusConnection>
 
 #include "DbusIndexerClient.h"
@@ -73,6 +74,29 @@ SettingsDialog::SettingsDialog(DbusIndexerClient* dbusClient, QWidget* parent)
     btnRow->addWidget(m_refreshBtn);
 
     btnRow->addStretch(1);
+
+    // --- UI preference: remember last query ---
+    {
+        m_rememberQueryCheck = new QCheckBox(QStringLiteral("Remember last search query"), this);
+
+        QSettings s;
+        s.beginGroup(QStringLiteral("ui"));
+        m_rememberQueryCheck->setChecked(s.value(QStringLiteral("persistLastQuery"), false).toBool());
+        s.endGroup();
+
+        connect(m_rememberQueryCheck, &QCheckBox::toggled, this, [](bool checked) {
+            QSettings s;
+            s.beginGroup(QStringLiteral("ui"));
+            s.setValue(QStringLiteral("persistLastQuery"), checked);
+            if (!checked) {
+                s.remove(QStringLiteral("lastQueryText"));
+            }
+            s.endGroup();
+        });
+
+        btnRow->addWidget(m_rememberQueryCheck);
+    }
+    // --- end remember last query ---
 
     m_startBtn = new QPushButton(QIcon::fromTheme("system-run"), QStringLiteral("Index / Rescan"), this);
     connect(m_startBtn, &QPushButton::clicked, this, &SettingsDialog::onStartOrRescanClicked);

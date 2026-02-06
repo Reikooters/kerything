@@ -68,6 +68,8 @@ protected:
      */
     bool eventFilter(QObject* watched, QEvent* event) override;
 
+    void closeEvent(QCloseEvent* event) override;
+
 private slots:
     /**
      * @brief Handles the event of a daemon service being registered.
@@ -209,6 +211,7 @@ private:
 
     void loadUiSettings();
     void saveUiSettings() const;
+    void applyPersistedSortToView();
 
     void updateLegacyPartitionActions();
 
@@ -247,6 +250,13 @@ private:
 
     QString m_statusBaseline;
     quint64 m_statusMessageToken = 0;
+
+    int m_sortColumn = 0;
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+
+    // Used for *startup restore* only; the checkbox lives in SettingsDialog (QSettings).
+    bool m_persistLastQuery = false;
+    QString m_initialQueryText;
 };
 
 #endif //KERYTHING_MAINWINDOW_H

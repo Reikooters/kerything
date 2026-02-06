@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QTimer>
+#include <QCheckBox>
 #include <QtDBus/QDBusServiceWatcher>
 #include <memory>
 
@@ -63,6 +64,8 @@ private:
     QPushButton* m_startBtn = nullptr;
     QPushButton* m_forgetBtn = nullptr;
     QPushButton* m_cancelBtn = nullptr;
+
+    QCheckBox* m_rememberQueryCheck = nullptr;
 
     bool m_daemonSignalsConnected = false;
     QDBusServiceWatcher* m_daemonWatcher = nullptr;

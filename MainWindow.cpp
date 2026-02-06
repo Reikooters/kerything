@@ -82,7 +82,7 @@ namespace {
 }
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-    // Restore persisted UI preferences (e.g. device scope selection).
+    // Restore persisted UI preferences (scope, sort, optional last query).
     loadUiSettings();
 
     auto *centralWidget = new QWidget(this);
@@ -182,6 +182,17 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Enable Sorting
     tableView->setSortingEnabled(true);
     tableView->horizontalHeader()->setSortIndicatorShown(true);
+
+    // Persist sort changes
+    connect(tableView->horizontalHeader(), &QHeaderView::sortIndicatorChanged,
+            this, [this](int logicalIndex, Qt::SortOrder order) {
+                m_sortColumn = logicalIndex;
+                m_sortOrder = order;
+
+                // In daemon mode, this will call RemoteFileModel::sort() which calls setSort().
+                // In local mode, QTableView will ask the model to sort() as well.
+                saveUiSettings();
+            });
 
     // Table Styling
     tableView->setAlternatingRowColors(true);
@@ -320,9 +331,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                         );
                     });
 
-            tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
-            remoteModel->setSort(0, Qt::AscendingOrder);
-
             // Listen for index updates to refresh UI hints / counts
             constexpr const char* kPath    = "/net/reikooters/Kerything1";
             constexpr const char* kIface   = "net.reikooters.Kerything1.Indexer";
@@ -344,14 +352,29 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             refreshDaemonStatusLabel();
             refreshDeviceScopeCombo();
 
+            applyPersistedSortToView();
+
+            const QString restored = m_persistLastQuery ? m_initialQueryText : QString();
+            const QString initialQuery = restored.trimmed(); // normalize
+
+            // Apply persisted query (optional) after models exist
+            // If we’re restoring a non-empty query, reflect it in the box and run it.
+            if (!initialQuery.isEmpty()) {
+                searchLine->blockSignals(true);
+                searchLine->setText(initialQuery);
+                searchLine->blockSignals(false);
+            }
+
             // Initial: if nothing is indexed yet, tell the user what to do.
             QString idxErr;
             auto indexedOpt = m_dbus->listIndexedDevices(&idxErr);
             if (indexedOpt && indexedOpt->isEmpty()) {
                 statusBar()->showMessage("No partitions are indexed yet. Use “Change Partition” to index one.", 0);
             } else {
-                // Start with empty query = "everything"
-                updateSearch("");
+                // Run exactly one initial search:
+                // - restored query if present
+                // - otherwise empty query (“everything”)
+                updateSearch(initialQuery);
             }
         } else {
             //daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
@@ -383,6 +406,24 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Connect search bar to our search logic
     connect(searchLine, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
 
+    // Local mode: apply persisted sort + optional query too
+    if (!m_useDaemonSearch) {
+        applyPersistedSortToView();
+
+        const QString restored = m_persistLastQuery ? m_initialQueryText : QString();
+        const QString initialQuery = restored.trimmed();
+
+        if (!initialQuery.isEmpty()) {
+            searchLine->blockSignals(true);
+            searchLine->setText(initialQuery);
+            searchLine->blockSignals(false);
+        }
+
+        // In local mode, an empty query is fine (it means "everything" once a DB exists).
+        // This is a no-op until setDatabase() is called, but keeps behavior consistent.
+        updateSearch(initialQuery);
+    }
+
     // --- Keyboard Navigation (Search Bar focus logic) ---
     // Arrow Up/Down in search line moves focus to table
     // We set the context to Qt::WidgetShortcut so it only triggers when the searchLine has focus
@@ -393,8 +434,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     auto focusTable = [this]() {
         tableView->setFocus();
-        if (tableView->currentIndex().row() < 0 && model->rowCount() > 0) {
-            tableView->setCurrentIndex(model->index(0, 0));
+
+        // Use the active model (remoteModel in daemon mode, FileModel in local mode)
+        // so keyboard navigation works consistently.
+        auto* m = tableView->model();
+        if (!m) return;
+
+        if (tableView->currentIndex().row() < 0 && m->rowCount() > 0) {
+            tableView->setCurrentIndex(m->index(0, 0));
         }
     };
     connect(downToTable, &QShortcut::activated, focusTable);
@@ -462,9 +509,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Handle double-click on item in table view to open file
     connect(tableView, &QTableView::doubleClicked, this, &MainWindow::openFile);
 
-    // Start with a full list, sorted by name ascending
-    tableView->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
-
     updateLegacyPartitionActions();
 
     // Only open partition dialog in local mode
@@ -482,15 +526,70 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 void MainWindow::loadUiSettings() {
     QSettings s;
     s.beginGroup(QStringLiteral("ui"));
+
     m_selectedDeviceScopeId = s.value(QStringLiteral("deviceScopeDeviceId"), QString()).toString();
+
+    m_sortColumn = s.value(QStringLiteral("sortColumn"), 0).toInt();
+    const int sortOrderInt = s.value(QStringLiteral("sortOrder"), static_cast<int>(Qt::AscendingOrder)).toInt();
+    m_sortOrder = (sortOrderInt == static_cast<int>(Qt::DescendingOrder)) ? Qt::DescendingOrder : Qt::AscendingOrder;
+
+    m_persistLastQuery = s.value(QStringLiteral("persistLastQuery"), false).toBool();
+    m_initialQueryText = s.value(QStringLiteral("lastQueryText"), QString()).toString();
+
     s.endGroup();
 }
 
 void MainWindow::saveUiSettings() const {
+    // IMPORTANT:
+    // - The SettingsDialog owns the "persistLastQuery" preference.
+    // - MainWindow should NOT overwrite it on close.
+    // - When deciding whether to store lastQueryText, read the *current* preference.
+
+    bool persistLastQueryNow = false;
+    {
+        QSettings s;
+        s.beginGroup(QStringLiteral("ui"));
+        persistLastQueryNow = s.value(QStringLiteral("persistLastQuery"), false).toBool();
+        s.endGroup();
+    }
+
     QSettings s;
     s.beginGroup(QStringLiteral("ui"));
+
     s.setValue(QStringLiteral("deviceScopeDeviceId"), m_selectedDeviceScopeId);
+    s.setValue(QStringLiteral("sortColumn"), m_sortColumn);
+    s.setValue(QStringLiteral("sortOrder"), static_cast<int>(m_sortOrder));
+
+    // Only persist the query text if the user opted in
+    if (persistLastQueryNow && searchLine) {
+        s.setValue(QStringLiteral("lastQueryText"), searchLine->text());
+    } else {
+        s.remove(QStringLiteral("lastQueryText"));
+    }
+
     s.endGroup();
+}
+
+void MainWindow::applyPersistedSortToView() {
+    if (!tableView || !tableView->horizontalHeader()) return;
+
+    // Clamp to valid columns (4 columns in both local and remote view)
+    const int col = std::clamp(m_sortColumn, 0, 3);
+
+    // Setting the indicator will drive model sorting because sortingEnabled(true)
+    tableView->horizontalHeader()->setSortIndicator(col, m_sortOrder);
+
+    // Also explicitly tell remote model (avoids any “indicator set but model not updated yet” edge cases)
+    if (m_useDaemonSearch && remoteModel) {
+        remoteModel->setSort(col, m_sortOrder);
+    } else if (!m_useDaemonSearch && model) {
+        model->sort(col, m_sortOrder);
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    saveUiSettings();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::refreshDaemonStatusLabel() {
@@ -851,6 +950,9 @@ void MainWindow::openSettings() {
 
     SettingsDialog dlg(m_dbus.get(), this);
     dlg.exec();
+
+    // Reload UI settings because the dialog can change them (e.g. persistLastQuery).
+    loadUiSettings();
 
     // After settings changes (new indexing), refresh daemon label and device dropdown + refresh results
     refreshDaemonStatusLabel();

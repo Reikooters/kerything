@@ -221,6 +221,12 @@ private:
     void loadWindowPlacement();
     void saveWindowPlacement() const;
 
+    // --- Table header (column width/state) persistence ---
+    void loadTableHeaderState();
+    void scheduleSaveTableHeaderState();
+    void saveTableHeaderState() const;
+    // --- end table header persistence ---
+
     void updateLegacyPartitionActions();
 
     void showBaselineStatus(const QString& msg);
@@ -269,6 +275,10 @@ private:
     QRect m_lastNormalGeometry;                 // last geometry when NOT maximized/fullscreen
     Qt::WindowStates m_lastWindowState = {};    // to detect transitions
     bool m_initialPlacementApplied = false;     // enforce geometry once after first show
+
+    // Header save debounce + guard to avoid saving during restore
+    QTimer* m_tableHeaderSaveDebounceTimer = nullptr;
+    bool m_restoringTableHeaderState = false;
 };
 
 #endif //KERYTHING_MAINWINDOW_H

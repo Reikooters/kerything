@@ -228,11 +228,29 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     tableView->horizontalHeader()->setStretchLastSection(true);
     tableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
-    // Set reasonable default column widths
+    // Set reasonable default column widths (used when there is no saved header state yet)
     tableView->setColumnWidth(0, 375); // Name
     tableView->setColumnWidth(1, 525); // Path
     tableView->setColumnWidth(2, 100); // Size
     // Column 3 (Date) will take the remaining space due to stretchLastSection
+
+    // Restore user-customized column widths (and other header state) after defaults are in place
+    loadTableHeaderState();
+
+    // Save column widths/state when the user resizes/moves sections (debounced)
+    if (auto* hdr = tableView->horizontalHeader()) {
+        connect(hdr, &QHeaderView::sectionResized, this,
+                [this](int, int, int) {
+                    if (m_restoringTableHeaderState) return;
+                    scheduleSaveTableHeaderState();
+                });
+
+        connect(hdr, &QHeaderView::sectionMoved, this,
+                [this](int, int, int) {
+                    if (m_restoringTableHeaderState) return;
+                    scheduleSaveTableHeaderState();
+                });
+    }
 
     layout->addWidget(tableView);
 
@@ -637,7 +655,7 @@ void MainWindow::loadWindowPlacement() {
     // 3) Seed tracking of normal geometry/state
     m_lastNormalGeometry = normalRect;
 
-    // 4) Apply maximized/fullscreen as *state flags only* (do NOT call show*() here)
+    // 4) Apply maximized/fullscreen flags
     Qt::WindowStates st = windowState();
     st &= ~Qt::WindowFullScreen;
     st &= ~Qt::WindowMaximized;
@@ -677,30 +695,58 @@ void MainWindow::saveWindowPlacement() const {
     s.setValue(QStringLiteral("window/normalH"), g.height());
 }
 
+void MainWindow::loadTableHeaderState() {
+    if (!tableView || !tableView->horizontalHeader()) return;
+
+    QSettings s;
+    s.beginGroup(QStringLiteral("ui/table"));
+    const QByteArray st = s.value(QStringLiteral("headerState")).toByteArray();
+    s.endGroup();
+
+    if (st.isEmpty()) return;
+
+    m_restoringTableHeaderState = true;
+    tableView->horizontalHeader()->restoreState(st);
+    m_restoringTableHeaderState = false;
+}
+
+void MainWindow::scheduleSaveTableHeaderState() {
+    if (!tableView || !tableView->horizontalHeader()) return;
+
+    if (!m_tableHeaderSaveDebounceTimer) {
+        m_tableHeaderSaveDebounceTimer = new QTimer(this);
+        m_tableHeaderSaveDebounceTimer->setSingleShot(true);
+        m_tableHeaderSaveDebounceTimer->setInterval(250);
+        connect(m_tableHeaderSaveDebounceTimer, &QTimer::timeout,
+                this, [this]() { saveTableHeaderState(); });
+    }
+
+    m_tableHeaderSaveDebounceTimer->start();
+}
+
+void MainWindow::saveTableHeaderState() const {
+    if (!tableView || !tableView->horizontalHeader()) return;
+
+    QSettings s;
+    s.beginGroup(QStringLiteral("ui/table"));
+    s.setValue(QStringLiteral("headerState"), tableView->horizontalHeader()->saveState());
+    s.endGroup();
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveUiSettings();
     saveWindowPlacement();
+
+    // Ensure any pending header resize changes are written before exit
+    saveTableHeaderState();
+
     QMainWindow::closeEvent(event);
 }
 
 void MainWindow::changeEvent(QEvent* event) {
     if (event && event->type() == QEvent::WindowStateChange) {
-        const Qt::WindowStates now = windowState();
-        const Qt::WindowStates prev = m_lastWindowState;
-        m_lastWindowState = now;
-
-        const bool wasMax = (prev & Qt::WindowMaximized);
-        const bool isMax  = (now & Qt::WindowMaximized);
-
-        const bool wasFs = (prev & Qt::WindowFullScreen);
-        const bool isFs  = (now & Qt::WindowFullScreen);
-
-        // When leaving maximized/fullscreen, force restore to our remembered normal geometry.
-        if ((wasMax && !isMax) || (wasFs && !isFs)) {
-            if (m_lastNormalGeometry.isValid()) {
-                setGeometry(m_lastNormalGeometry);
-            }
-        }
+        // Window state transition tracking
+        m_lastWindowState = windowState();
     }
 
     // While in normal mode, keep tracking the user's chosen size/position.
@@ -717,9 +763,6 @@ void MainWindow::changeEvent(QEvent* event) {
 void MainWindow::showEvent(QShowEvent* event) {
     QMainWindow::showEvent(event);
 
-    // KWin (and some other WMs) may override geometry on the first show.
-    // Enforce our persisted normal geometry once, *after* the window is shown,
-    // but only when we’re not maximized/fullscreen.
     if (m_initialPlacementApplied) return;
     m_initialPlacementApplied = true;
 

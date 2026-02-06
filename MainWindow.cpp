@@ -23,6 +23,7 @@
 #include <QDateTime>
 #include <QLocale>
 #include <QSettings>
+#include <QScreen>
 #include <QtDBus/QDBusConnection>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
@@ -401,7 +402,17 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
 
     setCentralWidget(centralWidget);
-    resize(1200, 800);
+
+    // Restore window placement after central widget exists.
+    loadWindowPlacement();
+
+    // We don't have toolbars/docks, but this persists their state too.
+    // Safe even if there are none.
+    {
+        QSettings s;
+        const QByteArray st = s.value(QStringLiteral("window/state")).toByteArray();
+        if (!st.isEmpty()) restoreState(st);
+    }
 
     // Connect search bar to our search logic
     connect(searchLine, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
@@ -587,9 +598,134 @@ void MainWindow::applyPersistedSortToView() {
     }
 }
 
+void MainWindow::loadWindowPlacement() {
+    QSettings s;
+
+    const bool wasFullScreen = s.value(QStringLiteral("window/wasFullScreen"), false).toBool();
+    const bool wasMaximized  = s.value(QStringLiteral("window/wasMaximized"), false).toBool();
+
+    // 1) Restore normal geometry
+    const int x = s.value(QStringLiteral("window/normalX"), 40).toInt();
+    const int y = s.value(QStringLiteral("window/normalY"), 40).toInt();
+    const int w = s.value(QStringLiteral("window/normalW"), 1200).toInt();
+    const int h = s.value(QStringLiteral("window/normalH"), 800).toInt();
+
+    QRect normalRect(x, y, std::max(200, w), std::max(200, h));
+
+    // Ensure normal rect is on some screen (handle monitor/layout changes)
+    QRect unionAvail;
+    for (QScreen* sc : QGuiApplication::screens()) {
+        if (!sc) continue;
+        unionAvail = unionAvail.united(sc->availableGeometry());
+    }
+
+    // If the window center is off all available screens, move it onto the primary screen.
+    if (!unionAvail.isNull() && !unionAvail.contains(normalRect.center())) {
+        QScreen* primary = QGuiApplication::primaryScreen();
+        const QRect avail = primary ? primary->availableGeometry() : unionAvail;
+        normalRect.moveTopLeft(QPoint(avail.x() + 40, avail.y() + 40));
+    }
+
+    setGeometry(normalRect);
+
+    // 2) Restore "state" (toolbars/docks etc.). Safe even if none exist.
+    {
+        const QByteArray st = s.value(QStringLiteral("window/state")).toByteArray();
+        if (!st.isEmpty()) restoreState(st);
+    }
+
+    // 3) Seed tracking of normal geometry/state
+    m_lastNormalGeometry = normalRect;
+
+    // 4) Apply maximized/fullscreen as *state flags only* (do NOT call show*() here)
+    Qt::WindowStates st = windowState();
+    st &= ~Qt::WindowFullScreen;
+    st &= ~Qt::WindowMaximized;
+
+    if (wasFullScreen) {
+        st |= Qt::WindowFullScreen;
+    } else if (wasMaximized) {
+        st |= Qt::WindowMaximized;
+    }
+
+    setWindowState(st);
+    m_lastWindowState = st;
+}
+
+void MainWindow::saveWindowPlacement() const {
+    QSettings s;
+
+    // Save state (safe even if none exist)
+    s.setValue(QStringLiteral("window/state"), saveState());
+
+    // Persist "mode"
+    s.setValue(QStringLiteral("window/wasFullScreen"), isFullScreen());
+    s.setValue(QStringLiteral("window/wasMaximized"), isMaximized());
+
+    // Save the normal geometry.
+    // Prefer our tracked normal rect; fallback to current geometry if that’s all we have.
+    QRect g = m_lastNormalGeometry.isValid() ? m_lastNormalGeometry : geometry();
+
+    // If we are currently in a normal state, geometry() is authoritative.
+    if (!isMaximized() && !isFullScreen()) {
+        g = geometry();
+    }
+
+    s.setValue(QStringLiteral("window/normalX"), g.x());
+    s.setValue(QStringLiteral("window/normalY"), g.y());
+    s.setValue(QStringLiteral("window/normalW"), g.width());
+    s.setValue(QStringLiteral("window/normalH"), g.height());
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveUiSettings();
+    saveWindowPlacement();
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    if (event && event->type() == QEvent::WindowStateChange) {
+        const Qt::WindowStates now = windowState();
+        const Qt::WindowStates prev = m_lastWindowState;
+        m_lastWindowState = now;
+
+        const bool wasMax = (prev & Qt::WindowMaximized);
+        const bool isMax  = (now & Qt::WindowMaximized);
+
+        const bool wasFs = (prev & Qt::WindowFullScreen);
+        const bool isFs  = (now & Qt::WindowFullScreen);
+
+        // When leaving maximized/fullscreen, force restore to our remembered normal geometry.
+        if ((wasMax && !isMax) || (wasFs && !isFs)) {
+            if (m_lastNormalGeometry.isValid()) {
+                setGeometry(m_lastNormalGeometry);
+            }
+        }
+    }
+
+    // While in normal mode, keep tracking the user's chosen size/position.
+    if (!isMaximized() && !isFullScreen()) {
+        const QRect g = geometry();
+        if (g.isValid() && g.width() > 200 && g.height() > 200) {
+            m_lastNormalGeometry = g;
+        }
+    }
+
+    QMainWindow::changeEvent(event);
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+    QMainWindow::showEvent(event);
+
+    // KWin (and some other WMs) may override geometry on the first show.
+    // Enforce our persisted normal geometry once, *after* the window is shown,
+    // but only when we’re not maximized/fullscreen.
+    if (m_initialPlacementApplied) return;
+    m_initialPlacementApplied = true;
+
+    if (!isMaximized() && !isFullScreen() && m_lastNormalGeometry.isValid()) {
+        setGeometry(m_lastNormalGeometry);
+    }
 }
 
 void MainWindow::refreshDaemonStatusLabel() {

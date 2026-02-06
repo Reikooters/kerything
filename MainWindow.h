@@ -11,6 +11,7 @@
 #include <QString>
 #include <QTimer>
 #include <QComboBox>
+#include <QRect>
 #include <QtDBus/QDBusServiceWatcher>
 #include <vector>
 #include <string>
@@ -69,6 +70,10 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
     void closeEvent(QCloseEvent* event) override;
+
+    void changeEvent(QEvent* event) override;
+
+    void showEvent(QShowEvent* event) override;
 
 private slots:
     /**
@@ -213,6 +218,9 @@ private:
     void saveUiSettings() const;
     void applyPersistedSortToView();
 
+    void loadWindowPlacement();
+    void saveWindowPlacement() const;
+
     void updateLegacyPartitionActions();
 
     void showBaselineStatus(const QString& msg);
@@ -257,6 +265,10 @@ private:
     // Used for *startup restore* only; the checkbox lives in SettingsDialog (QSettings).
     bool m_persistLastQuery = false;
     QString m_initialQueryText;
+
+    QRect m_lastNormalGeometry;                 // last geometry when NOT maximized/fullscreen
+    Qt::WindowStates m_lastWindowState = {};    // to detect transitions
+    bool m_initialPlacementApplied = false;     // enforce geometry once after first show
 };
 
 #endif //KERYTHING_MAINWINDOW_H

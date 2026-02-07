@@ -37,7 +37,7 @@
 static constexpr quint32 kFlagIsDir = 1u << 0;
 static constexpr quint32 kFlagIsSymlink = 1u << 1;
 
-static constexpr quint32 kSnapshotVersion = 4;
+static constexpr quint32 kSnapshotVersion = 5;
 static constexpr quint64 kSnapshotMagic   = 0x4B4552595448494EULL; // "KERYTHIN" (8 bytes)
 
 static QString lower(QString s) {
@@ -744,6 +744,9 @@ bool IndexerService::saveSnapshot(quint32 uid, const QString& deviceId, const De
     // v2+: lastIndexedTime (unix seconds)
     s << static_cast<qint64>(idx.lastIndexedTime);
 
+    // v5+: watchEnabled (u8)
+    s << static_cast<quint8>(idx.watchEnabled ? 1 : 0);
+
     s << static_cast<quint64>(idx.records.size());
     if (!idx.records.empty()) {
         const auto bytes = static_cast<qint64>(idx.records.size() * sizeof(ScannerEngine::FileRecord));
@@ -815,7 +818,7 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
     quint32 ver = 0;
     s >> magic >> ver;
 
-    if (magic != kSnapshotMagic || (ver != 1 && ver != 2 && ver != 3 && ver != 4)) {
+    if (magic != kSnapshotMagic || (ver != 1 && ver != 2 && ver != 3 && ver != 4 && ver != 5)) {
         if (errorOut) *errorOut = QStringLiteral("Snapshot header/version mismatch.");
         return std::nullopt;
     }
@@ -850,6 +853,16 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
         s >> lastIndexedTime;
     }
 
+    // v5+: watchEnabled
+    bool watchEnabled = true;
+    if (ver >= 5) {
+        quint8 b = 1;
+        s >> b;
+        watchEnabled = (b != 0);
+    } else {
+        watchEnabled = true; // v1-v4 default
+    }
+
     quint64 recordCount = 0;
     s >> recordCount;
 
@@ -863,6 +876,7 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
     idx.generation = generation;
     idx.lastIndexedTime = lastIndexedTime;
     idx.fsType = QString::fromUtf8(fsTypeBytes);
+    idx.watchEnabled = watchEnabled;
 
     if (ver >= 3) {
         idx.labelLastKnown = QString::fromUtf8(labelBytes);
@@ -1270,6 +1284,7 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         m.insert(QStringLiteral("lastIndexedTime"), QVariant::fromValue<qlonglong>(idx.lastIndexedTime));
         m.insert(QStringLiteral("label"), idx.labelLastKnown);
         m.insert(QStringLiteral("uuid"), idx.uuidLastKnown);
+        m.insert(QStringLiteral("watchEnabled"), idx.watchEnabled);
 
         indexedOut.push_back(m);
     }
@@ -2260,4 +2275,35 @@ void IndexerService::ForgetIndex(const QString& deviceId) {
     bumpUidEpoch(uid);
 
     Q_EMIT DeviceIndexRemoved(deviceId);
+}
+
+void IndexerService::SetWatchEnabled(const QString& deviceId, bool enabled) {
+    const quint32 uid = callerUidOr0();
+    ensureLoadedForUid(uid);
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("No indexes loaded for this user."));
+        return;
+    }
+
+    auto it = uidIt->second.find(deviceId);
+    if (it == uidIt->second.end()) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("No index exists for this deviceId."));
+        return;
+    }
+
+    DeviceIndex& idx = it->second;
+    if (idx.watchEnabled == enabled) {
+        return; // idempotent
+    }
+
+    idx.watchEnabled = enabled;
+
+    // Persist best-effort so the toggle survives daemon restart.
+    QString err;
+    if (!saveSnapshot(uid, deviceId, idx, &err)) {
+        sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to persist watch setting: %1").arg(err));
+        return;
+    }
 }

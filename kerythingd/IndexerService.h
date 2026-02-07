@@ -192,6 +192,12 @@ public slots:
      */
     void ForgetIndex(const QString& deviceId);
 
+    /**
+     * Enables/disables live watching for an already-indexed device (per-calling-user).
+     * This only changes daemon behavior/persistence; it does not re-index by itself.
+     */
+    void SetWatchEnabled(const QString& deviceId, bool enabled);
+
 signals:
     void JobAdded(quint64 jobId, const QVariantMap& props);
     void JobProgress(quint64 jobId, quint32 percent, const QVariantMap& props);
@@ -217,6 +223,9 @@ private:
         // “Last known” display metadata (may be stale if device not present)
         QString labelLastKnown;
         QString uuidLastKnown;
+
+        // watch toggle (per-uid); persisted in snapshots (v5+)
+        bool watchEnabled = true;
 
         std::vector<ScannerEngine::FileRecord> records;
         std::vector<char> stringPool;

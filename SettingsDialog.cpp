@@ -21,6 +21,7 @@ namespace {
 
     enum Columns {
         ColIndexed = 0,
+        ColWatch,
         ColFs,
         ColLabel,
         ColMount,
@@ -45,7 +46,7 @@ SettingsDialog::SettingsDialog(DbusIndexerClient* dbusClient, QWidget* parent)
     m_tree = new QTreeWidget(this);
     m_tree->setColumnCount(ColCount);
     m_tree->setHeaderLabels({
-        "Indexed", "FS", "Label", "Mount", "Entries", "Last Indexed", "Device ID", "Dev Node"
+        "Indexed", "Watch", "FS", "Label", "Mount", "Entries", "Last Indexed", "Device ID", "Dev Node"
     });
     m_tree->setRootIsDecorated(false);
     m_tree->setSortingEnabled(true);
@@ -55,6 +56,46 @@ SettingsDialog::SettingsDialog(DbusIndexerClient* dbusClient, QWidget* parent)
     root->addWidget(m_tree);
 
     connect(m_tree, &QTreeWidget::itemSelectionChanged, this, &SettingsDialog::onSelectionChanged);
+
+    // Handle checkbox toggles
+    connect(m_tree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
+        if (!item) return;
+        if (column != ColWatch) return;
+        if (m_updatingTree) return;
+        if (m_jobActive) return; // keep it simple: don't toggle watch while indexing
+
+        const QString deviceId = item->data(ColDeviceId, Qt::UserRole).toString();
+        if (deviceId.isEmpty()) return;
+
+        const bool indexed = (item->text(ColIndexed).compare(QStringLiteral("Yes"), Qt::CaseInsensitive) == 0);
+        if (!indexed) return;
+
+        const bool enabled = (item->checkState(ColWatch) == Qt::Checked);
+
+        if (!m_client || !m_client->isAvailable()) {
+            m_updatingTree = true;
+            item->setCheckState(ColWatch, enabled ? Qt::Unchecked : Qt::Checked);
+            m_updatingTree = false;
+            return;
+        }
+
+        QString err;
+        if (!m_client->setWatchEnabled(deviceId, enabled, &err)) {
+            QMessageBox::warning(this,
+                                 QStringLiteral("Failed to update watch setting"),
+                                 err.isEmpty() ? QStringLiteral("SetWatchEnabled failed.") : err);
+
+            // Revert checkbox
+            m_updatingTree = true;
+            item->setCheckState(ColWatch, enabled ? Qt::Unchecked : Qt::Checked);
+            m_updatingTree = false;
+            return;
+        }
+
+        // IMPORTANT: Don't call refresh() synchronously from itemChanged.
+        // Clearing the tree while Qt is processing the signal can invalidate 'item' and crash.
+        QTimer::singleShot(0, this, [this]() { refresh(); });
+    });
 
     m_status = new QLabel(this);
     m_status->setText(QStringLiteral("Ready."));
@@ -232,12 +273,18 @@ void SettingsDialog::refresh() {
         st.indexed = true;
         st.entryCount = m.value(QStringLiteral("entryCount")).toULongLong();
         st.lastIndexedTime = m.value(QStringLiteral("lastIndexedTime")).toLongLong();
+        st.watchEnabled = m.value(QStringLiteral("watchEnabled"), true).toBool();
         idxMap.insert(st.deviceId, st);
     }
 
     // Track which deviceIds are present in the "known" list
     QSet<QString> knownIds;
     knownIds.reserve(knownOpt->size());
+
+    m_updatingTree = true;
+
+    // Block signals hard while rebuilding the tree to avoid itemChanged re-entrancy.
+    const bool oldBlocked = m_tree->blockSignals(true);
 
     m_tree->clear();
 
@@ -248,7 +295,6 @@ void SettingsDialog::refresh() {
         const QString deviceId  = m.value(QStringLiteral("deviceId")).toString();
         const QString devNode   = m.value(QStringLiteral("devNode")).toString();
         const QString fsType    = m.value(QStringLiteral("fsType")).toString();
-        const QString label     = m.value(QStringLiteral("label")).toString();
         const QString liveLabel = m.value(QStringLiteral("label")).toString();
         const QString liveUuid  = m.value(QStringLiteral("uuid")).toString();
         const bool mounted      = m.value(QStringLiteral("mounted")).toBool();
@@ -256,10 +302,21 @@ void SettingsDialog::refresh() {
 
         knownIds.insert(deviceId);
 
-        RowState st = idxMap.value(deviceId, RowState{deviceId, QString(), QString(), QString(), false, 0, 0});
+        RowState st = idxMap.value(deviceId, RowState{deviceId, QString(), QString(), QString(), false, 0, 0, true});
 
         auto* item = new QTreeWidgetItem(m_tree);
         item->setText(ColIndexed, st.indexed ? QStringLiteral("Yes") : QStringLiteral("No"));
+
+        // Watch column: only meaningful for indexed devices
+        if (st.indexed) {
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
+            item->setToolTip(ColWatch, QStringLiteral("Enable live watching (EXT4 first; may be limited on other filesystems)."));
+        } else {
+            item->setText(ColWatch, QStringLiteral("—"));
+            item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
+        }
+
         item->setText(ColFs, fsType.isEmpty() ? QStringLiteral("—") : fsType);
 
         // Prefer live label when available
@@ -295,6 +352,11 @@ void SettingsDialog::refresh() {
 
         auto* item = new QTreeWidgetItem(m_tree);
         item->setText(ColIndexed, QStringLiteral("Yes"));
+
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
+        item->setToolTip(ColWatch, QStringLiteral("Enable live watching (EXT4 first; may be limited on other filesystems)."));
+
         item->setText(ColFs, st.fsType.isEmpty() ? QStringLiteral("—") : st.fsType);
 
         const QString shownLabel = st.labelLastKnown.isEmpty() ? QStringLiteral("—") : st.labelLastKnown;
@@ -317,8 +379,10 @@ void SettingsDialog::refresh() {
         for (int c = 0; c < ColCount; ++c) item->setForeground(c, QBrush(Qt::gray));
     }
 
-    m_status->setText(QStringLiteral("Loaded %1 device(s).").arg(m_tree->topLevelItemCount()));
+    m_tree->blockSignals(oldBlocked);
+    m_updatingTree = false;
 
+    m_status->setText(QStringLiteral("Loaded %1 device(s).").arg(m_tree->topLevelItemCount()));
     onSelectionChanged();
 }
 

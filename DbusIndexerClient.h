@@ -72,6 +72,8 @@ public:
 
     bool forgetIndex(const QString& deviceId, QString* errorOut = nullptr) const;
 
+    bool setWatchEnabled(const QString& deviceId, bool enabled, QString* errorOut = nullptr) const;
+
 private:
     QString m_service;
     QString m_path;

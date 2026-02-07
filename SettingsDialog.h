@@ -46,6 +46,7 @@ private:
         bool indexed = false;
         quint64 entryCount = 0;
         qint64 lastIndexedTime = 0;
+        bool watchEnabled = true;
     };
 
     void connectDaemonSignals();
@@ -72,6 +73,9 @@ private:
 
     bool m_jobActive = false;
     quint64 m_jobId = 0;
+
+    // guard to prevent itemChanged recursion during refresh / revert
+    bool m_updatingTree = false;
 };
 
 #endif //KERYTHING_SETTINGSDIALOG_H

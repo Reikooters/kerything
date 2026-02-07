@@ -415,3 +415,30 @@ bool DbusIndexerClient::forgetIndex(const QString& deviceId, QString* errorOut) 
 
     return true;
 }
+
+bool DbusIndexerClient::setWatchEnabled(const QString& deviceId, bool enabled, QString* errorOut) const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+    if (!iface.isValid()) {
+        if (errorOut) {
+            const QDBusError e = iface.lastError();
+            *errorOut = e.message().isEmpty()
+                ? QStringLiteral("D-Bus interface not valid (service unavailable).")
+                : e.name() + QStringLiteral(": ") + e.message();
+        }
+        return false;
+    }
+
+    QDBusMessage reply = iface.call(QStringLiteral("SetWatchEnabled"), deviceId, enabled);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        if (errorOut) {
+            const QString name = reply.errorName();
+            const QString msg  = reply.errorMessage();
+            *errorOut = msg.isEmpty()
+                ? (name.isEmpty() ? QStringLiteral("Unknown D-Bus error.") : name)
+                : (name.isEmpty() ? msg : name + QStringLiteral(": ") + msg);
+        }
+        return false;
+    }
+
+    return true;
+}

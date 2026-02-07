@@ -275,6 +275,27 @@ private:
 
     // --- End: Empty-query global-order cache ---
 
+    // --- Begin: DeviceIndexUpdated batching scaffold ---
+
+    struct PendingIndexUpdate {
+        quint64 generation = 0;
+        quint64 entryCount = 0;
+    };
+
+    void queueDeviceIndexUpdated(quint32 uid,
+                                 const QString& deviceId,
+                                 quint64 generation,
+                                 quint64 entryCount);
+
+    void dispatchBatchedIndexUpdates();
+
+    static constexpr int kIndexUpdateBatchMs = 250;
+
+    bool m_indexUpdateBatchScheduled = false;
+    std::unordered_map<quint32, std::unordered_map<QString, PendingIndexUpdate>> m_pendingIndexUpdatesByUid;
+
+    // --- End: DeviceIndexUpdated batching scaffold ---
+
     struct Job {
         enum class State : quint8 { Running, Cancelling };
 

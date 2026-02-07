@@ -543,6 +543,48 @@ QString IndexerService::warmKey(quint32 uid, quint64 epoch, const QString& sortK
 
 // --- End: Empty-query global-order cache ---
 
+// --- Begin: DeviceIndexUpdated batching scaffold ---
+
+void IndexerService::queueDeviceIndexUpdated(quint32 uid,
+                                             const QString& deviceId,
+                                             quint64 generation,
+                                             quint64 entryCount) {
+    // Correctness: empty-query global cache must be invalidated immediately.
+    bumpUidEpoch(uid);
+
+    auto& byDev = m_pendingIndexUpdatesByUid[uid];
+    PendingIndexUpdate& p = byDev[deviceId];
+    p.generation = generation;
+    p.entryCount = entryCount;
+
+    if (m_indexUpdateBatchScheduled) return;
+    m_indexUpdateBatchScheduled = true;
+
+    QTimer::singleShot(kIndexUpdateBatchMs, this, [this]() {
+        m_indexUpdateBatchScheduled = false;
+        dispatchBatchedIndexUpdates();
+    });
+}
+
+void IndexerService::dispatchBatchedIndexUpdates() {
+    if (m_pendingIndexUpdatesByUid.empty()) return;
+
+    // Emit at most one update per (uid, deviceId) for this batch window.
+    // NOTE: DeviceIndexUpdated has no uid; GUI side will refresh its own uid-scoped lists.
+    for (auto& uidKv : m_pendingIndexUpdatesByUid) {
+        auto& perDev = uidKv.second;
+        for (auto& devKv : perDev) {
+            const QString& deviceId = devKv.first;
+            const PendingIndexUpdate& p = devKv.second;
+            Q_EMIT DeviceIndexUpdated(deviceId, p.generation, p.entryCount);
+        }
+    }
+
+    m_pendingIndexUpdatesByUid.clear();
+}
+
+// --- End: DeviceIndexUpdated batching scaffold ---
+
 // --- Begin: Persistence helpers ---
 
 quint32 IndexerService::callerUidOr0() const {
@@ -1467,9 +1509,6 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
                         buildTrigramIndex(idx);
                         buildSortOrders(idx);
 
-                        // Invalidate any cached global search orders for this uid (empty-query paging).
-                        bumpUidEpoch(j.ownerUid);
-
                         // Set lastIndexedTime only when we successfully persist the snapshot.
                         idx.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
 
@@ -1490,10 +1529,11 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
                                                QStringLiteral("Indexed, but failed to save snapshot: %1").arg(saveErr),
                                                props);
                         } else {
-                            // notify clients that the index has changed
-                            Q_EMIT DeviceIndexUpdated(j.deviceId,
-                                                      static_cast<quint64>(idx.generation),
-                                                      static_cast<quint64>(idx.records.size()));
+                            // Batch/coalesce index updates
+                            queueDeviceIndexUpdated(j.ownerUid,
+                                                    j.deviceId,
+                                                    static_cast<quint64>(idx.generation),
+                                                    static_cast<quint64>(idx.records.size()));
 
                             Q_EMIT JobProgress(jobId, 100, props);
 

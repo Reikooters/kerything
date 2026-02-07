@@ -579,6 +579,52 @@ void IndexerService::ensureLoadedForUid(quint32 uid) const {
     m_loadedUids.insert(uid);
 }
 
+void IndexerService::enqueueSnapshotUpgrade(quint32 uid, const QString& deviceId) const {
+    // Avoid duplicates (small queue; linear scan is fine)
+    for (const auto& p : m_snapshotUpgradeQueue) {
+        if (p.first == uid && p.second == deviceId) {
+            return;
+        }
+    }
+
+    m_snapshotUpgradeQueue.emplace_back(uid, deviceId);
+    scheduleProcessSnapshotUpgradeQueue();
+}
+
+void IndexerService::scheduleProcessSnapshotUpgradeQueue() const {
+    if (m_snapshotUpgradeScheduled) return;
+    if (m_snapshotUpgradeQueue.empty()) return;
+
+    m_snapshotUpgradeScheduled = true;
+
+    QTimer::singleShot(0, const_cast<IndexerService*>(this), [this]() {
+        m_snapshotUpgradeScheduled = false;
+        processOneSnapshotUpgrade();
+
+        // Keep draining one-at-a-time
+        if (!m_snapshotUpgradeQueue.empty()) {
+            scheduleProcessSnapshotUpgradeQueue();
+        }
+    });
+}
+
+void IndexerService::processOneSnapshotUpgrade() const {
+    if (m_snapshotUpgradeQueue.empty()) return;
+
+    const auto [uid, deviceId] = m_snapshotUpgradeQueue.front();
+    m_snapshotUpgradeQueue.pop_front();
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return;
+
+    auto devIt = uidIt->second.find(deviceId);
+    if (devIt == uidIt->second.end()) return;
+
+    QString err;
+    (void)saveSnapshot(uid, deviceId, devIt->second, &err);
+    // Best-effort: ignore failures here. User can still re-index if needed.
+}
+
 void IndexerService::loadSnapshotsForUid(quint32 uid) const {
     const QString dirPath = baseIndexDirForUid(uid);
     QDir dir(dirPath);
@@ -590,6 +636,19 @@ void IndexerService::loadSnapshotsForUid(quint32 uid) const {
                                             QDir::Files | QDir::Readable,
                                             QDir::Name);
 
+    auto* self = const_cast<IndexerService*>(this);
+    const quint32 totalFiles = static_cast<quint32>(files.size());
+
+    // Notify clients that snapshot loading is starting
+    {
+        QVariantMap props;
+        props.insert(QStringLiteral("loaded"), 0u);
+        props.insert(QStringLiteral("total"), totalFiles);
+        Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("loadingSnapshots"), props);
+    }
+
+    quint32 loadedCount = 0;
+
     for (const QString& fn : files) {
         const QString fullPath = dir.filePath(fn);
 
@@ -598,6 +657,11 @@ void IndexerService::loadSnapshotsForUid(quint32 uid) const {
         auto idxOpt = loadSnapshotFile(fullPath, &deviceId, &err);
         if (!idxOpt) {
             // Ignore bad/corrupt files for now (can log later)
+            ++loadedCount;
+            QVariantMap props;
+            props.insert(QStringLiteral("loaded"), loadedCount);
+            props.insert(QStringLiteral("total"), totalFiles);
+            Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("loadingSnapshots"), props);
             continue;
         }
 
@@ -605,15 +669,36 @@ void IndexerService::loadSnapshotsForUid(quint32 uid) const {
         idx.dirPathCache.clear();
 
         // v4 snapshots include acceleration structures; older versions need rebuild.
-        if (idx.flatIndex.empty() ||
-            idx.orderByName.empty() || idx.orderByPath.empty() || idx.orderBySize.empty() || idx.orderByMtime.empty() ||
-            idx.rankByName.empty()  || idx.rankByPath.empty()  || idx.rankBySize.empty()  || idx.rankByMtime.empty())
-        {
+        const bool hasAccel =
+            !idx.flatIndex.empty() &&
+            !idx.orderByName.empty() && !idx.orderByPath.empty() && !idx.orderBySize.empty() && !idx.orderByMtime.empty() &&
+            !idx.rankByName.empty()  && !idx.rankByPath.empty()  && !idx.rankBySize.empty()  && !idx.rankByMtime.empty();
+
+        if (!hasAccel) {
             buildTrigramIndex(idx);
             buildSortOrders(idx);
         }
 
         m_indexesByUid[uid][deviceId] = std::move(idx);
+
+        // If it was old, upgrade it to the latest snapshot format in the background (best-effort).
+        if (!hasAccel) {
+            enqueueSnapshotUpgrade(uid, deviceId);
+        }
+
+        ++loadedCount;
+
+        // Progress update (kept simple: one per file)
+        QVariantMap props;
+        props.insert(QStringLiteral("loaded"), loadedCount);
+        props.insert(QStringLiteral("total"), totalFiles);
+        Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("loadingSnapshots"), props);
+    }
+
+    // Notify ready
+    {
+        QVariantMap props;
+        Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("ready"), props);
     }
 }
 

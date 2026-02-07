@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <deque>
 
 #include <QtDBus/QDBusContext>
 
@@ -202,6 +203,9 @@ signals:
     // emitted when a device index is removed for this uid
     void DeviceIndexRemoved(const QString& deviceId);
 
+    // Daemon status/progress notifications (per-user; GUI should filter by uid)
+    void DaemonStateChanged(quint32 uid, const QString& state, const QVariantMap& props);
+
 private:
     struct DeviceIndex {
         QString fsType;
@@ -291,6 +295,11 @@ private:
     void ensureLoadedForUid(quint32 uid) const;
     void loadSnapshotsForUid(quint32 uid) const;
 
+    // Snapshot upgrade queue (old snapshots -> new version with acceleration structures)
+    void enqueueSnapshotUpgrade(quint32 uid, const QString& deviceId) const;
+    void scheduleProcessSnapshotUpgradeQueue() const;
+    void processOneSnapshotUpgrade() const;
+
     [[nodiscard]] static QString baseIndexDirForUid(quint32 uid);
     [[nodiscard]] static QString snapshotPathFor(quint32 uid, const QString& deviceId);
     [[nodiscard]] static QString escapeDeviceIdForFilename(const QString& deviceId);
@@ -325,6 +334,10 @@ private:
     // uid -> (deviceId -> in-memory index)
     mutable std::unordered_map<quint32, std::unordered_map<QString, DeviceIndex>> m_indexesByUid;
     mutable std::unordered_set<quint32> m_loadedUids;
+
+    // queued upgrades (uid, deviceId)
+    mutable std::deque<std::pair<quint32, QString>> m_snapshotUpgradeQueue;
+    mutable bool m_snapshotUpgradeScheduled = false;
 };
 
 #endif //KERYTHING_KERYTHINGD_INDEXERSERVICE_H

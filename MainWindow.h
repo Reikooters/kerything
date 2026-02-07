@@ -99,6 +99,8 @@ private slots:
      */
     void onDaemonServiceUnregistered(const QString& serviceName);
 
+    void onDaemonStateChanged(quint32 uid, const QString& state, const QVariantMap& props);
+
     /**
      * @brief Updates the device index and refreshes the search results in the UI.
      *

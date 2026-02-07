@@ -390,8 +390,21 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Create D-Bus client
     m_dbus = std::make_unique<DbusIndexerClient>(this);
 
-    // Watch daemon presence on the system bus (event-driven "connected/disconnected")
+    // Hook daemon signals
     constexpr const char* kService = "net.reikooters.Kerything1";
+    constexpr const char* kPath    = "/net/reikooters/Kerything1";
+    constexpr const char* kIface   = "net.reikooters.Kerything1.Indexer";
+
+    QDBusConnection::systemBus().connect(
+        QString::fromLatin1(kService),
+        QString::fromLatin1(kPath),
+        QString::fromLatin1(kIface),
+        QStringLiteral("DaemonStateChanged"),
+        this,
+        SLOT(onDaemonStateChanged(quint32,QString,QVariantMap))
+    );
+
+    // Watch daemon presence on the system bus (event-driven "connected/disconnected")
     m_daemonWatcher = new QDBusServiceWatcher(
         QString::fromLatin1(kService),
         QDBusConnection::systemBus(),
@@ -403,7 +416,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_daemonWatcher, &QDBusServiceWatcher::serviceUnregistered,
             this, &MainWindow::onDaemonServiceUnregistered);
 
-    // --- Non-blocking daemon startup (Option B) ---
+    // --- Non-blocking daemon startup ---
     // We always start in daemon-search mode if the client exists, but keep the model offline
     // until Ping returns. This prevents a long blank wait when the daemon is loading snapshots.
     m_useDaemonSearch = true;
@@ -1379,6 +1392,31 @@ void MainWindow::onDaemonServiceUnregistered(const QString& serviceName) {
     }
 
     showBaselineStatus(QStringLiteral("Daemon disconnected • live updates paused"));
+}
+
+void MainWindow::onDaemonStateChanged(quint32 uid, const QString& state, const QVariantMap& props) {
+    // Only respond to our own uid (daemon is system bus, so this signal is broadcast)
+    if (uid != static_cast<quint32>(::getuid())) return;
+
+    if (!daemonStatusLabel) return;
+
+    if (state == QStringLiteral("loadingSnapshots")) {
+        const quint32 loaded = props.value(QStringLiteral("loaded")).toUInt();
+        const quint32 total  = props.value(QStringLiteral("total")).toUInt();
+
+        if (total > 0) {
+            daemonStatusLabel->setText(QStringLiteral("Daemon: loading snapshots… (%1/%2)")
+                                       .arg(loaded).arg(total));
+        } else {
+            daemonStatusLabel->setText(QStringLiteral("Daemon: loading snapshots…"));
+        }
+        return;
+    }
+
+    if (state == QStringLiteral("ready")) {
+        // Once ready, our async init will refresh the normal label and run the query.
+        return;
+    }
 }
 
 void MainWindow::onDeviceIndexUpdated(const QString& deviceId, quint64 generation, quint64 entryCount) {

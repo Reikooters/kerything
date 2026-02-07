@@ -404,6 +404,26 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         SLOT(onDaemonStateChanged(quint32,QString,QVariantMap))
     );
 
+    // Keep MainWindow in sync when an index finishes updating
+    QDBusConnection::systemBus().connect(
+        QString::fromLatin1(kService),
+        QString::fromLatin1(kPath),
+        QString::fromLatin1(kIface),
+        QStringLiteral("DeviceIndexUpdated"),
+        this,
+        SLOT(onDeviceIndexUpdated(QString,quint64,quint64))
+    );
+
+    // Update dropdown/label if an index is forgotten elsewhere
+    QDBusConnection::systemBus().connect(
+        QString::fromLatin1(kService),
+        QString::fromLatin1(kPath),
+        QString::fromLatin1(kIface),
+        QStringLiteral("DeviceIndexRemoved"),
+        this,
+        SLOT(onDeviceIndexUpdated(QString,quint64,quint64))
+    );
+
     // Watch daemon presence on the system bus (event-driven "connected/disconnected")
     m_daemonWatcher = new QDBusServiceWatcher(
         QString::fromLatin1(kService),
@@ -1413,6 +1433,21 @@ void MainWindow::onDaemonStateChanged(quint32 uid, const QString& state, const Q
         return;
     }
 
+    // Explicit rescan/index UX state
+    if (state == QStringLiteral("rescanning")) {
+        const QString deviceId = props.value(QStringLiteral("deviceId")).toString();
+        const quint32 percent  = props.value(QStringLiteral("percent")).toUInt();
+
+        const QString dev = deviceId.trimmed().isEmpty() ? QStringLiteral("device") : deviceId.trimmed();
+
+        if (percent > 0 && percent <= 100) {
+            daemonStatusLabel->setText(QStringLiteral("Daemon: re-scanning… %1 (%2%)").arg(dev).arg(percent));
+        } else {
+            daemonStatusLabel->setText(QStringLiteral("Daemon: re-scanning… %1").arg(dev));
+        }
+        return;
+    }
+
     if (state == QStringLiteral("ready")) {
         // Once ready, our async init will refresh the normal label and run the query.
         return;
@@ -1427,6 +1462,15 @@ void MainWindow::onDeviceIndexUpdated(const QString& deviceId, quint64 generatio
     // Keep the permanent label and device dropdown in sync with daemon state.
     refreshDaemonStatusLabel();
     refreshDeviceScopeCombo();
+
+    // IMPORTANT:
+    // The daemon may emit DaemonStateChanged("rescanning", 100%) *after* DeviceIndexUpdated.
+    // That would overwrite our "connected • ..." label again.
+    // So schedule a refresh for the next event-loop tick to win the last-write race.
+    QTimer::singleShot(0, this, [this]() {
+        refreshDaemonStatusLabel();
+        refreshDeviceScopeCombo();
+    });
 
     if (!(m_useDaemonSearch && remoteModel)) {
         return;

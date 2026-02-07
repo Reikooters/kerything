@@ -1326,6 +1326,15 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
     Q_EMIT JobAdded(jobId, props);
     Q_EMIT JobProgress(jobId, 0, props);
 
+    // Tell GUIs we are actively rescanning (per-user)
+    {
+        auto* self = const_cast<IndexerService*>(this);
+        QVariantMap st;
+        st.insert(QStringLiteral("deviceId"), deviceId);
+        st.insert(QStringLiteral("percent"), 0u);
+        Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
+    }
+
     // Insert job BEFORE connecting lambdas that will look it up.
     m_jobs.emplace(jobId, std::move(job));
 
@@ -1340,7 +1349,7 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
     });
 
     // Read progress from stderr (KERYTHING_PROGRESS lines)
-    connect(m_jobs[jobId]->proc, &QProcess::readyReadStandardError, this, [this, jobId]() {
+    connect(m_jobs[jobId]->proc, &QProcess::readyReadStandardError, this, [this, jobId, uid]() {
         auto it = m_jobs.find(jobId);
         if (it == m_jobs.end() || !it->second) return;
         Job& j = *it->second;
@@ -1385,13 +1394,22 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
             props.insert(QStringLiteral("fsType"), j.fsType);
 
             Q_EMIT JobProgress(jobId, static_cast<quint32>(j.lastPct), props);
+
+            // Mirror progress into DaemonStateChanged so the main GUI can show it
+            {
+                auto* self = const_cast<IndexerService*>(this);
+                QVariantMap st;
+                st.insert(QStringLiteral("deviceId"), j.deviceId);
+                st.insert(QStringLiteral("percent"), static_cast<quint32>(j.lastPct));
+                Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
+            }
         }
     });
 
     connect(m_jobs[jobId]->proc,
             qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
             this,
-            [this, jobId](int exitCode, QProcess::ExitStatus exitStatus) {
+            [this, jobId, uid](int exitCode, QProcess::ExitStatus exitStatus) {
                 auto it = m_jobs.find(jobId);
                 if (it == m_jobs.end() || !it->second) return;
                 Job& j = *it->second;
@@ -1463,6 +1481,16 @@ quint64 IndexerService::StartIndex(const QString& deviceId) {
                                                       static_cast<quint64>(idx.records.size()));
 
                             Q_EMIT JobProgress(jobId, 100, props);
+
+                            // Final "rescanning" update (100%) so GUI can clear/replace it
+                            {
+                                auto* self = const_cast<IndexerService*>(this);
+                                QVariantMap st;
+                                st.insert(QStringLiteral("deviceId"), j.deviceId);
+                                st.insert(QStringLiteral("percent"), 100u);
+                                Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
+                            }
+
                             Q_EMIT JobFinished(jobId,
                                                QStringLiteral("ok"),
                                                QStringLiteral("Indexed %1 entries (generation %2)")

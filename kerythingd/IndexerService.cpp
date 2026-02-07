@@ -37,7 +37,7 @@
 static constexpr quint32 kFlagIsDir = 1u << 0;
 static constexpr quint32 kFlagIsSymlink = 1u << 1;
 
-static constexpr quint32 kSnapshotVersion = 3;
+static constexpr quint32 kSnapshotVersion = 4;
 static constexpr quint64 kSnapshotMagic   = 0x4B4552595448494EULL; // "KERYTHIN" (8 bytes)
 
 static QString lower(QString s) {
@@ -604,9 +604,14 @@ void IndexerService::loadSnapshotsForUid(quint32 uid) const {
         DeviceIndex idx = std::move(*idxOpt);
         idx.dirPathCache.clear();
 
-        // Rebuild acceleration structures (v1)
-        buildTrigramIndex(idx);
-        buildSortOrders(idx);
+        // v4 snapshots include acceleration structures; older versions need rebuild.
+        if (idx.flatIndex.empty() ||
+            idx.orderByName.empty() || idx.orderByPath.empty() || idx.orderBySize.empty() || idx.orderByMtime.empty() ||
+            idx.rankByName.empty()  || idx.rankByPath.empty()  || idx.rankBySize.empty()  || idx.rankByMtime.empty())
+        {
+            buildTrigramIndex(idx);
+            buildSortOrders(idx);
+        }
 
         m_indexesByUid[uid][deviceId] = std::move(idx);
     }
@@ -639,7 +644,7 @@ bool IndexerService::saveSnapshot(quint32 uid, const QString& deviceId, const De
     s << static_cast<quint32>(fsTypeBytes.size());
     if (fsTypeBytes.size() > 0) s.writeRawData(fsTypeBytes.constData(), fsTypeBytes.size());
 
-    // v3: labelLastKnown + uuidLastKnown (UTF-8 blobs)
+    // v3+: labelLastKnown + uuidLastKnown (UTF-8 blobs)
     const QByteArray labelBytes = idx.labelLastKnown.toUtf8();
     const QByteArray uuidBytes  = idx.uuidLastKnown.toUtf8();
 
@@ -665,6 +670,36 @@ bool IndexerService::saveSnapshot(quint32 uid, const QString& deviceId, const De
         const auto bytes = static_cast<qint64>(idx.stringPool.size());
         s.writeRawData(idx.stringPool.data(), bytes);
     }
+
+    // v4+: acceleration structures (flatIndex + sort orders + ranks)
+    static_assert(sizeof(ScannerEngine::TrigramEntry) == 8, "TrigramEntry must be 8 bytes for snapshot IO.");
+
+    auto writeU32Vec = [&](const std::vector<quint32>& v) {
+        s << static_cast<quint64>(v.size());
+        if (!v.empty()) {
+            const auto bytes = static_cast<qint64>(v.size() * sizeof(quint32));
+            s.writeRawData(reinterpret_cast<const char*>(v.data()), bytes);
+        }
+    };
+
+    // flatIndex
+    s << static_cast<quint64>(idx.flatIndex.size());
+    if (!idx.flatIndex.empty()) {
+        const auto bytes = static_cast<qint64>(idx.flatIndex.size() * sizeof(ScannerEngine::TrigramEntry));
+        s.writeRawData(reinterpret_cast<const char*>(idx.flatIndex.data()), bytes);
+    }
+
+    // orders
+    writeU32Vec(idx.orderByName);
+    writeU32Vec(idx.orderByPath);
+    writeU32Vec(idx.orderBySize);
+    writeU32Vec(idx.orderByMtime);
+
+    // ranks
+    writeU32Vec(idx.rankByName);
+    writeU32Vec(idx.rankByPath);
+    writeU32Vec(idx.rankBySize);
+    writeU32Vec(idx.rankByMtime);
 
     if (s.status() != QDataStream::Ok) {
         if (errorOut) *errorOut = QStringLiteral("Failed while writing snapshot stream.");
@@ -695,7 +730,7 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
     quint32 ver = 0;
     s >> magic >> ver;
 
-    if (magic != kSnapshotMagic || (ver != 1 && ver != 2 && ver != 3)) {
+    if (magic != kSnapshotMagic || (ver != 1 && ver != 2 && ver != 3 && ver != 4)) {
         if (errorOut) *errorOut = QStringLiteral("Snapshot header/version mismatch.");
         return std::nullopt;
     }
@@ -778,6 +813,59 @@ std::optional<IndexerService::DeviceIndex> IndexerService::loadSnapshotFile(cons
         const quint64 end = static_cast<quint64>(r.nameOffset) + static_cast<quint64>(r.nameLen);
         if (end > poolSize) {
             if (errorOut) *errorOut = QStringLiteral("Corrupt snapshot: name range out of bounds.");
+            return std::nullopt;
+        }
+    }
+
+    if (ver >= 4) {
+        static_assert(sizeof(ScannerEngine::TrigramEntry) == 8, "TrigramEntry must be 8 bytes for snapshot IO.");
+
+        auto readU32Vec = [&](quint64 maxElems, std::vector<quint32>& out) -> bool {
+            quint64 n = 0;
+            s >> n;
+            if (n == 0) { out.clear(); return true; }
+            if (n > maxElems) return false;
+
+            out.resize(static_cast<size_t>(n));
+            const qint64 bytes = static_cast<qint64>(n * sizeof(quint32));
+            return s.readRawData(reinterpret_cast<char*>(out.data()), bytes) == bytes;
+        };
+
+        quint64 flatCount = 0;
+        s >> flatCount;
+
+        static constexpr quint64 kMaxFlat = 2'000'000'000ULL; // guardrail
+        if (flatCount > kMaxFlat) return std::nullopt;
+
+        idx.flatIndex.resize(static_cast<size_t>(flatCount));
+        if (flatCount > 0) {
+            const qint64 bytes = static_cast<qint64>(flatCount * sizeof(ScannerEngine::TrigramEntry));
+            if (s.readRawData(reinterpret_cast<char*>(idx.flatIndex.data()), bytes) != bytes) {
+                if (errorOut) *errorOut = QStringLiteral("Truncated snapshot (flatIndex).");
+                return std::nullopt;
+            }
+        }
+
+        const quint64 nRec = recordCount;
+
+        if (!readU32Vec(nRec, idx.orderByName)) return std::nullopt;
+        if (!readU32Vec(nRec, idx.orderByPath)) return std::nullopt;
+        if (!readU32Vec(nRec, idx.orderBySize)) return std::nullopt;
+        if (!readU32Vec(nRec, idx.orderByMtime)) return std::nullopt;
+
+        if (!readU32Vec(nRec, idx.rankByName)) return std::nullopt;
+        if (!readU32Vec(nRec, idx.rankByPath)) return std::nullopt;
+        if (!readU32Vec(nRec, idx.rankBySize)) return std::nullopt;
+        if (!readU32Vec(nRec, idx.rankByMtime)) return std::nullopt;
+
+        // Basic consistency: if any are present, they should match recordCount
+        auto mustMatch = [&](const std::vector<quint32>& v) -> bool {
+            return v.empty() || v.size() == static_cast<size_t>(recordCount);
+        };
+        if (!mustMatch(idx.orderByName) || !mustMatch(idx.orderByPath) || !mustMatch(idx.orderBySize) || !mustMatch(idx.orderByMtime) ||
+            !mustMatch(idx.rankByName)  || !mustMatch(idx.rankByPath)  || !mustMatch(idx.rankBySize)  || !mustMatch(idx.rankByMtime))
+        {
+            if (errorOut) *errorOut = QStringLiteral("Corrupt snapshot: sort/rank vector size mismatch.");
             return std::nullopt;
         }
     }

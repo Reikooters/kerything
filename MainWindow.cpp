@@ -25,6 +25,10 @@
 #include <QSettings>
 #include <QScreen>
 #include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusPendingCallWatcher>
+#include <QtDBus/QDBusPendingReply>
+#include <QtDBus/QDBusArgument>
+#include <QtDBus/QDBusVariant>
 #include <KFileItemActions>
 #include <KFileItemListProperties>
 #include <KFileItem>
@@ -80,6 +84,80 @@ namespace {
     private:
         const MainWindow* m_owner = nullptr;
     };
+}
+
+namespace {
+    // Loose decoding helpers (mirrors what DbusIndexerClient does for sync paths)
+    static QVariant unwrapDbusVariantLoose(const QVariant& v) {
+        if (v.canConvert<QDBusVariant>()) {
+            return qvariant_cast<QDBusVariant>(v).variant();
+        }
+        return v;
+    }
+
+    static QVariantList toVariantListLooseLocal(const QVariant& input) {
+        const QVariant v = unwrapDbusVariantLoose(input);
+
+        if (v.metaType().id() == QMetaType::QVariantList) {
+            const QVariantList raw = v.toList();
+            QVariantList out;
+            out.reserve(raw.size());
+            for (const auto& e : raw) out.push_back(unwrapDbusVariantLoose(e));
+            return out;
+        }
+
+        if (v.canConvert<QDBusArgument>()) {
+            const QDBusArgument a = qvariant_cast<QDBusArgument>(v);
+            QVariantList out;
+            a.beginArray();
+            while (!a.atEnd()) {
+                QVariant elem;
+                a >> elem;
+                out.push_back(unwrapDbusVariantLoose(elem));
+            }
+            a.endArray();
+            return out;
+        }
+
+        return {};
+    }
+
+    static QVariantMap toVariantMapLooseLocal(const QVariant& input) {
+        const QVariant v = unwrapDbusVariantLoose(input);
+
+        if (v.metaType().id() == QMetaType::QVariantMap) {
+            return v.toMap();
+        }
+
+        if (v.canConvert<QDBusArgument>()) {
+            const QDBusArgument a = qvariant_cast<QDBusArgument>(v);
+
+            QVariantMap out;
+            a.beginMap();
+            while (!a.atEnd()) {
+                QString key;
+                QVariant value;
+                a.beginMapEntry();
+                a >> key >> value;
+                a.endMapEntry();
+                out.insert(key, unwrapDbusVariantLoose(value));
+            }
+            a.endMap();
+
+            return out;
+        }
+
+        return {};
+    }
+
+    static QVariantList normalizeListOfMaps(const QVariantList& rawList) {
+        QVariantList normalized;
+        normalized.reserve(rawList.size());
+        for (const QVariant& elem : rawList) {
+            normalized.push_back(toVariantMapLooseLocal(elem));
+        }
+        return normalized;
+    }
 }
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -325,81 +403,48 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_daemonWatcher, &QDBusServiceWatcher::serviceUnregistered,
             this, &MainWindow::onDaemonServiceUnregistered);
 
-    // Initial daemon setup
-    {
-        QString err;
-        auto ping = m_dbus->ping(&err);
-        if (ping) {
-            // Enable daemon-backed search mode
-            m_useDaemonSearch = true;
-            remoteModel = new RemoteFileModel(m_dbus.get(), this);
-            tableView->setModel(remoteModel);
+    // --- Non-blocking daemon startup (Option B) ---
+    // We always start in daemon-search mode if the client exists, but keep the model offline
+    // until Ping returns. This prevents a long blank wait when the daemon is loading snapshots.
+    m_useDaemonSearch = true;
+    remoteModel = new RemoteFileModel(m_dbus.get(), this);
+    tableView->setModel(remoteModel);
 
-            // Surface daemon paging failures to the user (without making the UI noisy).
-            connect(remoteModel, &RemoteFileModel::transientError, this, [this](const QString& msg) {
-                statusBar()->showMessage(msg, 5000);
+    // Surface daemon paging failures to the user (without making the UI noisy).
+    connect(remoteModel, &RemoteFileModel::transientError, this, [this](const QString& msg) {
+        statusBar()->showMessage(msg, 5000);
+    });
+
+    // Update baseline status with search results count from daemon when search completes
+    connect(remoteModel, &RemoteFileModel::searchCompleted, this,
+            [this](quint64 totalHits, double elapsedSeconds) {
+                showBaselineStatus(
+                    QString("%L1 objects found (daemon) in %2s")
+                        .arg(totalHits)
+                        .arg(elapsedSeconds, 0, 'f', 4)
+                );
             });
 
-            // Update baseline status with search results count from daemon when search completes
-            connect(remoteModel, &RemoteFileModel::searchCompleted, this,
-                    [this](quint64 totalHits, double elapsedSeconds) {
-                        showBaselineStatus(
-                            QString("%L1 objects found (daemon) in %2s")
-                                .arg(totalHits)
-                                .arg(elapsedSeconds, 0, 'f', 4)
-                        );
-                    });
+    // Start offline until daemon is ready
+    setDaemonReady(false, QStringLiteral("starting"));
 
-            // Listen for index updates to refresh UI hints / counts
-            constexpr const char* kPath    = "/net/reikooters/Kerything1";
-            constexpr const char* kIface   = "net.reikooters.Kerything1.Indexer";
+    // Apply persisted sort indicator immediately (RemoteFileModel will apply once online)
+    applyPersistedSortToView();
 
-            const bool ok = QDBusConnection::systemBus().connect(
-                QString::fromLatin1(kService),
-                QString::fromLatin1(kPath),
-                QString::fromLatin1(kIface),
-                QStringLiteral("DeviceIndexUpdated"),
-                this,
-                SLOT(onDeviceIndexUpdated(QString,quint64,quint64))
-            );
-
-            if (!ok) {
-                daemonStatusLabel->setText("Warning: failed to connect to daemon DeviceIndexUpdated signal.");
-            }
-
-            // Permanent daemon/index summary in the label
-            refreshDaemonStatusLabel();
-            refreshDeviceScopeCombo();
-
-            applyPersistedSortToView();
-
-            const QString restored = m_persistLastQuery ? m_initialQueryText : QString();
-            const QString initialQuery = restored.trimmed(); // normalize
-
-            // Apply persisted query (optional) after models exist
-            // If we’re restoring a non-empty query, reflect it in the box and run it.
-            if (!initialQuery.isEmpty()) {
-                searchLine->blockSignals(true);
-                searchLine->setText(initialQuery);
-                searchLine->blockSignals(false);
-            }
-
-            // Initial: if nothing is indexed yet, tell the user what to do.
-            QString idxErr;
-            auto indexedOpt = m_dbus->listIndexedDevices(&idxErr);
-            if (indexedOpt && indexedOpt->isEmpty()) {
-                statusBar()->showMessage("No partitions are indexed yet. Use “Change Partition” to index one.", 0);
-            } else {
-                // Run exactly one initial search:
-                // - restored query if present
-                // - otherwise empty query (“everything”)
-                updateSearch(initialQuery);
-            }
-        } else {
-            //daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
-            daemonStatusLabel->setText(QString("Daemon: disconnected • live updates paused (%1)").arg(err));
+    // Restore (optional) query text into the box, but do NOT force any sync calls yet.
+    {
+        const QString restored = m_persistLastQuery ? m_initialQueryText : QString();
+        const QString initialQuery = restored.trimmed();
+        if (!initialQuery.isEmpty()) {
+            searchLine->blockSignals(true);
+            searchLine->setText(initialQuery);
+            searchLine->blockSignals(false);
         }
     }
+
+    // Kick async daemon init once the event loop starts (lets the window appear first).
+    QTimer::singleShot(0, this, [this]() { beginAsyncDaemonInit(); });
+    // --- end non-blocking daemon startup ---
 
     // Debounce index update refreshes (fanotify-friendly)
     m_indexUpdateDebounceTimer = new QTimer(this);
@@ -1015,37 +1060,325 @@ void MainWindow::refreshDeviceScopeCombo() {
     }
 }
 
+void MainWindow::setDaemonReady(bool ready, const QString& reason) {
+    m_daemonReady = ready;
+
+    if (m_useDaemonSearch && remoteModel) {
+        remoteModel->setOffline(!ready);
+    }
+
+    if (!daemonStatusLabel) return;
+
+    if (ready) {
+        daemonStatusLabel->setText(QStringLiteral("Daemon: connected"));
+        // The detailed label + device dropdown will be refreshed asynchronously by beginAsyncDaemonInit().
+    } else {
+        const QString r = reason.trimmed().isEmpty() ? QStringLiteral("starting") : reason.trimmed();
+        daemonStatusLabel->setText(QStringLiteral("Daemon: %1…").arg(r));
+    }
+}
+
+void MainWindow::beginAsyncDaemonInit() {
+    if (!m_dbus) return;
+    if (m_daemonInitInFlight) return;
+    m_daemonInitInFlight = true;
+
+    // Let user type immediately; just make it clear why results are empty.
+    showBaselineStatus(QStringLiteral("Loading index snapshots…"));
+
+    auto* wPing = new QDBusPendingCallWatcher(m_dbus->pingAsync(), this);
+
+    connect(wPing, &QDBusPendingCallWatcher::finished, this, [this, wPing]() {
+        wPing->deleteLater();
+
+        QDBusPendingReply<QString, quint32> rep = *wPing;
+        if (!rep.isValid()) {
+            m_daemonInitInFlight = false;
+            setDaemonReady(false, QStringLiteral("disconnected"));
+            showBaselineStatus(QStringLiteral("Daemon unavailable (still starting or not installed)."));
+            return;
+        }
+
+        // Daemon is responding, but indexed device listing may still trigger snapshot load.
+        // Keep UI responsive by doing those calls async too.
+        setDaemonReady(true);
+
+        m_knownDevicesLoaded = false;
+        m_indexedDevicesLoaded = false;
+        m_knownDevicesCached.clear();
+        m_indexedDevicesCached.clear();
+
+        requestDeviceListsAsync();
+    });
+}
+
+void MainWindow::requestDeviceListsAsync() {
+    if (!m_dbus) {
+        m_daemonInitInFlight = false;
+        return;
+    }
+
+    // While these are loading, keep UI usable but results empty.
+    // (RemoteFileModel stays offline until we have indexed devices.)
+    if (daemonStatusLabel) {
+        daemonStatusLabel->setText(QStringLiteral("Daemon: loading snapshots…"));
+    }
+
+    auto* wKnown = new QDBusPendingCallWatcher(m_dbus->listKnownDevicesAsync(), this);
+    connect(wKnown, &QDBusPendingCallWatcher::finished, this, [this, wKnown]() {
+        wKnown->deleteLater();
+
+        QDBusPendingReply<QVariantList> rep = *wKnown;
+        if (rep.isValid()) {
+            m_knownDevicesCached = normalizeListOfMaps(toVariantListLooseLocal(rep.argumentAt<0>()));
+        } else {
+            m_knownDevicesCached.clear();
+        }
+        m_knownDevicesLoaded = true;
+
+        if (m_knownDevicesLoaded && m_indexedDevicesLoaded) {
+            refreshDaemonStatusLabelFromCachedLists();
+            refreshDeviceScopeComboFromCachedLists();
+
+            // Now we can bring results online and run the user's current query
+            if (remoteModel) remoteModel->setOffline(false);
+            updateSearch(searchLine ? searchLine->text() : QString());
+
+            m_daemonInitInFlight = false;
+        }
+    });
+
+    auto* wIdx = new QDBusPendingCallWatcher(m_dbus->listIndexedDevicesAsync(), this);
+    connect(wIdx, &QDBusPendingCallWatcher::finished, this, [this, wIdx]() {
+        wIdx->deleteLater();
+
+        QDBusPendingReply<QVariantList> rep = *wIdx;
+        if (rep.isValid()) {
+            m_indexedDevicesCached = normalizeListOfMaps(toVariantListLooseLocal(rep.argumentAt<0>()));
+        } else {
+            m_indexedDevicesCached.clear();
+        }
+        m_indexedDevicesLoaded = true;
+
+        if (m_knownDevicesLoaded && m_indexedDevicesLoaded) {
+            refreshDaemonStatusLabelFromCachedLists();
+            refreshDeviceScopeComboFromCachedLists();
+
+            if (remoteModel) remoteModel->setOffline(false);
+            updateSearch(searchLine ? searchLine->text() : QString());
+
+            m_daemonInitInFlight = false;
+        }
+    });
+}
+
+void MainWindow::refreshDaemonStatusLabelFromCachedLists() {
+    if (!daemonStatusLabel) return;
+
+    if (!m_daemonReady) {
+        daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
+        daemonStatusLabel->setToolTip(QString());
+        return;
+    }
+
+    quint64 totalEntries = 0;
+    QStringList tooltipLines;
+    tooltipLines << QStringLiteral("Indexed partitions:");
+
+    for (const QVariant& v : m_indexedDevicesCached) {
+        const QVariantMap m = v.toMap();
+
+        const QString deviceId = m.value(QStringLiteral("deviceId")).toString();
+        const quint64 entryCount = m.value(QStringLiteral("entryCount")).toULongLong();
+        const qint64 t = m.value(QStringLiteral("lastIndexedTime")).toLongLong();
+
+        totalEntries += entryCount;
+
+        QString when;
+        if (t > 0) {
+            when = QString::fromStdString(GuiUtils::uint64ToFormattedTime(t));
+        } else {
+            when = QStringLiteral("unknown");
+        }
+
+        tooltipLines << QStringLiteral("%1 • %2 entries • %3")
+                            .arg(deviceId)
+                            .arg(QLocale().toString(static_cast<qulonglong>(entryCount)))
+                            .arg(when);
+    }
+
+    daemonStatusLabel->setText(
+        QString("Daemon: connected • %1 partition(s) • %2 objects")
+            .arg(m_indexedDevicesCached.size())
+            .arg(QLocale().toString(static_cast<qulonglong>(totalEntries)))
+    );
+    daemonStatusLabel->setToolTip(tooltipLines.join('\n'));
+}
+
+void MainWindow::refreshDeviceScopeComboFromCachedLists() {
+    if (!m_deviceScopeCombo) return;
+
+    m_deviceScopeCombo->setVisible(m_useDaemonSearch);
+    if (!m_useDaemonSearch) return;
+
+    // Build knownById from cached known devices
+    struct KnownInfo {
+        QString devNode;
+        QString primaryMountPoint;
+        bool mounted = false;
+        bool present = false;
+    };
+
+    QHash<QString, KnownInfo> knownById;
+    knownById.reserve(m_knownDevicesCached.size());
+    for (const QVariant& v : m_knownDevicesCached) {
+        const QVariantMap m = v.toMap();
+        const QString deviceId = m.value(QStringLiteral("deviceId")).toString();
+        if (deviceId.isEmpty()) continue;
+
+        KnownInfo ki;
+        ki.devNode = m.value(QStringLiteral("devNode")).toString();
+        ki.primaryMountPoint = m.value(QStringLiteral("primaryMountPoint")).toString();
+        ki.mounted = m.value(QStringLiteral("mounted")).toBool();
+        ki.present = true;
+        knownById.insert(deviceId, ki);
+    }
+
+    struct IndexedRow {
+        QString deviceId;
+        QString label;
+        QString fsType;
+        quint64 entryCount = 0;
+        bool present = false;
+        QString devNode;
+        bool mounted = false;
+        QString primaryMountPoint;
+    };
+
+    std::vector<IndexedRow> rows;
+    rows.reserve(static_cast<size_t>(m_indexedDevicesCached.size()));
+
+    quint64 totalAllObjects = 0;
+
+    for (const QVariant& v : m_indexedDevicesCached) {
+        const QVariantMap m = v.toMap();
+
+        IndexedRow r;
+        r.deviceId = m.value(QStringLiteral("deviceId")).toString();
+        r.label = m.value(QStringLiteral("label")).toString().trimmed();
+        r.fsType = m.value(QStringLiteral("fsType")).toString().trimmed();
+        r.entryCount = m.value(QStringLiteral("entryCount")).toULongLong();
+
+        totalAllObjects += r.entryCount;
+
+        const auto it = knownById.find(r.deviceId);
+        if (it != knownById.end()) {
+            r.present = it->present;
+            r.devNode = it->devNode;
+            r.mounted = it->mounted;
+            r.primaryMountPoint = it->primaryMountPoint;
+        }
+
+        rows.push_back(std::move(r));
+    }
+
+    auto sortKey = [](const IndexedRow& r) -> QString {
+        if (!r.label.isEmpty()) return r.label;
+        if (!r.fsType.isEmpty()) return r.fsType;
+        return r.deviceId;
+    };
+
+    std::sort(rows.begin(), rows.end(), [&](const IndexedRow& a, const IndexedRow& b) {
+        const int c = QString::compare(sortKey(a), sortKey(b), Qt::CaseInsensitive);
+        if (c != 0) return c < 0;
+        return a.deviceId < b.deviceId;
+    });
+
+    m_deviceScopeCombo->setEnabled(true);
+
+    const QString prev = m_selectedDeviceScopeId;
+
+    m_deviceScopeCombo->blockSignals(true);
+    m_deviceScopeCombo->clear();
+
+    m_deviceScopeCombo->addItem(QStringLiteral("All indexed devices"), QString());
+    m_deviceScopeCombo->setItemData(0, true, Qt::UserRole + 1);
+
+    {
+        const QString countStr = QLocale().toString(static_cast<qulonglong>(totalAllObjects));
+        const QString tip = QStringLiteral("Objects (all indexed): %1").arg(countStr);
+        m_deviceScopeCombo->setItemData(0, tip, Qt::ToolTipRole);
+    }
+
+    int restoreIndex = 0;
+
+    for (const auto& r : rows) {
+        const QString countStr = QLocale().toString(static_cast<qulonglong>(r.entryCount));
+
+        QString base;
+        if (!r.label.isEmpty()) base = r.label;
+        else if (!r.fsType.isEmpty()) base = r.fsType;
+        else base = QStringLiteral("Device");
+
+        QString text = QStringLiteral("%1 • %2").arg(base, countStr);
+        if (!r.present) text += QStringLiteral(" (not present)");
+
+        QString mountStr;
+        if (!r.present) {
+            mountStr = QStringLiteral("(not present)");
+        } else if (r.mounted) {
+            mountStr = r.primaryMountPoint.trimmed().isEmpty()
+                ? QStringLiteral("(mounted)")
+                : r.primaryMountPoint.trimmed();
+        } else {
+            mountStr = QStringLiteral("(not mounted)");
+        }
+
+        const QString tip = QStringLiteral("Device ID: %1\nDev node: %2\nMount: %3\nObjects: %4")
+                                .arg(r.deviceId,
+                                     r.devNode.trimmed().isEmpty() ? QStringLiteral("—") : r.devNode.trimmed(),
+                                     mountStr,
+                                     countStr);
+
+        m_deviceScopeCombo->addItem(text, r.deviceId);
+
+        const int itemIndex = m_deviceScopeCombo->count() - 1;
+        m_deviceScopeCombo->setItemData(itemIndex, tip, Qt::ToolTipRole);
+        m_deviceScopeCombo->setItemData(itemIndex, r.present, Qt::UserRole + 1);
+
+        if (!prev.isEmpty() && r.deviceId == prev) restoreIndex = itemIndex;
+    }
+
+    m_deviceScopeCombo->setCurrentIndex(restoreIndex);
+    m_deviceScopeCombo->blockSignals(false);
+
+    const QString now = m_deviceScopeCombo->currentData().toString();
+    m_selectedDeviceScopeId = now;
+
+    if (m_useDaemonSearch && remoteModel) {
+        if (now.isEmpty()) remoteModel->setDeviceIds({});
+        else remoteModel->setDeviceIds(QStringList{now});
+    }
+}
+
 void MainWindow::onDaemonServiceRegistered(const QString& serviceName) {
     Q_UNUSED(serviceName);
 
-    // Daemon appeared (or restarted). Refresh summary, device dropdown and refresh the current query page.
-    refreshDaemonStatusLabel();
-    refreshDeviceScopeCombo();
-
-    if (m_useDaemonSearch && remoteModel) {
-        remoteModel->setOffline(false);
-        updateSearch(searchLine->text());
-    }
+    // Daemon appeared (or restarted). Re-run async init.
+    beginAsyncDaemonInit();
 }
 
 void MainWindow::onDaemonServiceUnregistered(const QString& serviceName) {
     Q_UNUSED(serviceName);
 
-    // Daemon vanished. Update the permanent label so users know background updates can't occur.
-    if (daemonStatusLabel) {
-        daemonStatusLabel->setText(QStringLiteral("Daemon: disconnected • live updates paused"));
-    }
+    setDaemonReady(false, QStringLiteral("disconnected"));
 
     // Also disable the device dropdown.
     if (m_deviceScopeCombo) {
         m_deviceScopeCombo->setEnabled(false);
     }
 
-    if (m_useDaemonSearch && remoteModel) {
-        remoteModel->setOffline(true); // empty table
-    }
-
-    statusBar()->showMessage(QStringLiteral("Daemon disconnected • live updates paused"), 5000);
+    showBaselineStatus(QStringLiteral("Daemon disconnected • live updates paused"));
 }
 
 void MainWindow::onDeviceIndexUpdated(const QString& deviceId, quint64 generation, quint64 entryCount) {

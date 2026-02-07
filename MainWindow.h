@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QComboBox>
 #include <QRect>
+#include <QVariantList>
 #include <QtDBus/QDBusServiceWatcher>
 #include <vector>
 #include <string>
@@ -197,6 +198,14 @@ private:
      */
     static bool contains(std::string_view haystack, std::string_view needle);
 
+    // Async daemon startup so GUI doesn't block on snapshot loading
+    void beginAsyncDaemonInit();
+    void setDaemonReady(bool ready, const QString& reason = QString());
+
+    void requestDeviceListsAsync();
+    void refreshDaemonStatusLabelFromCachedLists();
+    void refreshDeviceScopeComboFromCachedLists();
+
     /**
      * @brief Updates the status label to reflect the current state of the daemon connection.
      *
@@ -279,6 +288,15 @@ private:
     // Header save debounce + guard to avoid saving during restore
     QTimer* m_tableHeaderSaveDebounceTimer = nullptr;
     bool m_restoringTableHeaderState = false;
+
+    // Async daemon init state
+    bool m_daemonReady = false;
+    bool m_daemonInitInFlight = false;
+
+    bool m_knownDevicesLoaded = false;
+    bool m_indexedDevicesLoaded = false;
+    QVariantList m_knownDevicesCached;
+    QVariantList m_indexedDevicesCached;
 };
 
 #endif //KERYTHING_MAINWINDOW_H

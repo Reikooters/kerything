@@ -31,11 +31,14 @@ public:
     [[nodiscard]] bool isAvailable() const;
 
     std::optional<PingResult> ping(QString* errorOut = nullptr) const;
+    QDBusPendingCall pingAsync() const;
 
     std::optional<QVariantList> listKnownDevices(QString* errorOut = nullptr) const;
+    QDBusPendingCall listKnownDevicesAsync() const;
 
     // list devices currently indexed in daemon memory
     std::optional<QVariantList> listIndexedDevices(QString* errorOut = nullptr) const;
+    QDBusPendingCall listIndexedDevicesAsync() const;
 
     std::optional<quint64> startIndex(const QString& deviceId, QString* errorOut = nullptr) const;
     bool cancelJob(quint64 jobId, QString* errorOut = nullptr) const;
@@ -50,19 +53,19 @@ public:
                                        QString* errorOut = nullptr) const;
 
     QDBusPendingCall searchAsync(const QString& query,
-                             const QStringList& deviceIds,
-                             const QString& sortKey,
-                             const QString& sortDir,
-                             quint32 offset,
-                             quint32 limit,
-                             const QVariantMap& options = {}) const;
+                                 const QStringList& deviceIds,
+                                 const QString& sortKey,
+                                 const QString& sortDir,
+                                 quint32 offset,
+                                 quint32 limit,
+                                 const QVariantMap& options = {}) const;
 
     std::optional<QVariantList> resolveDirectories(const QString& deviceId,
                                                    const QList<quint32>& dirIds,
                                                    QString* errorOut = nullptr) const;
 
     QDBusPendingCall resolveDirectoriesAsync(const QString& deviceId,
-                                        const QList<quint32>& dirIds) const;
+                                             const QList<quint32>& dirIds) const;
 
     std::optional<QVariantList> resolveEntries(const QList<quint64>& entryIds,
                                                QString* errorOut = nullptr) const;

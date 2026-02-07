@@ -113,6 +113,11 @@ std::optional<DbusIndexerClient::PingResult> DbusIndexerClient::ping(QString* er
     return r;
 }
 
+QDBusPendingCall DbusIndexerClient::pingAsync() const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+    return iface.asyncCall(QStringLiteral("Ping"));
+}
+
 std::optional<QVariantList> DbusIndexerClient::listKnownDevices(QString* errorOut) const {
     QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
     if (!iface.isValid()) {
@@ -144,6 +149,11 @@ std::optional<QVariantList> DbusIndexerClient::listKnownDevices(QString* errorOu
     return normalized;
 }
 
+QDBusPendingCall DbusIndexerClient::listKnownDevicesAsync() const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+    return iface.asyncCall(QStringLiteral("ListKnownDevices"));
+}
+
 std::optional<QVariantList> DbusIndexerClient::listIndexedDevices(QString* errorOut) const {
     QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
     if (!iface.isValid()) {
@@ -172,6 +182,11 @@ std::optional<QVariantList> DbusIndexerClient::listIndexedDevices(QString* error
     }
 
     return normalized;
+}
+
+QDBusPendingCall DbusIndexerClient::listIndexedDevicesAsync() const {
+    QDBusInterface iface(m_service, m_path, m_iface, QDBusConnection::systemBus());
+    return iface.asyncCall(QStringLiteral("ListIndexedDevices"));
 }
 
 std::optional<quint64> DbusIndexerClient::startIndex(const QString& deviceId, QString* errorOut) const {

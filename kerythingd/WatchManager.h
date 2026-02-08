@@ -24,6 +24,7 @@ public:
         quint32 failCount = 0;
         qint64 nextRetryMs = 0;   // epoch ms; 0 means "no backoff scheduled"
         quint32 retryInSec = 0;   // seconds remaining; 0 means "retry allowed now"
+        bool retryOnlyOnMountChange = false; // true => "onRemount" mode (e.g. EINVAL on this mount)
     };
 
     explicit WatchManager(IndexerService* svc, QObject* parent = nullptr);

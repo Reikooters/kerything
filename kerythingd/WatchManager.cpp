@@ -72,6 +72,7 @@ WatchManager::RetryInfo WatchManager::retryInfoFor(quint32 uid, const QString& d
     RetryInfo out;
     out.failCount = static_cast<quint32>(std::max(0, e.failCount));
     out.nextRetryMs = e.nextRetryMs;
+    out.retryOnlyOnMountChange = e.retryOnlyOnMountChange;
 
     if (e.nextRetryMs > 0) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();

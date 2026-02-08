@@ -1388,23 +1388,13 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
             m.insert(QStringLiteral("watchRetryAtMs"), QVariant::fromValue<qlonglong>(ri.nextRetryMs));
             m.insert(QStringLiteral("watchRetryInSec"), ri.retryInSec);
 
-            // Derive retry mode from (state, retryInSec/nextRetryAt, and error string)
-            // Minimal heuristic:
-            // - if error + no countdown + mentions EINVAL(22)/Invalid argument -> onRemount
-            // - else if error + countdown -> backoff
-            // - else -> none
+            // Retry mode
             QString retryMode = QStringLiteral("none");
             if (st.state == QStringLiteral("error")) {
-                if (ri.retryInSec > 0 || ri.nextRetryMs > 0) {
+                if (ri.retryOnlyOnMountChange) {
+                    retryMode = QStringLiteral("onRemount");
+                } else if (ri.retryInSec > 0 || ri.nextRetryMs > 0) {
                     retryMode = QStringLiteral("backoff");
-                } else {
-                    const QString err = st.error;
-                    if (err.contains(QStringLiteral("(22)")) ||
-                        err.contains(QStringLiteral("Invalid argument"), Qt::CaseInsensitive) ||
-                        err.contains(QStringLiteral("EINVAL"), Qt::CaseInsensitive))
-                    {
-                        retryMode = QStringLiteral("onRemount");
-                    }
                 }
             }
             m.insert(QStringLiteral("watchRetryMode"), retryMode);

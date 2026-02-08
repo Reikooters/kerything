@@ -181,7 +181,8 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
         if (fdFs >= 0) {
             const uint64_t fsMask =
                 FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO |
-                FAN_ATTRIB | FAN_MODIFY | FAN_DELETE_SELF | FAN_MOVE_SELF |
+                FAN_ATTRIB | FAN_MODIFY | FAN_CLOSE_WRITE |
+                FAN_DELETE_SELF | FAN_MOVE_SELF |
                 FAN_ONDIR;
 
             if (fanotify_mark(fdFs,
@@ -249,7 +250,10 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             return;
         }
 
-        const uint64_t mountMask = FAN_CLOSE_WRITE | FAN_MODIFY | FAN_ATTRIB | FAN_ONDIR;
+        const uint64_t mountMask =
+            FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO |
+            FAN_CLOSE_WRITE | FAN_MODIFY | FAN_ATTRIB |
+            FAN_ONDIR;
 
         if (fanotify_mark(fdMount,
                           FAN_MARK_ADD | FAN_MARK_MOUNT,

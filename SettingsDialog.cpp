@@ -372,8 +372,6 @@ void SettingsDialog::refresh() {
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
 
-            std::cerr << "Processing indexed-only device: " << deviceId.toStdString() << ", watchState: " << st.watchState.toStdString() << ", watchError: " << st.watchError.toStdString() << std::endl;
-
             // Show health via tooltip/icon if present in indexedOpt row
             QString tip;
             if (!st.watchEnabled) {
@@ -445,8 +443,6 @@ void SettingsDialog::refresh() {
 
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
-
-        std::cerr << "Processing indexed-only device: " << deviceId.toStdString() << ", watchState: " << st.watchState.toStdString() << ", watchError: " << st.watchError.toStdString() << std::endl;
 
         QString tip;
         if (!st.watchEnabled) {

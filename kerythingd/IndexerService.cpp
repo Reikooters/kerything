@@ -1371,13 +1371,51 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         if (!idx.watchEnabled) {
             m.insert(QStringLiteral("watchState"), QStringLiteral("disabled"));
             m.insert(QStringLiteral("watchError"), QString());
+
+            m.insert(QStringLiteral("watchFailCount"), 0u);
+            m.insert(QStringLiteral("watchRetryAtMs"), QVariant::fromValue<qlonglong>(0));
+            m.insert(QStringLiteral("watchRetryInSec"), 0u);
+            m.insert(QStringLiteral("watchRetryMode"), QStringLiteral("none"));
         } else if (m_watchMgr) {
             const auto st = m_watchMgr->statusFor(uid, deviceId);
             m.insert(QStringLiteral("watchState"), st.state);
             m.insert(QStringLiteral("watchError"), st.error);
+
+            const auto ri = m_watchMgr->retryInfoFor(uid, deviceId);
+
+            // Always include (cheap), but only meaningful in error/backoff states.
+            m.insert(QStringLiteral("watchFailCount"), ri.failCount);
+            m.insert(QStringLiteral("watchRetryAtMs"), QVariant::fromValue<qlonglong>(ri.nextRetryMs));
+            m.insert(QStringLiteral("watchRetryInSec"), ri.retryInSec);
+
+            // Derive retry mode from (state, retryInSec/nextRetryAt, and error string)
+            // Minimal heuristic:
+            // - if error + no countdown + mentions EINVAL(22)/Invalid argument -> onRemount
+            // - else if error + countdown -> backoff
+            // - else -> none
+            QString retryMode = QStringLiteral("none");
+            if (st.state == QStringLiteral("error")) {
+                if (ri.retryInSec > 0 || ri.nextRetryMs > 0) {
+                    retryMode = QStringLiteral("backoff");
+                } else {
+                    const QString err = st.error;
+                    if (err.contains(QStringLiteral("(22)")) ||
+                        err.contains(QStringLiteral("Invalid argument"), Qt::CaseInsensitive) ||
+                        err.contains(QStringLiteral("EINVAL"), Qt::CaseInsensitive))
+                    {
+                        retryMode = QStringLiteral("onRemount");
+                    }
+                }
+            }
+            m.insert(QStringLiteral("watchRetryMode"), retryMode);
         } else {
             m.insert(QStringLiteral("watchState"), QStringLiteral("error"));
             m.insert(QStringLiteral("watchError"), QStringLiteral("Watch manager unavailable."));
+
+            m.insert(QStringLiteral("watchFailCount"), 0u);
+            m.insert(QStringLiteral("watchRetryAtMs"), QVariant::fromValue<qlonglong>(0));
+            m.insert(QStringLiteral("watchRetryInSec"), 0u);
+            m.insert(QStringLiteral("watchRetryMode"), QStringLiteral("none"));
         }
 
         indexedOut.push_back(m);

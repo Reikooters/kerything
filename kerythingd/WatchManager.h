@@ -20,11 +20,18 @@ public:
         QString error; // empty if OK
     };
 
+    struct RetryInfo {
+        quint32 failCount = 0;
+        qint64 nextRetryMs = 0;   // epoch ms; 0 means "no backoff scheduled"
+        quint32 retryInSec = 0;   // seconds remaining; 0 means "retry allowed now"
+    };
+
     explicit WatchManager(IndexerService* svc, QObject* parent = nullptr);
     ~WatchManager() override;
 
     void refreshWatchesForUid(quint32 uid);
     [[nodiscard]] Status statusFor(quint32 uid, const QString& deviceId) const;
+    [[nodiscard]] RetryInfo retryInfoFor(quint32 uid, const QString& deviceId) const;
 
 private:
     struct Key {
@@ -47,6 +54,13 @@ private:
         // Coalesce events into one rescan attempt
         QTimer* quietTimer = nullptr;
         bool dirty = false;
+
+        // Backoff to avoid retry spam on unsupported filesystems (e.g. NTFS/fuse)
+        int failCount = 0;
+        qint64 nextRetryMs = 0; // epoch ms when we may try arming again
+        QString lastArmError;   // last arming error string (for change detection / logging)
+
+        bool retryOnlyOnMountChange = false; // e.g. EINVAL on fanotify_mark for NTFS/FUSE
     };
 
     void stopEntry(Entry& e);

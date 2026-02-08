@@ -263,6 +263,16 @@ void SettingsDialog::refresh() {
 
     // Build indexed lookup: deviceId -> metadata
     QHash<QString, RowState> idxMap;
+
+    // Also keep watch retry metadata
+    struct WatchRetryMeta {
+        quint32 failCount = 0;
+        quint32 retryInSec = 0;
+        qint64 retryAtMs = 0;
+        QString retryMode; // "backoff" | "onRemount" | "none"
+    };
+    QHash<QString, WatchRetryMeta> retryMap;
+
     for (const QVariant& v : *indexedOpt) {
         const QVariantMap m = v.toMap();
         RowState st;
@@ -280,6 +290,13 @@ void SettingsDialog::refresh() {
         st.watchError = m.value(QStringLiteral("watchError")).toString();
 
         idxMap.insert(st.deviceId, st);
+
+        WatchRetryMeta rm;
+        rm.failCount = m.value(QStringLiteral("watchFailCount"), 0u).toUInt();
+        rm.retryInSec = m.value(QStringLiteral("watchRetryInSec"), 0u).toUInt();
+        rm.retryAtMs = m.value(QStringLiteral("watchRetryAtMs"), 0).toLongLong();
+        rm.retryMode = m.value(QStringLiteral("watchRetryMode"), QStringLiteral("none")).toString();
+        retryMap.insert(st.deviceId, rm);
     }
 
     // Track which deviceIds are present in the "known" list
@@ -292,6 +309,43 @@ void SettingsDialog::refresh() {
     const bool oldBlocked = m_tree->blockSignals(true);
 
     m_tree->clear();
+
+    auto formatDurationCompact = [&](quint32 totalSec) -> QString {
+        const quint32 minutes = totalSec / 60u;
+        const quint32 seconds = totalSec % 60u;
+
+        if (minutes == 0) {
+            return QStringLiteral("%1s").arg(QLocale().toString(seconds));
+        }
+        return QStringLiteral("%1m %2s")
+            .arg(QLocale().toString(minutes))
+            .arg(QLocale().toString(seconds));
+    };
+
+    auto appendRetryInfoIfPresent = [&](const QString& deviceId, const QString& watchState, QString& tip) {
+        if (watchState != QStringLiteral("error")) return;
+
+        const auto it = retryMap.constFind(deviceId);
+        if (it == retryMap.constEnd()) return;
+
+        const WatchRetryMeta rm = it.value();
+
+        tip = tip.trimmed();
+        if (!tip.isEmpty()) tip += QStringLiteral("\n");
+
+        if (rm.retryMode == QStringLiteral("onRemount")) {
+            tip += QStringLiteral("Watch will be retried on remount");
+        } else if (rm.retryInSec > 0) {
+            tip += QStringLiteral("Next watch retry in %1").arg(formatDurationCompact(rm.retryInSec));
+        } else {
+            // Nothing to add
+            return;
+        }
+
+        if (rm.failCount > 0) {
+            tip += QStringLiteral(" (failures: %1)").arg(QLocale().toString(rm.failCount));
+        }
+    };
 
     // 1) Known devices (merge indexed metadata if present)
     for (const QVariant& v : *knownOpt) {
@@ -332,6 +386,8 @@ void SettingsDialog::refresh() {
             } else {
                 tip = QStringLiteral("Live watching status is unknown.");
             }
+
+            appendRetryInfoIfPresent(deviceId, st.watchState, tip);
 
             item->setToolTip(ColWatch, tip);
 
@@ -398,6 +454,9 @@ void SettingsDialog::refresh() {
         } else {
             tip = QStringLiteral("Live watching status is unknown.");
         }
+
+        appendRetryInfoIfPresent(deviceId, st.watchState, tip);
+
         item->setToolTip(ColWatch, tip);
 
         const bool warn = st.watchEnabled &&

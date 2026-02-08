@@ -60,10 +60,66 @@ WatchManager::Status WatchManager::statusFor(quint32 uid, const QString& deviceI
     return it->second.status;
 }
 
+WatchManager::RetryInfo WatchManager::retryInfoFor(quint32 uid, const QString& deviceId) const {
+    const Key k{uid, deviceId};
+    auto it = m_entries.find(k);
+    if (it == m_entries.end()) {
+        return RetryInfo{};
+    }
+
+    const Entry& e = it->second;
+
+    RetryInfo out;
+    out.failCount = static_cast<quint32>(std::max(0, e.failCount));
+    out.nextRetryMs = e.nextRetryMs;
+
+    if (e.nextRetryMs > 0) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 deltaMs = e.nextRetryMs - now;
+        out.retryInSec = deltaMs > 0 ? static_cast<quint32>((deltaMs + 999) / 1000) : 0u;
+    } else {
+        out.retryInSec = 0;
+    }
+
+    return out;
+}
+
+static qint64 nowMsUtc() {
+    return QDateTime::currentMSecsSinceEpoch();
+}
+
+static qint64 backoffMsForFailCount(int failCount) {
+    // 0 -> 0ms (no backoff), 1 -> 30s, 2 -> 60s, 3 -> 120s, ... capped at 10 minutes.
+    static constexpr qint64 kBase = 30'000;
+    static constexpr qint64 kCap  = 10 * 60'000;
+
+    if (failCount <= 0) return 0;
+
+    // exponential: base * 2^(failCount-1)
+    qint64 ms = kBase;
+    for (int i = 1; i < failCount; ++i) {
+        if (ms > (kCap / 2)) { ms = kCap; break; }
+        ms *= 2;
+    }
+    if (ms > kCap) ms = kCap;
+    return ms;
+}
+
 void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mountPoint) {
-    // If mount point changed, recreate
+    // If mount point changed, recreate and reset backoff immediately
+    if (e.mountPoint != mountPoint) {
+        e.failCount = 0;
+        e.nextRetryMs = 0;
+        e.lastArmError.clear();
+        e.retryOnlyOnMountChange = false;
+    }
+
+    // If already armed and mountpoint unchanged, keep it.
     if (e.fanFd >= 0 && e.mountPoint == mountPoint) {
         e.status = Status{QStringLiteral("watching"), QString()};
+        e.failCount = 0;
+        e.nextRetryMs = 0;
+        e.lastArmError.clear();
         return;
     }
 
@@ -83,26 +139,32 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
                 .arg(QString::fromLocal8Bit(std::strerror(errno)))
         };
 
-        qWarning().noquote() << QStringLiteral("[watch] uid=%1 device=%2 open mountPoint failed: %3")
-                                .arg(k.uid)
-                                .arg(k.deviceId)
-                                .arg(e.status.error);
+        // Backoff scheduling (treat as an arming failure)
+        e.failCount = std::min(e.failCount + 1, 30);
+        e.nextRetryMs = nowMsUtc() + backoffMsForFailCount(e.failCount);
+        e.lastArmError = e.status.error;
 
         stopEntry(e);
         return;
     }
 
-    auto failWithErrno = [&](const QString& prefix, int err) {
-        e.status = Status{
-            QStringLiteral("error"),
-            QStringLiteral("%1 (%2): %3")
-                .arg(prefix)
-                .arg(err)
-                .arg(QString::fromLocal8Bit(std::strerror(err)))
-        };
+    auto setArmError = [&](int err, const QString& msg) {
+        e.status = Status{QStringLiteral("error"), msg};
+
+        // For EINVAL, assume "unsupported on this mount"; don't keep retrying.
+        if (err == EINVAL) {
+            e.retryOnlyOnMountChange = true;
+            e.nextRetryMs = 0; // so GUI doesn't show a countdown that will never happen
+        } else {
+            e.retryOnlyOnMountChange = false;
+            e.failCount = std::min(e.failCount + 1, 30);
+            e.nextRetryMs = nowMsUtc() + backoffMsForFailCount(e.failCount);
+        }
+
+        e.lastArmError = msg;
     };
 
-    // ---------- Attempt 1: fanotify filesystem events (needed for FAN_CREATE/FAN_DELETE/...)
+    // ---------- Attempt 1: fanotify filesystem events
     {
         const int fdFs = fanotify_init(
             FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK |
@@ -139,12 +201,6 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
                     ee.dirty = false;
 
                     if (m_svc) {
-                        // inside quietTimer timeout lambda, right before startAutoRescanIfAllowed:
-                        qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 quiet elapsed -> auto rescan")
-                                             .arg(k.uid)
-                                             .arg(k.deviceId);
-
-                        // Prototype: dirty -> full rescan, only for this device
                         m_svc->startAutoRescanIfAllowed(k.uid, k.deviceId);
                     }
                 });
@@ -154,50 +210,33 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
                     QStringLiteral("Watching active (fanotify filesystem events).")
                 };
 
-                qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 armed: fanotify filesystem events @ %3")
-                                     .arg(k.uid)
-                                     .arg(k.deviceId)
-                                     .arg(cleanMp);
-
+                // Success: reset backoff
+                e.failCount = 0;
+                e.nextRetryMs = 0;
+                e.lastArmError.clear();
+                e.retryOnlyOnMountChange = false;
                 return;
             }
 
             const int markErr = errno;
             ::close(fdFs);
 
-            qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 fanotify filesystem mark failed (%3): %4 (will try fallback)")
-                                 .arg(k.uid)
-                                 .arg(k.deviceId)
-                                 .arg(markErr)
-                                 .arg(QString::fromLocal8Bit(std::strerror(markErr)));
-
-            // Keep going: we’ll try a fallback mode below.
-            // Note: don’t overwrite status yet; fallback might succeed.
+            // keep going to fallback
             (void)markErr;
-        } else {
-            const int initErr = errno;
-            qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 fanotify filesystem init failed (%3): %4 (will try fallback)")
-                                 .arg(k.uid)
-                                 .arg(k.deviceId)
-                                 .arg(initErr)
-                                 .arg(QString::fromLocal8Bit(std::strerror(initErr)));
         }
     }
 
-    // ---------- Attempt 2 (fallback): mount mark with simpler events (no FAN_CREATE semantics)
+    // ---------- Attempt 2 (fallback): mount mark with simpler events
     {
         const int fdMount = fanotify_init(FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK,
                                           O_RDONLY | O_LARGEFILE);
         if (fdMount < 0) {
             const int eInit = errno;
             ::close(mpFd);
-            failWithErrno(QStringLiteral("fanotify_init failed"), eInit);
-
-            qWarning().noquote() << QStringLiteral("[watch] uid=%1 device=%2 fallback init failed: %3")
-                                    .arg(k.uid)
-                                    .arg(k.deviceId)
-                                    .arg(e.status.error);
-
+            setArmError(eInit,
+                        QStringLiteral("fanotify_init failed (%1): %2")
+                            .arg(eInit)
+                            .arg(QString::fromLocal8Bit(std::strerror(eInit))));
             stopEntry(e);
             return;
         }
@@ -213,13 +252,10 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             const int eMark = errno;
             ::close(fdMount);
             ::close(mpFd);
-            failWithErrno(QStringLiteral("fanotify_mark failed"), eMark);
-
-            qWarning().noquote() << QStringLiteral("[watch] uid=%1 device=%2 fallback mark failed: %3")
-                                    .arg(k.uid)
-                                    .arg(k.deviceId)
-                                    .arg(e.status.error);
-
+            setArmError(eMark,
+                        QStringLiteral("fanotify_mark failed (%1): %2")
+                            .arg(eMark)
+                            .arg(QString::fromLocal8Bit(std::strerror(eMark))));
             stopEntry(e);
             return;
         }
@@ -242,12 +278,6 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             ee.dirty = false;
 
             if (m_svc) {
-                // inside quietTimer timeout lambda, right before startAutoRescanIfAllowed:
-                qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 quiet elapsed -> auto rescan")
-                                     .arg(k.uid)
-                                     .arg(k.deviceId);
-
-                // Prototype: dirty -> full rescan, only for this device
                 m_svc->startAutoRescanIfAllowed(k.uid, k.deviceId);
             }
         });
@@ -257,10 +287,11 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             QStringLiteral("Watching active (fallback mode; limited event details).")
         };
 
-        qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 armed: fanotify mount fallback @ %3")
-                             .arg(k.uid)
-                             .arg(k.deviceId)
-                             .arg(cleanMp);
+        // Success: reset backoff
+        e.failCount = 0;
+        e.nextRetryMs = 0;
+        e.lastArmError.clear();
+        e.retryOnlyOnMountChange = false;
     }
 }
 
@@ -346,33 +377,40 @@ void WatchManager::refreshWatchesForUid(quint32 uid) {
         ++it;
     }
 
+    const qint64 now = nowMsUtc();
+
     // Ensure each target is correctly armed (or marked notMounted).
     for (const auto& t : targets) {
         const Key k{uid, t.deviceId};
         Entry& e = m_entries[k];
 
-        const QString prevState = e.status.state;
-
         if (t.mountPoint.trimmed().isEmpty()) {
             e.status = Status{QStringLiteral("notMounted"), QStringLiteral("Device is not mounted.")};
-
-            if (prevState != e.status.state) {
-                qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 -> notMounted")
-                                     .arg(uid)
-                                     .arg(t.deviceId);
-            }
-
             stopEntry(e);
+
+            // Reset backoff when not mounted; next mount gets an immediate attempt.
+            e.failCount = 0;
+            e.nextRetryMs = 0;
+            e.lastArmError.clear();
+            e.retryOnlyOnMountChange = false;
             continue;
         }
 
-        if (prevState == QStringLiteral("notMounted")) {
-            qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 mountPoint=%3")
-                                 .arg(uid)
-                                 .arg(t.deviceId)
-                                 .arg(QDir::cleanPath(t.mountPoint));
+        // If we previously failed to arm, respect backoff unless mountpoint changed.
+        const QString cleanMp = QDir::cleanPath(t.mountPoint);
+        const bool mountChanged = (e.mountPoint != cleanMp);
+
+        // If we hit a "permanent" arming error (e.g. EINVAL), don't retry until mount changes.
+        if (!mountChanged && e.fanFd < 0 && e.status.state == QStringLiteral("error") && e.retryOnlyOnMountChange) {
+            continue;
         }
 
-        ensureEntryWatching(k, e, t.mountPoint);
+        // Otherwise respect timed backoff.
+        if (!mountChanged && e.fanFd < 0 && e.status.state == QStringLiteral("error") && e.nextRetryMs > now) {
+            // Keep status as-is; just skip re-arming until backoff expires.
+            continue;
+        }
+
+        ensureEntryWatching(k, e, cleanMp);
     }
 }

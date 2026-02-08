@@ -113,11 +113,16 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
         e.nextRetryMs = 0;
         e.lastArmError.clear();
         e.retryOnlyOnMountChange = false;
+        e.watchingDetail.clear();
     }
 
     // If already armed and mountpoint unchanged, keep it.
     if (e.fanFd >= 0 && e.mountPoint == mountPoint) {
-        e.status = Status{QStringLiteral("watching"), QString()};
+        const QString detail = e.watchingDetail.trimmed().isEmpty()
+            ? QStringLiteral("Live watching is active.")
+            : e.watchingDetail.trimmed();
+
+        e.status = Status{QStringLiteral("watching"), detail};
         e.failCount = 0;
         e.nextRetryMs = 0;
         e.lastArmError.clear();
@@ -207,9 +212,10 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
                     }
                 });
 
+                e.watchingDetail = QStringLiteral("Watching active (fanotify filesystem events).");
                 e.status = Status{
                     QStringLiteral("watching"),
-                    QStringLiteral("Watching active (fanotify filesystem events).")
+                    e.watchingDetail
                 };
 
                 // Success: reset backoff
@@ -284,9 +290,10 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             }
         });
 
+        e.watchingDetail = QStringLiteral("Watching active (fallback mode; limited event details).");
         e.status = Status{
             QStringLiteral("watching"),
-            QStringLiteral("Watching active (fallback mode; limited event details).")
+            e.watchingDetail
         };
 
         // Success: reset backoff

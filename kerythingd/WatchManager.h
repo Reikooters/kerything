@@ -52,6 +52,9 @@ private:
 
         Status status{QStringLiteral("error"), QStringLiteral("Not initialized")};
 
+        // Human-friendly detail shown while watching is active
+        QString watchingDetail;
+
         // Coalesce events into one rescan attempt
         QTimer* quietTimer = nullptr;
         bool dirty = false;

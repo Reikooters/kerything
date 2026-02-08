@@ -3,6 +3,7 @@
 
 #include "SettingsDialog.h"
 
+#include <iostream>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -334,7 +335,7 @@ void SettingsDialog::refresh() {
         if (!tip.isEmpty()) tip += QStringLiteral("\n");
 
         if (rm.retryMode == QStringLiteral("onRemount")) {
-            tip += QStringLiteral("Watch will be retried on remount");
+            tip += QStringLiteral("Watch will be retried on remount.");
         } else if (rm.retryInSec > 0) {
             tip += QStringLiteral("Next watch retry in %1").arg(formatDurationCompact(rm.retryInSec));
         } else {
@@ -371,12 +372,17 @@ void SettingsDialog::refresh() {
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
 
+            std::cerr << "Processing indexed-only device: " << deviceId.toStdString() << ", watchState: " << st.watchState.toStdString() << ", watchError: " << st.watchError.toStdString() << std::endl;
+
             // Show health via tooltip/icon if present in indexedOpt row
             QString tip;
             if (!st.watchEnabled) {
                 tip = QStringLiteral("Live watching is disabled.");
             } else if (st.watchState == QStringLiteral("watching")) {
                 tip = QStringLiteral("Live watching is active.");
+                if (!st.watchError.trimmed().isEmpty()) {
+                    tip += QStringLiteral("\n") + st.watchError.trimmed();
+                }
             } else if (st.watchState == QStringLiteral("notMounted")) {
                 tip = QStringLiteral("Live watching is enabled, but this device is not mounted.");
             } else if (st.watchState == QStringLiteral("error")) {
@@ -440,11 +446,16 @@ void SettingsDialog::refresh() {
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
 
+        std::cerr << "Processing indexed-only device: " << deviceId.toStdString() << ", watchState: " << st.watchState.toStdString() << ", watchError: " << st.watchError.toStdString() << std::endl;
+
         QString tip;
         if (!st.watchEnabled) {
             tip = QStringLiteral("Live watching is disabled.");
         } else if (st.watchState == QStringLiteral("watching")) {
             tip = QStringLiteral("Live watching is active.");
+            if (!st.watchError.trimmed().isEmpty()) {
+                tip += QStringLiteral("\n") + st.watchError.trimmed();
+            }
         } else if (st.watchState == QStringLiteral("notMounted")) {
             tip = QStringLiteral("Live watching is enabled, but this device is not mounted.");
         } else if (st.watchState == QStringLiteral("error")) {

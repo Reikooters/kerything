@@ -51,10 +51,11 @@ WatchManager::Status WatchManager::statusFor(quint32 uid, const QString& deviceI
     const Key k{uid, deviceId};
     auto it = m_entries.find(k);
     if (it == m_entries.end()) {
-        // Avoid showing a scary "error" if we're queried before the first refresh.
+        // Set status to pending before the first refresh has established mount state,
+        // and avoid overloading "unknown" (reserved for unhandled/bug states).
         return Status{
-            QStringLiteral("notMounted"),
-            QStringLiteral("Watch status pending refresh."),
+            QStringLiteral("pending"),
+            QString(),
             QString()
         };
     }
@@ -62,9 +63,12 @@ WatchManager::Status WatchManager::statusFor(quint32 uid, const QString& deviceI
     Status out = it->second.status;
 
     // Ensure mode/detail are populated consistently from Entry while watching.
+    // Mode must be empty unless actively watching.
     if (out.state == QStringLiteral("watching")) {
         out.mode = it->second.watchingMode;
-        // Keep out.error as whatever status carries today (GUI will stop relying on it for detail).
+    }
+    else {
+        out.mode.clear();
     }
 
     return out;

@@ -398,6 +398,8 @@ void SettingsDialog::refresh() {
                 tip = st.watchError.trimmed().isEmpty()
                     ? QStringLiteral("Live watching is enabled, but watching failed for this device.")
                     : st.watchError.trimmed();
+            } else if (st.watchState == QStringLiteral("pending")) {
+                tip = QStringLiteral("Live watching is initializing...");
             } else {
                 tip = QStringLiteral("Live watching status is unknown.");
             }
@@ -469,6 +471,8 @@ void SettingsDialog::refresh() {
             tip = st.watchError.trimmed().isEmpty()
                 ? QStringLiteral("Live watching is enabled, but watching failed for this device.")
                 : st.watchError.trimmed();
+        } else if (st.watchState == QStringLiteral("pending")) {
+            tip = QStringLiteral("Live watching is initializing...");
         } else {
             tip = QStringLiteral("Live watching status is unknown.");
         }

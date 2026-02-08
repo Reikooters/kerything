@@ -1439,6 +1439,9 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
 
             if (st.state == QStringLiteral("watching")) {
                 m.insert(QStringLiteral("watchMode"), st.mode);
+            } else {
+                // Explicitly keep it empty for all non-watching states
+                m.insert(QStringLiteral("watchMode"), QString());
             }
 
             const auto ri = m_watchMgr->retryInfoFor(uid, deviceId);

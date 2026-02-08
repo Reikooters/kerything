@@ -16,11 +16,11 @@ class WatchManager final : public QObject {
     Q_OBJECT
 public:
     struct Status {
-        QString state; // "watching" | "notMounted" | "error"
+        QString state; // "watching" | "notMounted" | "error" | "pending" | "unknown"
         QString error; // empty if OK
 
         // Machine-readable mode + human-friendly detail for "watching"
-        QString mode;   // "filesystemEvents" | "mountFallback" | "" (unknown/not watching)
+        QString mode;  // "filesystemEvents" | "mountFallback" | "" (unknown/not watching)
     };
 
     struct RetryInfo {

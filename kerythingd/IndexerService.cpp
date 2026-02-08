@@ -1416,6 +1416,7 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         m.insert(QStringLiteral("label"), idx.labelLastKnown);
         m.insert(QStringLiteral("uuid"), idx.uuidLastKnown);
         m.insert(QStringLiteral("watchEnabled"), idx.watchEnabled);
+        m.insert(QStringLiteral("watchMode"), QString());
 
         // Watch health/status (derived, not persisted)
         if (!idx.watchEnabled) {
@@ -1429,7 +1430,16 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         } else if (m_watchMgr) {
             const auto st = m_watchMgr->statusFor(uid, deviceId);
             m.insert(QStringLiteral("watchState"), st.state);
-            m.insert(QStringLiteral("watchError"), st.error);
+
+            if (st.state == QStringLiteral("error")) {
+                m.insert(QStringLiteral("watchError"), st.error);
+            } else {
+                m.insert(QStringLiteral("watchError"), QString());
+            }
+
+            if (st.state == QStringLiteral("watching")) {
+                m.insert(QStringLiteral("watchMode"), st.mode);
+            }
 
             const auto ri = m_watchMgr->retryInfoFor(uid, deviceId);
 

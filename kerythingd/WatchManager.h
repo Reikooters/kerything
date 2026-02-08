@@ -18,6 +18,9 @@ public:
     struct Status {
         QString state; // "watching" | "notMounted" | "error"
         QString error; // empty if OK
+
+        // Machine-readable mode + human-friendly detail for "watching"
+        QString mode;   // "filesystemEvents" | "mountFallback" | "" (unknown/not watching)
     };
 
     struct RetryInfo {
@@ -50,10 +53,10 @@ private:
         int fanFd = -1;
         QSocketNotifier* notifier = nullptr;
 
-        Status status{QStringLiteral("error"), QStringLiteral("Not initialized")};
+        Status status{QStringLiteral("error"), QStringLiteral("Not initialized"), QString()};
 
-        // Human-friendly detail shown while watching is active
-        QString watchingDetail;
+        // Machine-readable watch mode while active
+        QString watchingMode; // "filesystemEvents" | "mountFallback"
 
         // Coalesce events into one rescan attempt
         QTimer* quietTimer = nullptr;

@@ -287,8 +287,9 @@ void SettingsDialog::refresh() {
         st.watchEnabled = m.value(QStringLiteral("watchEnabled"), true).toBool();
 
         // Watch health/status from daemon
-        st.watchState = m.value(QStringLiteral("watchState")).toString();
-        st.watchError = m.value(QStringLiteral("watchError")).toString();
+        st.watchState  = m.value(QStringLiteral("watchState")).toString();
+        st.watchError  = m.value(QStringLiteral("watchError")).toString();
+        st.watchMode   = m.value(QStringLiteral("watchMode")).toString();
 
         idxMap.insert(st.deviceId, st);
 
@@ -348,6 +349,13 @@ void SettingsDialog::refresh() {
         }
     };
 
+    auto watchingModeLabel = [](const QString& mode) -> QString {
+        const QString m = mode.trimmed();
+        if (m == QStringLiteral("filesystemEvents")) return QStringLiteral("filesystem events");
+        if (m == QStringLiteral("mountFallback"))    return QStringLiteral("fallback");
+        return QString();
+    };
+
     // 1) Known devices (merge indexed metadata if present)
     for (const QVariant& v : *knownOpt) {
         const QVariantMap m = v.toMap();
@@ -362,7 +370,10 @@ void SettingsDialog::refresh() {
 
         knownIds.insert(deviceId);
 
-        RowState st = idxMap.value(deviceId, RowState{deviceId, QString(), QString(), QString(), false, 0, 0, true, QString(), QString()});
+        RowState st = idxMap.value(
+            deviceId,
+            RowState{deviceId, QString(), QString(), QString(), false, 0, 0, true, QString(), QString(), QString()}
+        );
 
         auto* item = new QTreeWidgetItem(m_tree);
         item->setText(ColIndexed, st.indexed ? QStringLiteral("Yes") : QStringLiteral("No"));
@@ -377,10 +388,10 @@ void SettingsDialog::refresh() {
             if (!st.watchEnabled) {
                 tip = QStringLiteral("Live watching is disabled.");
             } else if (st.watchState == QStringLiteral("watching")) {
-                tip = QStringLiteral("Live watching is active.");
-                if (!st.watchError.trimmed().isEmpty()) {
-                    tip += QStringLiteral("\n") + st.watchError.trimmed();
-                }
+                const QString modeLbl = watchingModeLabel(st.watchMode);
+                tip = modeLbl.isEmpty()
+                    ? QStringLiteral("Live watching is active.")
+                    : QStringLiteral("Live watching is active (%1).").arg(modeLbl);
             } else if (st.watchState == QStringLiteral("notMounted")) {
                 tip = QStringLiteral("Live watching is enabled, but this device is not mounted.");
             } else if (st.watchState == QStringLiteral("error")) {
@@ -448,10 +459,10 @@ void SettingsDialog::refresh() {
         if (!st.watchEnabled) {
             tip = QStringLiteral("Live watching is disabled.");
         } else if (st.watchState == QStringLiteral("watching")) {
-            tip = QStringLiteral("Live watching is active.");
-            if (!st.watchError.trimmed().isEmpty()) {
-                tip += QStringLiteral("\n") + st.watchError.trimmed();
-            }
+            const QString modeLbl = watchingModeLabel(st.watchMode);
+            tip = modeLbl.isEmpty()
+                ? QStringLiteral("Live watching is active.")
+                : QStringLiteral("Live watching is active (%1).").arg(modeLbl);
         } else if (st.watchState == QStringLiteral("notMounted")) {
             tip = QStringLiteral("Live watching is enabled, but this device is not mounted.");
         } else if (st.watchState == QStringLiteral("error")) {

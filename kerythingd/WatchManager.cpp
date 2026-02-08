@@ -54,10 +54,20 @@ WatchManager::Status WatchManager::statusFor(quint32 uid, const QString& deviceI
         // Avoid showing a scary "error" if we're queried before the first refresh.
         return Status{
             QStringLiteral("notMounted"),
-            QStringLiteral("Watch status pending refresh.")
+            QStringLiteral("Watch status pending refresh."),
+            QString()
         };
     }
-    return it->second.status;
+
+    Status out = it->second.status;
+
+    // Ensure mode/detail are populated consistently from Entry while watching.
+    if (out.state == QStringLiteral("watching")) {
+        out.mode = it->second.watchingMode;
+        // Keep out.error as whatever status carries today (GUI will stop relying on it for detail).
+    }
+
+    return out;
 }
 
 WatchManager::RetryInfo WatchManager::retryInfoFor(quint32 uid, const QString& deviceId) const {
@@ -113,16 +123,16 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
         e.nextRetryMs = 0;
         e.lastArmError.clear();
         e.retryOnlyOnMountChange = false;
-        e.watchingDetail.clear();
+        e.watchingMode.clear();
     }
 
     // If already armed and mountpoint unchanged, keep it.
     if (e.fanFd >= 0 && e.mountPoint == mountPoint) {
-        const QString detail = e.watchingDetail.trimmed().isEmpty()
-            ? QStringLiteral("Live watching is active.")
-            : e.watchingDetail.trimmed();
-
-        e.status = Status{QStringLiteral("watching"), detail};
+        e.status = Status{
+            QStringLiteral("watching"),
+            QString(), // error empty while OK
+            e.watchingMode
+        };
         e.failCount = 0;
         e.nextRetryMs = 0;
         e.lastArmError.clear();
@@ -213,11 +223,8 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
                     }
                 });
 
-                e.watchingDetail = QStringLiteral("Watching active (fanotify filesystem events).");
-                e.status = Status{
-                    QStringLiteral("watching"),
-                    e.watchingDetail
-                };
+                e.watchingMode = QStringLiteral("filesystemEvents");
+                e.status = Status{QStringLiteral("watching"), QString(), e.watchingMode};
 
                 // Success: reset backoff
                 e.failCount = 0;
@@ -294,11 +301,8 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             }
         });
 
-        e.watchingDetail = QStringLiteral("Watching active (fallback mode; limited event details).");
-        e.status = Status{
-            QStringLiteral("watching"),
-            e.watchingDetail
-        };
+        e.watchingMode = QStringLiteral("mountFallback");
+        e.status = Status{QStringLiteral("watching"), QString(), e.watchingMode};
 
         // Success: reset backoff
         e.failCount = 0;
@@ -398,7 +402,11 @@ void WatchManager::refreshWatchesForUid(quint32 uid) {
         Entry& e = m_entries[k];
 
         if (t.mountPoint.trimmed().isEmpty()) {
-            e.status = Status{QStringLiteral("notMounted"), QStringLiteral("Device is not mounted.")};
+            e.status = Status{
+                QStringLiteral("notMounted"),
+                QStringLiteral("Device is not mounted."),
+                QString()
+            };
             stopEntry(e);
 
             // Reset backoff when not mounted; next mount gets an immediate attempt.
@@ -406,6 +414,7 @@ void WatchManager::refreshWatchesForUid(quint32 uid) {
             e.nextRetryMs = 0;
             e.lastArmError.clear();
             e.retryOnlyOnMountChange = false;
+            e.watchingMode.clear();
             continue;
         }
 

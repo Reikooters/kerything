@@ -50,7 +50,10 @@ private:
 
         // Derived watch health (from daemon)
         QString watchState; // "watching" | "notMounted" | "error" | "disabled" (optional)
-        QString watchError; // human-friendly message (optional)
+        QString watchError; // error text (optional; should be empty when watching OK)
+
+        // Watching-only extra info
+        QString watchMode;  // "filesystemEvents" | "mountFallback" | "" (optional)
     };
 
     void connectDaemonSignals();

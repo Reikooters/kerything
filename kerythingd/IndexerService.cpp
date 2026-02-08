@@ -1277,37 +1277,87 @@ void IndexerService::ListKnownDevices(QVariantList& devicesOut) const {
     // Read mountinfo once, then match by resolved /dev node path
     const auto mountInfo = readMountInfo();
 
-    // Enumerate partitions via /dev/disk/by-partuuid/*
-    const fs::path byPartuuidDir("/dev/disk/by-partuuid");
-    if (!fs::exists(byPartuuidDir) || !fs::is_directory(byPartuuidDir)) {
+    struct Candidate {
+        QString deviceId;     // what we expose on D-Bus
+        std::string devNode;  // canonical /dev path
+        QString partuuid;
+        QString uuid;
+    };
+
+    // Collect candidates keyed by canonical devNode so we de-dup between by-partuuid/by-uuid.
+    std::unordered_map<std::string, Candidate> byDevNode;
+
+    auto addSymlinkDir = [&](const fs::path& dir,
+                             const QString& idPrefix,
+                             bool isPartuuid) {
+        if (!fs::exists(dir) || !fs::is_directory(dir)) return;
+
+        for (const auto& entry : fs::directory_iterator(dir)) {
+            if (!entry.is_symlink() && !entry.is_regular_file()) continue;
+
+            const std::string name = entry.path().filename().string();
+
+            std::error_code ec;
+            const fs::path resolved = fs::canonical(entry.path(), ec);
+            if (ec) continue;
+
+            const std::string devNode = resolved.string();
+
+            Candidate c;
+            c.deviceId = idPrefix + QString::fromStdString(name);
+            c.devNode = devNode;
+            if (isPartuuid) c.partuuid = QString::fromStdString(name);
+            else c.uuid = QString::fromStdString(name);
+
+            auto it = byDevNode.find(devNode);
+            if (it == byDevNode.end()) {
+                byDevNode.emplace(devNode, c);
+            } else {
+                // Prefer partuuid IDs when we have both.
+                const bool existingIsPartuuid = it->second.deviceId.startsWith(QStringLiteral("partuuid:"));
+                const bool newIsPartuuid = c.deviceId.startsWith(QStringLiteral("partuuid:"));
+                if (!existingIsPartuuid && newIsPartuuid) {
+                    it->second = c;
+                } else {
+                    // Merge extra metadata if missing.
+                    if (it->second.partuuid.isEmpty() && !c.partuuid.isEmpty()) it->second.partuuid = c.partuuid;
+                    if (it->second.uuid.isEmpty() && !c.uuid.isEmpty()) it->second.uuid = c.uuid;
+                }
+            }
+        }
+    };
+
+    // 1) Prefer partuuid (physical partitions).
+    addSymlinkDir(fs::path("/dev/disk/by-partuuid"), QStringLiteral("partuuid:"), true);
+
+    // 2) Also accept filesystem UUIDs (covers loop devices with mkfs.*).
+    addSymlinkDir(fs::path("/dev/disk/by-uuid"), QStringLiteral("uuid:"), false);
+
+    if (byDevNode.empty()) {
         return;
     }
 
-    for (const auto& entry : fs::directory_iterator(byPartuuidDir)) {
-        if (!entry.is_symlink() && !entry.is_regular_file()) {
-            continue;
-        }
-
-        const std::string partuuid = entry.path().filename().string();
-
-        std::error_code ec;
-        const fs::path resolved = fs::canonical(entry.path(), ec);
-        if (ec) continue;
-
-        const std::string devNode = resolved.string();
+    // Emit one device record per canonical devNode.
+    for (const auto& kv : byDevNode) {
+        const Candidate& cand = kv.second;
+        const std::string& devNode = cand.devNode;
 
         QVariantMap dev;
-        dev.insert(QStringLiteral("deviceId"), QStringLiteral("partuuid:") + QString::fromStdString(partuuid));
+        dev.insert(QStringLiteral("deviceId"), cand.deviceId);
         dev.insert(QStringLiteral("devNode"), QString::fromStdString(devNode));
-        dev.insert(QStringLiteral("partuuid"), QString::fromStdString(partuuid));
+        dev.insert(QStringLiteral("partuuid"), cand.partuuid);
+        dev.insert(QStringLiteral("uuid"), cand.uuid);
 
         const auto fsType = blkidValueForDev(devNode, "TYPE");
-        const auto uuid = blkidValueForDev(devNode, "UUID");
+        const auto probedUuid = blkidValueForDev(devNode, "UUID");
         const auto label = blkidValueForDev(devNode, "LABEL");
 
         dev.insert(QStringLiteral("fsType"), fsType ? lower(*fsType) : QString());
-        dev.insert(QStringLiteral("uuid"), uuid ? lower(*uuid) : QString());
         dev.insert(QStringLiteral("label"), label.value_or(QString()));
+
+        // If we enumerated via by-uuid we already have a uuid, but blkid is authoritative.
+        const QString uuidFinal = probedUuid ? lower(*probedUuid) : lower(cand.uuid);
+        dev.insert(QStringLiteral("uuid"), uuidFinal);
 
         // Mount points: match mount_source that resolves to this devNode.
         QStringList mountPoints;

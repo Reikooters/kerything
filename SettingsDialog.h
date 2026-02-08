@@ -47,6 +47,10 @@ private:
         quint64 entryCount = 0;
         qint64 lastIndexedTime = 0;
         bool watchEnabled = true;
+
+        // Derived watch health (from daemon)
+        QString watchState; // "watching" | "notMounted" | "error" | "disabled" (optional)
+        QString watchError; // human-friendly message (optional)
     };
 
     void connectDaemonSignals();

@@ -46,6 +46,8 @@ add_executable(kerythingd
         kerythingd/main.cpp
         kerythingd/IndexerService.h
         kerythingd/IndexerService.cpp
+        kerythingd/WatchManager.h
+        kerythingd/WatchManager.cpp
 )
 
 target_link_libraries(kerythingd

@@ -274,6 +274,11 @@ void SettingsDialog::refresh() {
         st.entryCount = m.value(QStringLiteral("entryCount")).toULongLong();
         st.lastIndexedTime = m.value(QStringLiteral("lastIndexedTime")).toLongLong();
         st.watchEnabled = m.value(QStringLiteral("watchEnabled"), true).toBool();
+
+        // Watch health/status from daemon
+        st.watchState = m.value(QStringLiteral("watchState")).toString();
+        st.watchError = m.value(QStringLiteral("watchError")).toString();
+
         idxMap.insert(st.deviceId, st);
     }
 
@@ -302,7 +307,7 @@ void SettingsDialog::refresh() {
 
         knownIds.insert(deviceId);
 
-        RowState st = idxMap.value(deviceId, RowState{deviceId, QString(), QString(), QString(), false, 0, 0, true});
+        RowState st = idxMap.value(deviceId, RowState{deviceId, QString(), QString(), QString(), false, 0, 0, true, QString(), QString()});
 
         auto* item = new QTreeWidgetItem(m_tree);
         item->setText(ColIndexed, st.indexed ? QStringLiteral("Yes") : QStringLiteral("No"));
@@ -311,7 +316,30 @@ void SettingsDialog::refresh() {
         if (st.indexed) {
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
-            item->setToolTip(ColWatch, QStringLiteral("Enable live watching (EXT4 first; may be limited on other filesystems)."));
+
+            // Show health via tooltip/icon if present in indexedOpt row
+            QString tip;
+            if (!st.watchEnabled) {
+                tip = QStringLiteral("Live watching is disabled.");
+            } else if (st.watchState == QStringLiteral("watching")) {
+                tip = QStringLiteral("Live watching is active.");
+            } else if (st.watchState == QStringLiteral("notMounted")) {
+                tip = QStringLiteral("Live watching is enabled, but this device is not mounted.");
+            } else if (st.watchState == QStringLiteral("error")) {
+                tip = st.watchError.trimmed().isEmpty()
+                    ? QStringLiteral("Live watching is enabled, but watching failed for this device.")
+                    : st.watchError.trimmed();
+            } else {
+                tip = QStringLiteral("Live watching status is unknown.");
+            }
+
+            item->setToolTip(ColWatch, tip);
+
+            const bool warn = st.watchEnabled &&
+                              (st.watchState == QStringLiteral("notMounted") || st.watchState == QStringLiteral("error"));
+            if (warn) {
+                item->setIcon(ColWatch, QIcon::fromTheme(QStringLiteral("dialog-warning")));
+            }
         } else {
             item->setText(ColWatch, QStringLiteral("—"));
             item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
@@ -355,7 +383,28 @@ void SettingsDialog::refresh() {
 
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(ColWatch, st.watchEnabled ? Qt::Checked : Qt::Unchecked);
-        item->setToolTip(ColWatch, QStringLiteral("Enable live watching (EXT4 first; may be limited on other filesystems)."));
+
+        QString tip;
+        if (!st.watchEnabled) {
+            tip = QStringLiteral("Live watching is disabled.");
+        } else if (st.watchState == QStringLiteral("watching")) {
+            tip = QStringLiteral("Live watching is active.");
+        } else if (st.watchState == QStringLiteral("notMounted")) {
+            tip = QStringLiteral("Live watching is enabled, but this device is not mounted.");
+        } else if (st.watchState == QStringLiteral("error")) {
+            tip = st.watchError.trimmed().isEmpty()
+                ? QStringLiteral("Live watching is enabled, but watching failed for this device.")
+                : st.watchError.trimmed();
+        } else {
+            tip = QStringLiteral("Live watching status is unknown.");
+        }
+        item->setToolTip(ColWatch, tip);
+
+        const bool warn = st.watchEnabled &&
+                          (st.watchState == QStringLiteral("notMounted") || st.watchState == QStringLiteral("error"));
+        if (warn) {
+            item->setIcon(ColWatch, QIcon::fromTheme(QStringLiteral("dialog-warning")));
+        }
 
         item->setText(ColFs, st.fsType.isEmpty() ? QStringLiteral("—") : st.fsType);
 

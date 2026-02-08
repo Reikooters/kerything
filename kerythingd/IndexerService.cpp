@@ -2,6 +2,7 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include "IndexerService.h"
+#include "WatchManager.h"
 
 #include <algorithm>
 #include <cctype>
@@ -27,6 +28,8 @@
 #include <QSaveFile>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QTimer>
+#include <QDebug>
 
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusConnectionInterface>
@@ -387,6 +390,32 @@ std::vector<quint32> IndexerService::deviceCandidatesForQuery(const DeviceIndex&
 
 IndexerService::IndexerService(QObject* parent)
     : QObject(parent) {
+    m_watchMgr = std::make_unique<WatchManager>(this, this);
+
+    // Keep watch status/arming in sync with mount/unmount changes even if GUI isn't polling.
+    m_watchRefreshTimer = new QTimer(this);
+    m_watchRefreshTimer->setInterval(5000);
+    connect(m_watchRefreshTimer, &QTimer::timeout, this, [this]() {
+        if (!m_watchMgr) return;
+
+        // Refresh only for uids we’ve actually loaded, and only if they have any watch-enabled indexes.
+        for (const auto& uidKv : m_indexesByUid) {
+            const quint32 uid = uidKv.first;
+
+            bool anyWatchEnabled = false;
+            for (const auto& devKv : uidKv.second) {
+                if (devKv.second.watchEnabled) {
+                    anyWatchEnabled = true;
+                    break;
+                }
+            }
+            if (!anyWatchEnabled) continue;
+
+            qInfo().noquote() << QStringLiteral("[watch] periodic refresh uid=%1").arg(uid);
+            m_watchMgr->refreshWatchesForUid(uid);
+        }
+    });
+    m_watchRefreshTimer->start();
 }
 
 IndexerService::~IndexerService() {
@@ -741,6 +770,11 @@ void IndexerService::loadSnapshotsForUid(quint32 uid) const {
     {
         QVariantMap props;
         Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("ready"), props);
+    }
+
+    // After loading, ensure watchers are armed (or marked notMounted) for this uid.
+    if (m_watchMgr) {
+        const_cast<WatchManager*>(m_watchMgr.get())->refreshWatchesForUid(uid);
     }
 }
 
@@ -1312,6 +1346,11 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
     auto uidIt = m_indexesByUid.find(uid);
     if (uidIt == m_indexesByUid.end()) return;
 
+    // Ensure watch status is up to date (best-effort, cheap: uses cached device inventory)
+    if (m_watchMgr) {
+        const_cast<WatchManager*>(m_watchMgr.get())->refreshWatchesForUid(uid);
+    }
+
     indexedOut.reserve(static_cast<int>(uidIt->second.size()));
 
     for (const auto& kv : uidIt->second) {
@@ -1327,6 +1366,19 @@ void IndexerService::ListIndexedDevices(QVariantList& indexedOut) const {
         m.insert(QStringLiteral("label"), idx.labelLastKnown);
         m.insert(QStringLiteral("uuid"), idx.uuidLastKnown);
         m.insert(QStringLiteral("watchEnabled"), idx.watchEnabled);
+
+        // Watch health/status (derived, not persisted)
+        if (!idx.watchEnabled) {
+            m.insert(QStringLiteral("watchState"), QStringLiteral("disabled"));
+            m.insert(QStringLiteral("watchError"), QString());
+        } else if (m_watchMgr) {
+            const auto st = m_watchMgr->statusFor(uid, deviceId);
+            m.insert(QStringLiteral("watchState"), st.state);
+            m.insert(QStringLiteral("watchError"), st.error);
+        } else {
+            m.insert(QStringLiteral("watchState"), QStringLiteral("error"));
+            m.insert(QStringLiteral("watchError"), QStringLiteral("Watch manager unavailable."));
+        }
 
         indexedOut.push_back(m);
     }
@@ -1346,236 +1398,9 @@ std::optional<QVariantMap> IndexerService::findDeviceById(const QString& deviceI
 
 quint64 IndexerService::StartIndex(const QString& deviceId) {
     const quint32 uid = callerUidOr0();
-    ensureLoadedForUid(uid);
-
-    const auto devOpt = findDeviceById(deviceId);
-    if (!devOpt) {
-        // Emit a finished signal immediately so the GUI has something deterministic to react to.
-        const quint64 jobId = m_nextJobId++;
-        QVariantMap props;
-        props.insert(QStringLiteral("deviceId"), deviceId);
-        Q_EMIT JobAdded(jobId, props);
-        Q_EMIT JobFinished(jobId, QStringLiteral("error"), QStringLiteral("Unknown deviceId"), props);
-        return jobId;
-    }
-
-    const QVariantMap dev = *devOpt;
-    const QString devNode = dev.value(QStringLiteral("devNode")).toString();
-    const QString fsType = dev.value(QStringLiteral("fsType")).toString().toLower();
-
-    const quint64 jobId = m_nextJobId++;
-
-    auto job = std::make_unique<Job>();
-    job->jobId = jobId;
-    job->ownerUid = uid;
-    job->deviceId = deviceId;
-    job->devNode = devNode;
-    job->fsType = fsType;
-
-    // Qt-owned process; we deleteLater() when finished.
-    job->proc = new QProcess(this);
-
-    QVariantMap props;
-    props.insert(QStringLiteral("deviceId"), deviceId);
-    props.insert(QStringLiteral("devNode"), devNode);
-    props.insert(QStringLiteral("fsType"), fsType);
-
-    Q_EMIT JobAdded(jobId, props);
-    Q_EMIT JobProgress(jobId, 0, props);
-
-    // Tell GUIs we are actively rescanning (per-user)
-    {
-        auto* self = const_cast<IndexerService*>(this);
-        QVariantMap st;
-        st.insert(QStringLiteral("deviceId"), deviceId);
-        st.insert(QStringLiteral("percent"), 0u);
-        Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
-    }
-
-    // Insert job BEFORE connecting lambdas that will look it up.
-    m_jobs.emplace(jobId, std::move(job));
-
-    // Capture stdout (binary scan output)
-    connect(m_jobs[jobId]->proc, &QProcess::readyReadStandardOutput, this, [this, jobId]() {
-        auto it = m_jobs.find(jobId);
-        if (it == m_jobs.end() || !it->second) return;
-        Job& j = *it->second;
-        if (!j.proc) return;
-
-        j.stdoutBuf += j.proc->readAllStandardOutput();
-    });
-
-    // Read progress from stderr (KERYTHING_PROGRESS lines)
-    connect(m_jobs[jobId]->proc, &QProcess::readyReadStandardError, this, [this, jobId, uid]() {
-        auto it = m_jobs.find(jobId);
-        if (it == m_jobs.end() || !it->second) return;
-        Job& j = *it->second;
-        if (!j.proc) return;
-
-        j.stderrBuf += j.proc->readAllStandardError();
-
-        std::optional<int> latestPctSeen;
-
-        auto consumeLine = [&](QByteArrayView lineView) {
-            static constexpr QByteArrayView kPrefix("KERYTHING_PROGRESS ");
-            if (!lineView.startsWith(kPrefix)) return;
-
-            bool ok = false;
-            int pct = QByteArray(lineView.mid(kPrefix.size())).trimmed().toInt(&ok);
-            if (!ok) return;
-
-            pct = std::clamp(pct, 0, 100);
-            latestPctSeen = pct;
-        };
-
-        while (true) {
-            const int nl = j.stderrBuf.indexOf('\n');
-            if (nl < 0) break;
-
-            QByteArrayView lineView(j.stderrBuf.constData(), nl);
-            consumeLine(lineView);
-            j.stderrBuf.remove(0, nl + 1);
-        }
-
-        // If we are cancelling, don't spam progress; the UI is already in "cancelling" mode.
-        if (j.state == Job::State::Cancelling) {
-            return;
-        }
-
-        if (latestPctSeen && *latestPctSeen != j.lastPct) {
-            j.lastPct = *latestPctSeen;
-
-            QVariantMap props;
-            props.insert(QStringLiteral("deviceId"), j.deviceId);
-            props.insert(QStringLiteral("devNode"), j.devNode);
-            props.insert(QStringLiteral("fsType"), j.fsType);
-
-            Q_EMIT JobProgress(jobId, static_cast<quint32>(j.lastPct), props);
-
-            // Mirror progress into DaemonStateChanged so the main GUI can show it
-            {
-                auto* self = const_cast<IndexerService*>(this);
-                QVariantMap st;
-                st.insert(QStringLiteral("deviceId"), j.deviceId);
-                st.insert(QStringLiteral("percent"), static_cast<quint32>(j.lastPct));
-                Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
-            }
-        }
-    });
-
-    connect(m_jobs[jobId]->proc,
-            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-            this,
-            [this, jobId, uid](int exitCode, QProcess::ExitStatus exitStatus) {
-                auto it = m_jobs.find(jobId);
-                if (it == m_jobs.end() || !it->second) return;
-                Job& j = *it->second;
-
-                // Drain any remaining stdout after process exit
-                if (j.proc) {
-                    j.stdoutBuf += j.proc->readAllStandardOutput();
-                }
-
-                QVariantMap props;
-                props.insert(QStringLiteral("deviceId"), j.deviceId);
-                props.insert(QStringLiteral("devNode"), j.devNode);
-                props.insert(QStringLiteral("fsType"), j.fsType);
-
-                // Decide final status once, from the finished handler only.
-                if (j.state == Job::State::Cancelling) {
-                    Q_EMIT JobFinished(jobId, QStringLiteral("cancelled"), QStringLiteral("Cancelled by request"), props);
-                } else if (exitStatus == QProcess::CrashExit) {
-                    Q_EMIT JobFinished(jobId, QStringLiteral("error"), QStringLiteral("Scanner helper crashed"), props);
-                } else if (exitCode != 0) {
-                    Q_EMIT JobFinished(jobId,
-                                       QStringLiteral("error"),
-                                       QStringLiteral("Scanner helper failed (exit code %1)").arg(exitCode),
-                                       props);
-                } else {
-                    // Parse + store the index in memory
-                    ParsedScan parsed = parseHelperStdout(j.stdoutBuf);
-                    if (!parsed.error.isEmpty()) {
-                        Q_EMIT JobFinished(jobId, QStringLiteral("error"),
-                                           QStringLiteral("Failed to parse scan output: %1").arg(parsed.error),
-                                           props);
-                    } else {
-                        DeviceIndex& idx = m_indexesByUid[j.ownerUid][j.deviceId];
-                        idx.fsType = j.fsType;
-                        idx.generation += 1;
-                        idx.records = std::move(parsed.records);
-                        idx.stringPool = std::move(parsed.stringPool);
-                        idx.dirPathCache.clear();
-
-                        buildTrigramIndex(idx);
-                        buildSortOrders(idx);
-
-                        // Set lastIndexedTime only when we successfully persist the snapshot.
-                        idx.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
-
-                        const auto devOpt = findDeviceById(j.deviceId);
-                        if (devOpt) {
-                            const QVariantMap dev = *devOpt;
-                            idx.labelLastKnown = dev.value(QStringLiteral("label")).toString();
-                            idx.uuidLastKnown = dev.value(QStringLiteral("uuid")).toString();
-                        } else {
-                            idx.labelLastKnown.clear();
-                            idx.uuidLastKnown.clear();
-                        }
-
-                        QString saveErr;
-                        if (!saveSnapshot(j.ownerUid, j.deviceId, idx, &saveErr)) {
-                            Q_EMIT JobFinished(jobId,
-                                               QStringLiteral("error"),
-                                               QStringLiteral("Indexed, but failed to save snapshot: %1").arg(saveErr),
-                                               props);
-                        } else {
-                            // Batch/coalesce index updates
-                            queueDeviceIndexUpdated(j.ownerUid,
-                                                    j.deviceId,
-                                                    static_cast<quint64>(idx.generation),
-                                                    static_cast<quint64>(idx.records.size()));
-
-                            Q_EMIT JobProgress(jobId, 100, props);
-
-                            // Final "rescanning" update (100%) so GUI can clear/replace it
-                            {
-                                auto* self = const_cast<IndexerService*>(this);
-                                QVariantMap st;
-                                st.insert(QStringLiteral("deviceId"), j.deviceId);
-                                st.insert(QStringLiteral("percent"), 100u);
-                                Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
-                            }
-
-                            Q_EMIT JobFinished(jobId,
-                                               QStringLiteral("ok"),
-                                               QStringLiteral("Indexed %1 entries (generation %2)")
-                                                   .arg(static_cast<qulonglong>(idx.records.size()))
-                                                   .arg(static_cast<qulonglong>(idx.generation)),
-                                               props);
-                        }
-                    }
-                }
-
-                if (j.proc) {
-                    j.proc->deleteLater();
-                    j.proc = nullptr;
-                }
-
-                // Erase asynchronously to avoid any re-entrancy surprises during signal delivery.
-                QTimer::singleShot(0, this, [this, jobId]() {
-                    m_jobs.erase(jobId);
-                });
-            });
-
-    // Spawn helper (daemon is root, so no pkexec)
-    const QString helperPath = QStringLiteral("/usr/bin/kerything-scanner-helper");
-    m_jobs[jobId]->proc->setProgram(helperPath);
-    m_jobs[jobId]->proc->setArguments({ devNode, fsType });
-
-    m_jobs[jobId]->proc->start();
-
-    return jobId;
+    return startIndexForUid(uid, deviceId, false);
 }
+
 
 void IndexerService::CancelJob(quint64 jobId) {
     auto it = m_jobs.find(jobId);
@@ -2346,4 +2171,327 @@ void IndexerService::SetWatchEnabled(const QString& deviceId, bool enabled) {
         sendErrorReply(QDBusError::Failed, QStringLiteral("Failed to persist watch setting: %1").arg(err));
         return;
     }
+
+    // Refresh watch arming/status now that intent changed
+    if (m_watchMgr) {
+        m_watchMgr->refreshWatchesForUid(uid);
+    }
+}
+
+quint64 IndexerService::startIndexForUid(quint32 uid, const QString& deviceId, bool isAuto) {
+    ensureLoadedForUid(uid);
+
+    const auto devOpt = findDeviceById(deviceId);
+    if (!devOpt) {
+        const quint64 jobId = m_nextJobId++;
+        QVariantMap props;
+        props.insert(QStringLiteral("deviceId"), deviceId);
+        Q_EMIT JobAdded(jobId, props);
+        Q_EMIT JobFinished(jobId, QStringLiteral("error"), QStringLiteral("Unknown deviceId"), props);
+        return jobId;
+    }
+
+    // If watch triggered this rescan, don't do anything if watch is disabled.
+    if (isAuto) {
+        auto uidIt = m_indexesByUid.find(uid);
+        if (uidIt == m_indexesByUid.end()) return 0;
+        auto it = uidIt->second.find(deviceId);
+        if (it == uidIt->second.end()) return 0;
+        if (!it->second.watchEnabled) return 0;
+    }
+
+    // Refuse if a job is already running for this uid+deviceId.
+    // Manual calls get deterministic JobAdded/JobFinished so the GUI can show a clear message.
+    for (const auto& kv : m_jobs) {
+        if (!kv.second) continue;
+        const Job& j = *kv.second;
+
+        if (j.ownerUid == uid && j.deviceId == deviceId && j.proc && j.proc->state() != QProcess::NotRunning) {
+            if (isAuto) {
+                return 0; // silent, best-effort
+            }
+
+            const quint64 jobId = m_nextJobId++;
+            QVariantMap props;
+            props.insert(QStringLiteral("deviceId"), deviceId);
+
+            Q_EMIT JobAdded(jobId, props);
+            Q_EMIT JobFinished(jobId,
+                               QStringLiteral("error"),
+                               QStringLiteral("Indexing job already running for this device."),
+                               props);
+            return jobId;
+        }
+    }
+
+    const QVariantMap dev = *devOpt;
+    const QString devNode = dev.value(QStringLiteral("devNode")).toString();
+    const QString fsType = dev.value(QStringLiteral("fsType")).toString().toLower();
+
+    const quint64 jobId = m_nextJobId++;
+
+    auto job = std::make_unique<Job>();
+    job->jobId = jobId;
+    job->ownerUid = uid;
+    job->deviceId = deviceId;
+    job->devNode = devNode;
+    job->fsType = fsType;
+
+    // Qt-owned process; we deleteLater() when finished.
+    job->proc = new QProcess(this);
+
+    QVariantMap props;
+    props.insert(QStringLiteral("deviceId"), deviceId);
+    props.insert(QStringLiteral("devNode"), devNode);
+    props.insert(QStringLiteral("fsType"), fsType);
+
+    Q_EMIT JobAdded(jobId, props);
+    Q_EMIT JobProgress(jobId, 0, props);
+
+    // Tell GUIs we are actively rescanning (per-user)
+    {
+        auto* self = const_cast<IndexerService*>(this);
+        QVariantMap st;
+        st.insert(QStringLiteral("deviceId"), deviceId);
+        st.insert(QStringLiteral("percent"), 0u);
+        Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
+    }
+
+    // Insert job BEFORE connecting lambdas that will look it up.
+    m_jobs.emplace(jobId, std::move(job));
+
+    // Capture stdout (binary scan output)
+    connect(m_jobs[jobId]->proc, &QProcess::readyReadStandardOutput, this, [this, jobId]() {
+        auto it = m_jobs.find(jobId);
+        if (it == m_jobs.end() || !it->second) return;
+        Job& j = *it->second;
+        if (!j.proc) return;
+
+        j.stdoutBuf += j.proc->readAllStandardOutput();
+    });
+
+    // Read progress from stderr (KERYTHING_PROGRESS lines)
+    connect(m_jobs[jobId]->proc, &QProcess::readyReadStandardError, this, [this, jobId, uid]() {
+        auto it = m_jobs.find(jobId);
+        if (it == m_jobs.end() || !it->second) return;
+        Job& j = *it->second;
+        if (!j.proc) return;
+
+        j.stderrBuf += j.proc->readAllStandardError();
+
+        std::optional<int> latestPctSeen;
+
+        auto consumeLine = [&](QByteArrayView lineView) {
+            static constexpr QByteArrayView kPrefix("KERYTHING_PROGRESS ");
+            if (!lineView.startsWith(kPrefix)) return;
+
+            bool ok = false;
+            int pct = QByteArray(lineView.mid(kPrefix.size())).trimmed().toInt(&ok);
+            if (!ok) return;
+
+            pct = std::clamp(pct, 0, 100);
+            latestPctSeen = pct;
+        };
+
+        while (true) {
+            const int nl = j.stderrBuf.indexOf('\n');
+            if (nl < 0) break;
+
+            QByteArrayView lineView(j.stderrBuf.constData(), nl);
+            consumeLine(lineView);
+            j.stderrBuf.remove(0, nl + 1);
+        }
+
+        // If we are cancelling, don't spam progress; the UI is already in "cancelling" mode.
+        if (j.state == Job::State::Cancelling) {
+            return;
+        }
+
+        if (latestPctSeen && *latestPctSeen != j.lastPct) {
+            j.lastPct = *latestPctSeen;
+
+            QVariantMap props;
+            props.insert(QStringLiteral("deviceId"), j.deviceId);
+            props.insert(QStringLiteral("devNode"), j.devNode);
+            props.insert(QStringLiteral("fsType"), j.fsType);
+
+            Q_EMIT JobProgress(jobId, static_cast<quint32>(j.lastPct), props);
+
+            // Mirror progress into DaemonStateChanged so the main GUI can show it
+            {
+                auto* self = const_cast<IndexerService*>(this);
+                QVariantMap st;
+                st.insert(QStringLiteral("deviceId"), j.deviceId);
+                st.insert(QStringLiteral("percent"), static_cast<quint32>(j.lastPct));
+                Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
+            }
+        }
+    });
+
+    connect(m_jobs[jobId]->proc,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            [this, jobId, uid](int exitCode, QProcess::ExitStatus exitStatus) {
+                auto it = m_jobs.find(jobId);
+                if (it == m_jobs.end() || !it->second) return;
+                Job& j = *it->second;
+
+                // Drain any remaining stdout after process exit
+                if (j.proc) {
+                    j.stdoutBuf += j.proc->readAllStandardOutput();
+                }
+
+                QVariantMap props;
+                props.insert(QStringLiteral("deviceId"), j.deviceId);
+                props.insert(QStringLiteral("devNode"), j.devNode);
+                props.insert(QStringLiteral("fsType"), j.fsType);
+
+                // Decide final status once, from the finished handler only.
+                if (j.state == Job::State::Cancelling) {
+                    Q_EMIT JobFinished(jobId, QStringLiteral("cancelled"), QStringLiteral("Cancelled by request"), props);
+                } else if (exitStatus == QProcess::CrashExit) {
+                    Q_EMIT JobFinished(jobId, QStringLiteral("error"), QStringLiteral("Scanner helper crashed"), props);
+                } else if (exitCode != 0) {
+                    Q_EMIT JobFinished(jobId,
+                                       QStringLiteral("error"),
+                                       QStringLiteral("Scanner helper failed (exit code %1)").arg(exitCode),
+                                       props);
+                } else {
+                    // Parse + store the index in memory
+                    ParsedScan parsed = parseHelperStdout(j.stdoutBuf);
+                    if (!parsed.error.isEmpty()) {
+                        Q_EMIT JobFinished(jobId, QStringLiteral("error"),
+                                           QStringLiteral("Failed to parse scan output: %1").arg(parsed.error),
+                                           props);
+                    } else {
+                        DeviceIndex& idx = m_indexesByUid[j.ownerUid][j.deviceId];
+                        idx.fsType = j.fsType;
+                        idx.generation += 1;
+                        idx.records = std::move(parsed.records);
+                        idx.stringPool = std::move(parsed.stringPool);
+                        idx.dirPathCache.clear();
+
+                        buildTrigramIndex(idx);
+                        buildSortOrders(idx);
+
+                        const qint64 indexedNow = QDateTime::currentSecsSinceEpoch();
+
+                        const auto devOpt = findDeviceById(j.deviceId);
+                        if (devOpt) {
+                            const QVariantMap dev = *devOpt;
+                            idx.labelLastKnown = dev.value(QStringLiteral("label")).toString();
+                            idx.uuidLastKnown = dev.value(QStringLiteral("uuid")).toString();
+                        } else {
+                            idx.labelLastKnown.clear();
+                            idx.uuidLastKnown.clear();
+                        }
+
+                        // Only commit lastIndexedTime to memory if snapshot persistence works.
+                        const qint64 prevLastIndexedTime = idx.lastIndexedTime;
+                        idx.lastIndexedTime = indexedNow;
+
+                        QString saveErr;
+                        if (!saveSnapshot(j.ownerUid, j.deviceId, idx, &saveErr)) {
+                            // revert (keeps in-memory state honest)
+                            idx.lastIndexedTime = prevLastIndexedTime;
+
+                            Q_EMIT JobFinished(jobId,
+                                               QStringLiteral("error"),
+                                               QStringLiteral("Indexed, but failed to save snapshot: %1").arg(saveErr),
+                                               props);
+                        } else {
+                            // Batch/coalesce index updates
+                            queueDeviceIndexUpdated(j.ownerUid,
+                                                    j.deviceId,
+                                                    static_cast<quint64>(idx.generation),
+                                                    static_cast<quint64>(idx.records.size()));
+
+                            if (m_watchMgr) m_watchMgr->refreshWatchesForUid(j.ownerUid);
+
+                            Q_EMIT JobProgress(jobId, 100, props);
+
+                            // Final "rescanning" update (100%) so GUI can clear/replace it
+                            {
+                                auto* self = const_cast<IndexerService*>(this);
+                                QVariantMap st;
+                                st.insert(QStringLiteral("deviceId"), j.deviceId);
+                                st.insert(QStringLiteral("percent"), 100u);
+                                Q_EMIT self->DaemonStateChanged(uid, QStringLiteral("rescanning"), st);
+                            }
+
+                            Q_EMIT JobFinished(jobId,
+                                               QStringLiteral("ok"),
+                                               QStringLiteral("Indexed %1 entries (generation %2)")
+                                                   .arg(static_cast<qulonglong>(idx.records.size()))
+                                                   .arg(static_cast<qulonglong>(idx.generation)),
+                                               props);
+                        }
+                    }
+                }
+
+                if (j.proc) {
+                    j.proc->deleteLater();
+                    j.proc = nullptr;
+                }
+
+                // Erase asynchronously to avoid any re-entrancy surprises during signal delivery.
+                QTimer::singleShot(0, this, [this, jobId]() {
+                    m_jobs.erase(jobId);
+                });
+            });
+
+    // Spawn helper (daemon is root, so no pkexec)
+    const QString helperPath = QStringLiteral("/usr/bin/kerything-scanner-helper");
+    m_jobs[jobId]->proc->setProgram(helperPath);
+    m_jobs[jobId]->proc->setArguments({ devNode, fsType });
+
+    m_jobs[jobId]->proc->start();
+
+    return jobId;
+}
+
+std::vector<IndexerService::WatchTarget> IndexerService::watchTargetsForUid(quint32 uid) const {
+    std::vector<WatchTarget> out;
+
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return out;
+
+    // Build known devices lookup (deviceId -> (mounted, primaryMountPoint))
+    QVariantList known;
+    ListKnownDevices(known);
+
+    QHash<QString, QVariantMap> knownById;
+    for (const auto& v : known) {
+        const QVariantMap m = v.toMap();
+        const QString deviceId = m.value(QStringLiteral("deviceId")).toString();
+        if (!deviceId.isEmpty()) knownById.insert(deviceId, m);
+    }
+
+    out.reserve(uidIt->second.size());
+
+    for (const auto& kv : uidIt->second) {
+        const QString& deviceId = kv.first;
+        const DeviceIndex& idx = kv.second;
+
+        if (!idx.watchEnabled) continue;
+
+        QString mp; // empty means "not mounted / not present"
+        const auto it = knownById.find(deviceId);
+        if (it != knownById.end()) {
+            const bool mounted = it->value(QStringLiteral("mounted")).toBool();
+            const QString primary = it->value(QStringLiteral("primaryMountPoint")).toString().trimmed();
+            if (mounted && !primary.isEmpty()) {
+                mp = primary;
+            }
+        }
+
+        out.push_back(WatchTarget{deviceId, mp});
+    }
+
+    return out;
+}
+
+void IndexerService::startAutoRescanIfAllowed(quint32 uid, const QString& deviceId) {
+    // Use internal entrypoint; isAuto=true enforces watchEnabled + running-job checks.
+    (void)startIndexForUid(uid, deviceId, true);
 }

@@ -33,6 +33,15 @@ public:
     explicit IndexerService(QObject* parent = nullptr);
     ~IndexerService() override;
 
+    // --- WatchManager integration (prototype) ---
+    struct WatchTarget {
+        QString deviceId;
+        QString mountPoint; // primary mount point
+    };
+
+    std::vector<WatchTarget> watchTargetsForUid(quint32 uid) const;
+    void startAutoRescanIfAllowed(quint32 uid, const QString& deviceId);
+
 public slots:
     /**
      * Provides version information about the IndexerService and its API.
@@ -320,6 +329,9 @@ private:
         QString error;
     };
 
+    // Internal entrypoint used by both manual (D-Bus) and auto-rescan (fanotify)
+    quint64 startIndexForUid(quint32 uid, const QString& deviceId, bool isAuto);
+
     [[nodiscard]] quint32 callerUidOr0() const;
 
     void ensureLoadedForUid(quint32 uid) const;
@@ -368,6 +380,11 @@ private:
     // queued upgrades (uid, deviceId)
     mutable std::deque<std::pair<quint32, QString>> m_snapshotUpgradeQueue;
     mutable bool m_snapshotUpgradeScheduled = false;
+
+    std::unique_ptr<class WatchManager> m_watchMgr;
+
+    // Periodically refresh watch arming/status so mount/unmount changes are picked up
+    class QTimer* m_watchRefreshTimer = nullptr;
 };
 
 #endif //KERYTHING_KERYTHINGD_INDEXERSERVICE_H

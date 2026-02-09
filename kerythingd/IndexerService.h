@@ -265,6 +265,14 @@ private:
 
         // dirId (record index) -> full directory path
         mutable std::unordered_map<quint32, QString> dirPathCache;
+
+        // internal directory path ("/foo/bar") -> dirId (record idx)
+        mutable std::unordered_map<QString, quint32> dirIdByPathCache;
+        mutable bool dirIdByPathBuilt = false;
+
+        // key = "<parentDirId>\n<name>" -> recordIdx
+        mutable std::unordered_map<QString, quint32> recordByParentAndNameCache;
+        mutable bool recordByParentAndNameBuilt = false;
     };
 
     // --- Begin: Empty-query global-order cache (for fast jump paging) ---
@@ -408,6 +416,10 @@ private:
     void ensureWatchQuietTimer(quint32 uid, const QString& deviceId);
     void scheduleOverflowRecovery(quint32 uid, const QString& deviceId);
     void probeTouchedEntries(quint32 uid, const QString& deviceId, const QVariantList& touched) const;
+
+    void ensureDirIdByPathBuilt(DeviceIndex& idx, quint32 uid, const QString& deviceId) const;
+    void ensureRecordByParentAndNameBuilt(DeviceIndex& idx) const;
+    bool applyIncrementalBatchIfSafe(quint32 uid, const QString& deviceId, const QVariantList& touched);
 
     std::unordered_map<QString, WatchBatchState> m_watchBatchState;
     // --- end handling fanotify events ---

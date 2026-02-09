@@ -2469,6 +2469,12 @@ quint64 IndexerService::startIndexForUid(quint32 uid, const QString& deviceId, b
                         idx.stringPool = std::move(parsed.stringPool);
                         idx.dirPathCache.clear();
 
+                        // Invalidate incremental lookup caches (they depend on records/stringPool)
+                        idx.dirIdByPathCache.clear();
+                        idx.dirIdByPathBuilt = false;
+                        idx.recordByParentAndNameCache.clear();
+                        idx.recordByParentAndNameBuilt = false;
+
                         buildTrigramIndex(idx);
                         buildSortOrders(idx);
 
@@ -2830,6 +2836,234 @@ void IndexerService::probeTouchedEntries(quint32 uid, const QString& deviceId, c
                          .arg(otherErr);
 }
 
+static bool watchIncrementalEnabled() {
+    // Enable with: KERYTHING_WATCH_INCREMENTAL=1
+    const QByteArray v = qgetenv("KERYTHING_WATCH_INCREMENTAL");
+    if (v.isEmpty()) return false;
+    if (v == "0") return false;
+    return true;
+}
+
+static QString recordKey(quint32 parentDirId, const QString& name) {
+    return QString::number(parentDirId) + QStringLiteral("\n") + name;
+}
+
+void IndexerService::ensureDirIdByPathBuilt(DeviceIndex& idx, quint32 uid, const QString& deviceId) const {
+    if (idx.dirIdByPathBuilt) return;
+
+    idx.dirIdByPathCache.clear();
+    idx.dirIdByPathCache.reserve(idx.records.size() / 2);
+
+    // Root (special parent id value) is represented by internal path "/"
+    idx.dirIdByPathCache.emplace(QStringLiteral("/"), 0xFFFFFFFFu);
+
+    for (quint32 recIdx = 0; recIdx < static_cast<quint32>(idx.records.size()); ++recIdx) {
+        const auto& r = idx.records[recIdx];
+        if (!r.isDir) continue;
+
+        const QString p = dirPathFor(uid, deviceId, recIdx);
+        if (!p.isEmpty()) {
+            idx.dirIdByPathCache.emplace(p, recIdx);
+        }
+    }
+
+    idx.dirIdByPathBuilt = true;
+
+    qInfo().noquote() << QStringLiteral("[watch-inc] built dirIdByPathCache device=%1 entries=%2")
+                         .arg(deviceId)
+                         .arg(idx.dirIdByPathCache.size());
+}
+
+void IndexerService::ensureRecordByParentAndNameBuilt(DeviceIndex& idx) const {
+    if (idx.recordByParentAndNameBuilt) return;
+
+    idx.recordByParentAndNameCache.clear();
+    idx.recordByParentAndNameCache.reserve(idx.records.size());
+
+    for (quint32 recIdx = 0; recIdx < static_cast<quint32>(idx.records.size()); ++recIdx) {
+        const auto& r = idx.records[recIdx];
+        const QString name = QString::fromUtf8(idx.stringPool.data() + r.nameOffset,
+                                              static_cast<int>(r.nameLen));
+        idx.recordByParentAndNameCache.emplace(recordKey(r.parentRecordIdx, name), recIdx);
+    }
+
+    idx.recordByParentAndNameBuilt = true;
+
+    qInfo().noquote() << QStringLiteral("[watch-inc] built recordByParentAndNameCache entries=%1")
+                         .arg(idx.recordByParentAndNameCache.size());
+}
+
+static std::optional<QString> readFdPath(int fd) {
+    if (fd < 0) return std::nullopt;
+    const QByteArray link = QByteArrayLiteral("/proc/self/fd/") + QByteArray::number(fd);
+
+    char buf[4096];
+    const ssize_t n = ::readlink(link.constData(), buf, sizeof(buf) - 1);
+    if (n < 0) return std::nullopt;
+    buf[n] = '\0';
+    return QString::fromLocal8Bit(buf);
+}
+
+bool IndexerService::applyIncrementalBatchIfSafe(quint32 uid, const QString& deviceId, const QVariantList& touched) {
+    // NOTE: caller must ensureLoadedForUid(uid)
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return false;
+
+    auto devIt = uidIt->second.find(deviceId);
+    if (devIt == uidIt->second.end()) return false;
+
+    DeviceIndex& idx = devIt->second;
+
+    // If we see any generic tokens, incremental isn’t safe.
+    for (const QVariant& v : touched) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("name")).toString() == QStringLiteral("*")) {
+            return false;
+        }
+    }
+
+    // Need mount point FD for open_by_handle_at
+    const auto devInfoOpt = findDeviceById(deviceId);
+    if (!devInfoOpt) return false;
+    const QString mp = devInfoOpt->value(QStringLiteral("primaryMountPoint")).toString().trimmed();
+    if (mp.isEmpty()) return false;
+
+    const QByteArray mpBytes = QFile::encodeName(QDir::cleanPath(mp));
+    const int mountFd = ::open(mpBytes.constData(), O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    if (mountFd < 0) return false;
+
+    ensureDirIdByPathBuilt(idx, uid, deviceId);
+    ensureRecordByParentAndNameBuilt(idx);
+
+    int updated = 0;
+    int unsafe = 0;
+
+    for (const QVariant& v : touched) {
+        const QVariantMap m = v.toMap();
+
+        const QString name = m.value(QStringLiteral("name")).toString();
+        const QString handleHex = m.value(QStringLiteral("handleHex")).toString();
+
+        if (name.isEmpty() || handleHex.isEmpty()) {
+            unsafe++;
+            continue;
+        }
+
+        const QByteArray handleBlob = QByteArray::fromHex(handleHex.toLatin1());
+        if (handleBlob.size() < static_cast<int>(sizeof(file_handle))) {
+            unsafe++;
+            continue;
+        }
+
+        const file_handle* fhView = reinterpret_cast<const file_handle*>(handleBlob.constData());
+        const size_t expect = sizeof(file_handle) + static_cast<size_t>(fhView->handle_bytes);
+        if (handleBlob.size() < static_cast<int>(expect)) {
+            unsafe++;
+            continue;
+        }
+
+        QByteArray handleMutable = handleBlob.left(static_cast<int>(expect));
+        auto* fh = reinterpret_cast<file_handle*>(handleMutable.data());
+
+        const int parentFd = ::open_by_handle_at(mountFd, fh, O_RDONLY | O_CLOEXEC);
+        if (parentFd < 0) {
+            unsafe++;
+            continue;
+        }
+
+        const auto parentAbsOpt = readFdPath(parentFd);
+        if (!parentAbsOpt) {
+            ::close(parentFd);
+            unsafe++;
+            continue;
+        }
+
+        const QString parentAbs = QDir::cleanPath(*parentAbsOpt);
+        const QString mountClean = QDir::cleanPath(mp);
+
+        QString internalDir = QStringLiteral("/");
+        if (parentAbs == mountClean) {
+            internalDir = QStringLiteral("/");
+        } else if (parentAbs.startsWith(mountClean + QStringLiteral("/"))) {
+            internalDir = parentAbs.mid(mountClean.size());
+        } else {
+            // Unexpected: handle didn’t resolve under our mountpoint
+            ::close(parentFd);
+            unsafe++;
+            continue;
+        }
+
+        const auto dirIt = idx.dirIdByPathCache.find(internalDir);
+        if (dirIt == idx.dirIdByPathCache.end()) {
+            // Directory unknown to index: implies create/move into new dir → not safe
+            ::close(parentFd);
+            unsafe++;
+            continue;
+        }
+
+        const quint32 parentDirId = dirIt->second;
+
+        // Must already exist in index for this “safe incremental” phase
+        const auto recIt = idx.recordByParentAndNameCache.find(recordKey(parentDirId, name));
+        if (recIt == idx.recordByParentAndNameCache.end()) {
+            ::close(parentFd);
+            unsafe++;
+            continue;
+        }
+
+        const quint32 recIdx = recIt->second;
+        if (recIdx >= idx.records.size()) {
+            ::close(parentFd);
+            unsafe++;
+            continue;
+        }
+
+        struct stat st {};
+        const QByteArray nameBytes = name.toLocal8Bit();
+        if (::fstatat(parentFd, nameBytes.constData(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            // If it’s gone on disk, that’s a delete/rename → not safe for now
+            ::close(parentFd);
+            unsafe++;
+            continue;
+        }
+
+        // Update metadata in-place
+        auto& r = idx.records[recIdx];
+        r.size = static_cast<quint64>(st.st_size);
+        r.modificationTime = static_cast<qint64>(st.st_mtime);
+        r.isDir = S_ISDIR(st.st_mode);
+        r.isSymlink = S_ISLNK(st.st_mode);
+
+        ::close(parentFd);
+        updated++;
+    }
+
+    ::close(mountFd);
+
+    if (unsafe > 0) {
+        qInfo().noquote() << QStringLiteral("[watch-inc] unsafe batch uid=%1 device=%2 updated=%3 unsafe=%4 -> fallback rescan")
+                             .arg(uid).arg(deviceId).arg(updated).arg(unsafe);
+        return false;
+    }
+
+    if (updated > 0) {
+        // Invalidate global cache so empty-query paging reflects updated mtime/size ordering if user sorts by those.
+        bumpUidEpoch(uid);
+
+        // Batch index update signal (so GUI refreshes rows)
+        queueDeviceIndexUpdated(uid, deviceId,
+                                static_cast<quint64>(idx.generation),
+                                static_cast<quint64>(idx.records.size()));
+
+        qInfo().noquote() << QStringLiteral("[watch-inc] applied uid=%1 device=%2 updated=%3")
+                             .arg(uid).arg(deviceId).arg(updated);
+        return true;
+    }
+
+    // Nothing to do; let fallback logic decide.
+    return false;
+}
+
 void IndexerService::applyWatchBatch(quint32 uid,
                                      const QString& deviceId,
                                      const QVariantList& touched,
@@ -2887,21 +3121,23 @@ void IndexerService::applyWatchBatch(quint32 uid,
 
     // If we got a generic token, we don't have reliable per-entry info.
     // Keep current behavior: quiet -> full rescan.
-    if (!touched.isEmpty()) {
-        for (const QVariant& v : touched) {
-            const QVariantMap m = v.toMap();
-            if (m.value(QStringLiteral("name")).toString() == QStringLiteral("*")) {
-                ensureWatchQuietTimer(uid, deviceId);
-                const QString k = watchKey(uid, deviceId);
-                WatchBatchState& st = m_watchBatchState[k];
-                st.overflowSeen = st.overflowSeen || overflowSeen;
-                if (st.quietTimer) st.quietTimer->start(kWatchQuietMs);
-                return;
-            }
-        }
+    if (generic > 0) {
+        ensureWatchQuietTimer(uid, deviceId);
+        const QString k = watchKey(uid, deviceId);
+        WatchBatchState& st = m_watchBatchState[k];
+        st.overflowSeen = st.overflowSeen || overflowSeen;
+        if (st.quietTimer) st.quietTimer->start(kWatchQuietMs);
+        return;
     }
 
     if (touched.isEmpty() && !overflowSeen) return;
+
+    // Try safe incremental first (updates existing entries only).
+    if (watchIncrementalEnabled() && !touched.isEmpty()) {
+        if (applyIncrementalBatchIfSafe(uid, deviceId, touched)) {
+            return; // done; no rescan needed
+        }
+    }
 
     // Coalesce bursts via quiet timer, then do full rescan once.
     ensureWatchQuietTimer(uid, deviceId);

@@ -8,6 +8,7 @@ Wants=dbus.service
 Type=dbus
 BusName=net.reikooters.Kerything1
 Environment=KERYTHING_WATCH_PROBE=1
+Environment=KERYTHING_WATCH_INCREMENTAL=1
 ExecStart=/usr/bin/kerythingd
 User=root
 Group=root

@@ -8,6 +8,9 @@
 #include <QDir>
 #include <QSet>
 #include <QDebug>
+#include <QDateTime>
+#include <QFile>
+#include <QVariantMap>
 
 #include <cerrno>
 #include <cstring>
@@ -36,15 +39,19 @@ void WatchManager::stopEntry(Entry& e) {
         e.notifier->deleteLater();
         e.notifier = nullptr;
     }
-    if (e.quietTimer) {
-        e.quietTimer->stop();
-        e.quietTimer->deleteLater();
-        e.quietTimer = nullptr;
+    if (e.batchTimer) {
+        e.batchTimer->stop();
+        e.batchTimer->deleteLater();
+        e.batchTimer = nullptr;
     }
     if (e.fanFd >= 0) {
         ::close(e.fanFd);
         e.fanFd = -1;
     }
+
+    // Reset pending batch state (prevents stale carry-over on re-arm)
+    e.pendingTouchedByKey.clear();
+    e.overflowSeen = false;
 }
 
 WatchManager::Status WatchManager::statusFor(quint32 uid, const QString& deviceId) const {
@@ -132,14 +139,53 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
 
     // If already armed and mountpoint unchanged, keep it.
     if (e.fanFd >= 0 && e.mountPoint == mountPoint) {
-        e.status = Status{
-            QStringLiteral("watching"),
-            QString(), // error empty while OK
-            e.watchingMode
-        };
+        e.status = Status{QStringLiteral("watching"), QString(), e.watchingMode};
         e.failCount = 0;
         e.nextRetryMs = 0;
         e.lastArmError.clear();
+
+        // Ensure batch timer exists
+        if (!e.batchTimer) {
+            e.batchTimer = new QTimer(this);
+            e.batchTimer->setSingleShot(true);
+            connect(e.batchTimer, &QTimer::timeout, this, [this, k]() {
+                auto it = m_entries.find(k);
+                if (it == m_entries.end()) return;
+                Entry& ee = it->second;
+
+                const bool overflow = ee.overflowSeen;
+
+                QVariantList touched;
+                touched.reserve(static_cast<int>(ee.pendingTouchedByKey.size()));
+
+                for (const auto& kv : ee.pendingTouchedByKey) {
+                    const Entry::PendingTouched& pt = kv.second;
+
+                    QVariantMap m;
+                    m.insert(QStringLiteral("fsidHex"), pt.fsidHex);
+                    m.insert(QStringLiteral("handleHex"), pt.handleHex);
+                    m.insert(QStringLiteral("name"), pt.name);
+                    m.insert(QStringLiteral("mask"), QVariant::fromValue<qulonglong>(pt.mask));
+                    touched.push_back(m);
+                }
+
+                const int count = touched.size();
+
+                ee.pendingTouchedByKey.clear();
+                ee.overflowSeen = false;
+
+                qInfo().noquote() << QStringLiteral("[watch] dispatch uid=%1 device=%2 touched=%3 overflow=%4")
+                                     .arg(k.uid)
+                                     .arg(k.deviceId)
+                                     .arg(count)
+                                     .arg(overflow ? QStringLiteral("1") : QStringLiteral("0"));
+
+                if (m_svc && (count > 0 || overflow)) {
+                    m_svc->applyWatchBatch(k.uid, k.deviceId, touched, overflow);
+                }
+            });
+        }
+
         return;
     }
 
@@ -213,17 +259,43 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
                     onFanotifyReadable(k);
                 });
 
-                e.quietTimer = new QTimer(this);
-                e.quietTimer->setSingleShot(true);
-                connect(e.quietTimer, &QTimer::timeout, this, [this, k]() {
+                // Create batch timer
+                e.batchTimer = new QTimer(this);
+                e.batchTimer->setSingleShot(true);
+                connect(e.batchTimer, &QTimer::timeout, this, [this, k]() {
                     auto it = m_entries.find(k);
                     if (it == m_entries.end()) return;
                     Entry& ee = it->second;
-                    if (!ee.dirty) return;
-                    ee.dirty = false;
 
-                    if (m_svc) {
-                        m_svc->startAutoRescanIfAllowed(k.uid, k.deviceId);
+                    const bool overflow = ee.overflowSeen;
+
+                    QVariantList touched;
+                    touched.reserve(static_cast<int>(ee.pendingTouchedByKey.size()));
+
+                    for (const auto& kv : ee.pendingTouchedByKey) {
+                        const Entry::PendingTouched& pt = kv.second;
+
+                        QVariantMap m;
+                        m.insert(QStringLiteral("fsidHex"), pt.fsidHex);
+                        m.insert(QStringLiteral("handleHex"), pt.handleHex);
+                        m.insert(QStringLiteral("name"), pt.name);
+                        m.insert(QStringLiteral("mask"), QVariant::fromValue<qulonglong>(pt.mask));
+                        touched.push_back(m);
+                    }
+
+                    const int count = touched.size();
+
+                    ee.pendingTouchedByKey.clear();
+                    ee.overflowSeen = false;
+
+                    qInfo().noquote() << QStringLiteral("[watch] dispatch uid=%1 device=%2 touched=%3 overflow=%4")
+                                         .arg(k.uid)
+                                         .arg(k.deviceId)
+                                         .arg(count)
+                                         .arg(overflow ? QStringLiteral("1") : QStringLiteral("0"));
+
+                    if (m_svc && (count > 0 || overflow)) {
+                        m_svc->applyWatchBatch(k.uid, k.deviceId, touched, overflow);
                     }
                 });
 
@@ -291,17 +363,43 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
             onFanotifyReadable(k);
         });
 
-        e.quietTimer = new QTimer(this);
-        e.quietTimer->setSingleShot(true);
-        connect(e.quietTimer, &QTimer::timeout, this, [this, k]() {
+        // Create batch timer
+        e.batchTimer = new QTimer(this);
+        e.batchTimer->setSingleShot(true);
+        connect(e.batchTimer, &QTimer::timeout, this, [this, k]() {
             auto it = m_entries.find(k);
             if (it == m_entries.end()) return;
             Entry& ee = it->second;
-            if (!ee.dirty) return;
-            ee.dirty = false;
 
-            if (m_svc) {
-                m_svc->startAutoRescanIfAllowed(k.uid, k.deviceId);
+            const bool overflow = ee.overflowSeen;
+
+            QVariantList touched;
+            touched.reserve(static_cast<int>(ee.pendingTouchedByKey.size()));
+
+            for (const auto &kv: ee.pendingTouchedByKey) {
+                const Entry::PendingTouched &pt = kv.second;
+
+                QVariantMap m;
+                m.insert(QStringLiteral("fsidHex"), pt.fsidHex);
+                m.insert(QStringLiteral("handleHex"), pt.handleHex);
+                m.insert(QStringLiteral("name"), pt.name);
+                m.insert(QStringLiteral("mask"), QVariant::fromValue<qulonglong>(pt.mask));
+                touched.push_back(m);
+            }
+
+            const int count = touched.size();
+
+            ee.pendingTouchedByKey.clear();
+            ee.overflowSeen = false;
+
+            qInfo().noquote() << QStringLiteral("[watch] dispatch uid=%1 device=%2 touched=%3 overflow=%4")
+                    .arg(k.uid)
+                    .arg(k.deviceId)
+                    .arg(count)
+                    .arg(overflow ? QStringLiteral("1") : QStringLiteral("0"));
+
+            if (m_svc && (count > 0 || overflow)) {
+                m_svc->applyWatchBatch(k.uid, k.deviceId, touched, overflow);
             }
         });
 
@@ -316,20 +414,31 @@ void WatchManager::ensureEntryWatching(const Key& k, Entry& e, const QString& mo
     }
 }
 
+static QByteArray toHexCompact(const void* data, size_t n) {
+    if (!data || n == 0) return {};
+    return QByteArray(reinterpret_cast<const char*>(data), static_cast<int>(n)).toHex();
+}
+
 void WatchManager::onFanotifyReadable(const Key& k) {
     auto it = m_entries.find(k);
     if (it == m_entries.end()) return;
     Entry& e = it->second;
     if (e.fanFd < 0) return;
 
-    alignas(fanotify_event_metadata) char buf[4096];
+    alignas(fanotify_event_metadata) char buf[8192];
 
-    bool shouldLogDirtyEdge = false;
+    bool shouldLogEdge = false;
+
+    // If we drained at least one non-overflow event but didn't parse DFID_NAME,
+    // add a generic token so fallback-mode watching still triggers a rescan.
+    bool sawNonOverflowEvent = false;
+    bool parsedAnyDfidName = false;
 
     while (true) {
         const ssize_t nread = ::read(e.fanFd, buf, sizeof(buf));
         if (nread < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+
             // If reads error out, mark status but don’t crash the daemon.
             e.status = Status{
                 QStringLiteral("error"),
@@ -340,7 +449,6 @@ void WatchManager::onFanotifyReadable(const Key& k) {
                                     .arg(k.uid)
                                     .arg(k.deviceId)
                                     .arg(e.status.error);
-
             break;
         }
         if (nread == 0) break;
@@ -350,25 +458,162 @@ void WatchManager::onFanotifyReadable(const Key& k) {
 
         // Consume events; for prototype we don’t need to inspect them.
         auto* meta = reinterpret_cast<fanotify_event_metadata*>(buf);
+
         while (FAN_EVENT_OK(meta, len)) {
+            if (meta->mask & FAN_Q_OVERFLOW) {
+                e.overflowSeen = true;
+            } else {
+                sawNonOverflowEvent = true;
+
+                // Parse extra info records (DFID_NAME gives parent dir handle + filename)
+                const char* infoPtr = reinterpret_cast<const char*>(meta) + sizeof(*meta);
+                ssize_t infoLen = static_cast<ssize_t>(meta->event_len) - static_cast<ssize_t>(sizeof(*meta));
+
+                while (infoLen >= static_cast<ssize_t>(sizeof(fanotify_event_info_header))) {
+                    auto* hdr = reinterpret_cast<const fanotify_event_info_header*>(infoPtr);
+                    if (hdr->len < sizeof(*hdr) || hdr->len > static_cast<uint32_t>(infoLen)) {
+                        break; // malformed; stop parsing this event
+                    }
+
+                    if (hdr->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME) {
+                        parsedAnyDfidName = true;
+
+                        auto* fid = reinterpret_cast<const fanotify_event_info_fid*>(infoPtr);
+
+                        const QByteArray fsidHexB = toHexCompact(&fid->fsid, sizeof(fid->fsid));
+                        const QString fsidHex = QString::fromLatin1(fsidHexB);
+
+                        // fanotify headers differ across kernel/libc versions:
+                        // fid->handle may be a byte array payload, not a struct member.
+                        const auto* fh = reinterpret_cast<const file_handle*>(
+                            static_cast<const void*>(fid->handle)
+                        );
+
+                        // Defensive bounds check: we need at least a file_handle header.
+                        const size_t fidBase = offsetof(fanotify_event_info_fid, handle);
+                        if (hdr->len < fidBase + sizeof(file_handle)) {
+                            infoPtr += hdr->len;
+                            infoLen -= static_cast<ssize_t>(hdr->len);
+                            continue;
+                        }
+
+                        // file_handle is variable-sized: sizeof(file_handle) + handle_bytes
+                        const size_t handleBytes = static_cast<size_t>(fh->handle_bytes);
+                        const size_t handleBlobSize = sizeof(file_handle) + handleBytes;
+
+                        // Defensive bounds: ensure handle blob fits in this info record
+                        if (hdr->len < fidBase + handleBlobSize) {
+                            infoPtr += hdr->len;
+                            infoLen -= static_cast<ssize_t>(hdr->len);
+                            continue;
+                        }
+
+                        const QByteArray handleHexB = toHexCompact(
+                            static_cast<const void*>(fid->handle),
+                            handleBlobSize
+                        );
+                        const QString handleHex = QString::fromLatin1(handleHexB);
+
+                        const size_t nameOff = fidBase + handleBlobSize;
+                        QString name;
+
+                        if (hdr->len > nameOff) {
+                            const char* namePtr = reinterpret_cast<const char*>(infoPtr) + nameOff;
+                            const size_t nameMax = static_cast<size_t>(hdr->len - nameOff);
+
+                            // name is NUL-terminated (kernel provides), but be defensive.
+                            size_t n = 0;
+                            for (; n < nameMax; ++n) {
+                                if (namePtr[n] == '\0') break;
+                            }
+                            if (n > 0) {
+                                name = QString::fromLocal8Bit(namePtr, static_cast<int>(n));
+                            }
+                        }
+
+                        if (!fsidHex.isEmpty() && !handleHex.isEmpty() && !name.isEmpty()) {
+                            const QString keyStr = fsidHex + QStringLiteral(":") + handleHex + QStringLiteral(":") + name;
+
+                            Entry::PendingTouched& pt = e.pendingTouchedByKey[keyStr];
+                            pt.fsidHex = fsidHex;
+                            pt.handleHex = handleHex;
+                            pt.name = name;
+                            pt.mask |= static_cast<quint64>(meta->mask);
+                        }
+                    }
+
+                    infoPtr += hdr->len;
+                    infoLen -= static_cast<ssize_t>(hdr->len);
+                }
+            }
+
             if (meta->fd >= 0) ::close(meta->fd); // required for some event types
             meta = FAN_EVENT_NEXT(meta, len);
         }
 
-        // Only log once per "dirty period" (edge-trigger).
-        if (!e.dirty) {
-            shouldLogDirtyEdge = true;
+        if (!e.batchTimer) {
+            // Defensive: should exist while watching, but don’t crash if not.
+            e.batchTimer = new QTimer(this);
+            e.batchTimer->setSingleShot(true);
+            connect(e.batchTimer, &QTimer::timeout, this, [this, k]() {
+                auto it2 = m_entries.find(k);
+                if (it2 == m_entries.end()) return;
+                Entry& ee = it2->second;
+
+                const bool overflow = ee.overflowSeen;
+
+                QVariantList touched;
+                touched.reserve(static_cast<int>(ee.pendingTouchedByKey.size()));
+
+                for (const auto& kv : ee.pendingTouchedByKey) {
+                    const Entry::PendingTouched& pt = kv.second;
+
+                    QVariantMap m;
+                    m.insert(QStringLiteral("fsidHex"), pt.fsidHex);
+                    m.insert(QStringLiteral("handleHex"), pt.handleHex);
+                    m.insert(QStringLiteral("name"), pt.name);
+                    m.insert(QStringLiteral("mask"), QVariant::fromValue<qulonglong>(pt.mask));
+                    touched.push_back(m);
+                }
+
+                const int count = touched.size();
+
+                ee.pendingTouchedByKey.clear();
+                ee.overflowSeen = false;
+
+                qInfo().noquote() << QStringLiteral("[watch] dispatch uid=%1 device=%2 touched=%3 overflow=%4")
+                                     .arg(k.uid)
+                                     .arg(k.deviceId)
+                                     .arg(count)
+                                     .arg(overflow ? QStringLiteral("1") : QStringLiteral("0"));
+
+                if (m_svc && (count > 0 || overflow)) {
+                    m_svc->applyWatchBatch(k.uid, k.deviceId, touched, overflow);
+                }
+            });
         }
 
-        e.dirty = true;
-        if (e.quietTimer) e.quietTimer->start(kQuietMs);
+        if (!e.batchTimer->isActive()) {
+            shouldLogEdge = true;
+        }
+        e.batchTimer->start(kBatchMs);
     }
 
-    if (shouldLogDirtyEdge) {
-        qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 dirty (quiet=%3ms)")
+    // If we saw changes but couldn't parse DFID_NAME tokens, enqueue one generic token.
+    if (sawNonOverflowEvent && !parsedAnyDfidName) {
+        const QString keyStr = QStringLiteral(":: *"); // stable-ish key; content doesn't matter externally
+        Entry::PendingTouched& pt = e.pendingTouchedByKey[keyStr];
+        pt.fsidHex.clear();
+        pt.handleHex.clear();
+        pt.name = QStringLiteral("*");
+        pt.mask |= 1ULL;
+    }
+
+    if (shouldLogEdge) {
+        qInfo().noquote() << QStringLiteral("[watch] uid=%1 device=%2 queued batch (%3ms)")
                              .arg(k.uid)
                              .arg(k.deviceId)
-                             .arg(kQuietMs);
+                             .arg(kBatchMs);
     }
 }
 

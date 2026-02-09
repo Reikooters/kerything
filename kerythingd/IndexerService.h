@@ -14,6 +14,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QByteArray>
+#include <QTimer>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -41,6 +42,14 @@ public:
 
     std::vector<WatchTarget> watchTargetsForUid(quint32 uid) const;
     void startAutoRescanIfAllowed(quint32 uid, const QString& deviceId);
+
+    // Called by WatchManager after it drains events and coalesces them into a time batch.
+    // touched entries: array of dicts with:
+    //  - fsidHex: string   (hex of fid->fsid; may be empty for generic fallback)
+    //  - handleHex: string (hex of file_handle blob; may be empty for generic fallback)
+    //  - name: string      (child name, or "*" for generic fallback)
+    //  - mask: uint64      (OR of observed fanotify masks)
+    void applyWatchBatch(quint32 uid, const QString& deviceId, const QVariantList& touched, bool overflowSeen);
 
 public slots:
     /**
@@ -380,6 +389,28 @@ private:
     // queued upgrades (uid, deviceId)
     mutable std::deque<std::pair<quint32, QString>> m_snapshotUpgradeQueue;
     mutable bool m_snapshotUpgradeScheduled = false;
+
+    // --- begin handling fanotify events ---
+    static constexpr int kWatchQuietMs = 2000;
+
+    struct WatchBatchState {
+        QTimer* quietTimer = nullptr;
+        bool overflowSeen = false;
+
+        // Overflow reconcile scheduling
+        bool needsReconcile = false;
+        int reconcileFailCount = 0;
+        qint64 reconcileNextRetryMs = 0;
+    };
+
+    // key = "uid:deviceId"
+    QString watchKey(quint32 uid, const QString& deviceId) const;
+    void ensureWatchQuietTimer(quint32 uid, const QString& deviceId);
+    void scheduleOverflowRecovery(quint32 uid, const QString& deviceId);
+    void probeTouchedEntries(quint32 uid, const QString& deviceId, const QVariantList& touched) const;
+
+    std::unordered_map<QString, WatchBatchState> m_watchBatchState;
+    // --- end handling fanotify events ---
 
     std::unique_ptr<class WatchManager> m_watchMgr;
 

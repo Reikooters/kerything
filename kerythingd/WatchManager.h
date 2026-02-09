@@ -58,9 +58,18 @@ private:
         // Machine-readable watch mode while active
         QString watchingMode; // "filesystemEvents" | "mountFallback"
 
-        // Coalesce events into one rescan attempt
-        QTimer* quietTimer = nullptr;
-        bool dirty = false;
+        QTimer* batchTimer = nullptr;
+
+        struct PendingTouched {
+            QString fsidHex;
+            QString handleHex;
+            QString name;
+            quint64 mask = 0;
+        };
+
+        // Coalescing key = "fsidHex:handleHex:name"
+        std::unordered_map<QString, PendingTouched> pendingTouchedByKey;
+        bool overflowSeen = false;
 
         // Backoff to avoid retry spam on unsupported filesystems (e.g. NTFS/fuse)
         int failCount = 0;
@@ -76,7 +85,7 @@ private:
 
     IndexerService* m_svc = nullptr;
 
-    static constexpr int kQuietMs = 2000;
+    static constexpr int kBatchMs = 250;
     std::unordered_map<Key, Entry, KeyHash> m_entries;
 };
 

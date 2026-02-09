@@ -35,6 +35,13 @@
 #include <QtDBus/QDBusConnectionInterface>
 #include <QtDBus/QDBusError>
 
+#include <cstdlib>
+#include <cerrno>
+#include <cstring>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <blkid/blkid.h>
 
 static constexpr quint32 kFlagIsDir = 1u << 0;
@@ -2585,4 +2592,325 @@ std::vector<IndexerService::WatchTarget> IndexerService::watchTargetsForUid(quin
 void IndexerService::startAutoRescanIfAllowed(quint32 uid, const QString& deviceId) {
     // Use internal entrypoint; isAuto=true enforces watchEnabled + running-job checks.
     (void)startIndexForUid(uid, deviceId, true);
+}
+
+QString IndexerService::watchKey(quint32 uid, const QString& deviceId) const {
+    return QStringLiteral("%1:%2").arg(uid).arg(deviceId);
+}
+
+void IndexerService::ensureWatchQuietTimer(quint32 uid, const QString& deviceId) {
+    const QString k = watchKey(uid, deviceId);
+    WatchBatchState& st = m_watchBatchState[k];
+
+    if (st.quietTimer) return;
+
+    st.quietTimer = new QTimer(this);
+    st.quietTimer->setSingleShot(true);
+
+    connect(st.quietTimer, &QTimer::timeout, this, [this, uid, deviceId]() {
+        // Keep it best-effort; startIndexForUid() already dedupes running jobs.
+        startAutoRescanIfAllowed(uid, deviceId);
+    });
+}
+
+static qint64 nowMsUtc_local() {
+    return QDateTime::currentMSecsSinceEpoch();
+}
+
+static qint64 overflowBackoffMs(int failCount) {
+    // 0 -> 10s, 1 -> 20s, 2 -> 40s, ... capped at 10 minutes
+    static constexpr qint64 kBase = 10'000;
+    static constexpr qint64 kCap  = 10 * 60'000;
+
+    if (failCount < 0) failCount = 0;
+
+    qint64 ms = kBase;
+    for (int i = 0; i < failCount; ++i) {
+        if (ms > (kCap / 2)) { ms = kCap; break; }
+        ms *= 2;
+    }
+    if (ms > kCap) ms = kCap;
+    return ms;
+}
+
+void IndexerService::scheduleOverflowRecovery(quint32 uid, const QString& deviceId) {
+    const QString k = watchKey(uid, deviceId);
+    WatchBatchState& st = m_watchBatchState[k];
+
+    st.needsReconcile = true;
+
+    const qint64 now = nowMsUtc_local();
+    const qint64 delayMs = overflowBackoffMs(st.reconcileFailCount);
+    const qint64 at = now + delayMs;
+
+    // If we already scheduled something sooner, keep it.
+    if (st.reconcileNextRetryMs > 0 && st.reconcileNextRetryMs <= at) {
+        return;
+    }
+    st.reconcileNextRetryMs = at;
+
+    QTimer::singleShot(static_cast<int>(std::clamp<qint64>(delayMs, 0, 10 * 60'000)), this, [this, uid, deviceId]() {
+        const QString kk = watchKey(uid, deviceId);
+        auto it = m_watchBatchState.find(kk);
+        if (it == m_watchBatchState.end()) return;
+
+        WatchBatchState& st2 = it->second;
+
+        const qint64 now2 = nowMsUtc_local();
+        if (st2.reconcileNextRetryMs > now2) {
+            // Another schedule superseded us.
+            return;
+        }
+
+        st2.reconcileNextRetryMs = 0;
+
+        // Best-effort recovery: full rescan.
+        // If it starts, consider reconcile “attempted”; if it doesn’t, try again later.
+        const quint64 jobId = startIndexForUid(uid, deviceId, true);
+        if (jobId == 0) {
+            st2.reconcileFailCount = std::min(st2.reconcileFailCount + 1, 20);
+            scheduleOverflowRecovery(uid, deviceId);
+            return;
+        }
+
+        // We triggered a recovery scan; clear the flag.
+        st2.needsReconcile = false;
+        st2.reconcileFailCount = 0;
+    });
+}
+
+static bool watchProbeEnabled() {
+    // Enable with: KERYTHING_WATCH_PROBE=1
+    const QByteArray v = qgetenv("KERYTHING_WATCH_PROBE");
+    if (v.isEmpty()) return false;
+    if (v == "0") return false;
+    return true;
+}
+
+static QString errnoString(int e) {
+    return QStringLiteral("(%1): %2").arg(e).arg(QString::fromLocal8Bit(std::strerror(e)));
+}
+
+void IndexerService::probeTouchedEntries(quint32 uid, const QString& deviceId, const QVariantList& touched) const {
+    // Find mount point for open_by_handle_at "mount_fd"
+    const auto devOpt = findDeviceById(deviceId);
+    if (!devOpt) {
+        qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 no device info").arg(uid).arg(deviceId);
+        return;
+    }
+
+    const QVariantMap dev = *devOpt;
+    const QString mp = dev.value(QStringLiteral("primaryMountPoint")).toString().trimmed();
+    if (mp.isEmpty()) {
+        qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 not mounted (no primaryMountPoint)")
+                             .arg(uid).arg(deviceId);
+        return;
+    }
+
+    const QByteArray mpBytes = QFile::encodeName(QDir::cleanPath(mp));
+
+    // open_by_handle_at() is picky about mount_fd: O_PATH may be rejected (EBADF).
+    const int mountFd = ::open(mpBytes.constData(), O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    if (mountFd < 0) {
+        qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 open(mount) failed %3")
+                             .arg(uid).arg(deviceId).arg(errnoString(errno));
+        return;
+    }
+
+    int probed = 0;
+    int ok = 0;
+    int enoent = 0;
+    int otherErr = 0;
+
+    for (const QVariant& v : touched) {
+        const QVariantMap m = v.toMap();
+
+        const QString name = m.value(QStringLiteral("name")).toString();
+        const QString fsidHex = m.value(QStringLiteral("fsidHex")).toString();
+        const QString handleHex = m.value(QStringLiteral("handleHex")).toString();
+        const quint64 mask = m.value(QStringLiteral("mask")).toULongLong();
+
+        // Generic fallback token
+        if (name == QStringLiteral("*")) {
+            qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 generic token ('*') mask=0x%3")
+                                 .arg(uid)
+                                 .arg(deviceId)
+                                 .arg(QString::number(mask, 16));
+            continue;
+        }
+
+        if (name.isEmpty() || fsidHex.isEmpty() || handleHex.isEmpty()) {
+            qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 malformed touched entry (missing fields)")
+                                 .arg(uid).arg(deviceId);
+            continue;
+        }
+
+        probed++;
+
+        const QByteArray handleBlob = QByteArray::fromHex(handleHex.toLatin1());
+        if (handleBlob.size() < static_cast<int>(sizeof(file_handle))) {
+            qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 name=%3 handle too small (%4 bytes)")
+                                 .arg(uid).arg(deviceId).arg(name).arg(handleBlob.size());
+            continue;
+        }
+
+        // NOTE: handleHex encodes the *entire file_handle blob* (struct header + handle bytes)
+        // exactly as captured from fanotify_event_info_fid.
+        const file_handle* fhView = reinterpret_cast<const file_handle*>(handleBlob.constData());
+        const size_t expect = sizeof(file_handle) + static_cast<size_t>(fhView->handle_bytes);
+        if (handleBlob.size() < static_cast<int>(expect)) {
+            qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 name=%3 handle truncated (%4 < %5)")
+                                 .arg(uid).arg(deviceId).arg(name).arg(handleBlob.size()).arg(static_cast<qulonglong>(expect));
+            continue;
+        }
+
+        // open_by_handle_at wants a writable buffer (kernel may write to it), so copy into a mutable block.
+        QByteArray handleMutable = handleBlob.left(static_cast<int>(expect));
+
+        auto* fh = reinterpret_cast<file_handle*>(handleMutable.data());
+
+        // Resolve parent directory from handle
+        const int parentFd = ::open_by_handle_at(mountFd, fh, O_RDONLY | O_CLOEXEC);
+        if (parentFd < 0) {
+            qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 name=%3 open_by_handle_at failed %4 mask=0x%5")
+                                 .arg(uid)
+                                 .arg(deviceId)
+                                 .arg(name)
+                                 .arg(errnoString(errno))
+                                 .arg(QString::number(mask, 16));
+            continue;
+        }
+
+        // Stat the child in that directory
+        struct stat st {};
+        const QByteArray nameBytes = name.toLocal8Bit();
+        const int rc = ::fstatat(parentFd, nameBytes.constData(), &st, AT_SYMLINK_NOFOLLOW);
+        if (rc != 0) {
+            const int e = errno;
+            if (e == ENOENT) enoent++;
+            else otherErr++;
+
+            qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 name=%3 fstatat failed %4 mask=0x%5")
+                                 .arg(uid)
+                                 .arg(deviceId)
+                                 .arg(name)
+                                 .arg(errnoString(e))
+                                 .arg(QString::number(mask, 16));
+
+            ::close(parentFd);
+            continue;
+        }
+
+        ok++;
+
+        const bool isDir = S_ISDIR(st.st_mode);
+        const bool isReg = S_ISREG(st.st_mode);
+        const bool isLnk = S_ISLNK(st.st_mode);
+
+        qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 name=%3 type=%4 size=%5 mtime=%6 mask=0x%7")
+                             .arg(uid)
+                             .arg(deviceId)
+                             .arg(name)
+                             .arg(isDir ? QStringLiteral("dir") : (isReg ? QStringLiteral("file") : (isLnk ? QStringLiteral("symlink") : QStringLiteral("other"))))
+                             .arg(static_cast<qulonglong>(st.st_size))
+                             .arg(static_cast<qlonglong>(st.st_mtime))
+                             .arg(QString::number(mask, 16));
+
+        ::close(parentFd);
+    }
+
+    ::close(mountFd);
+
+    qInfo().noquote() << QStringLiteral("[watch-probe] uid=%1 device=%2 done probed=%3 ok=%4 enoent=%5 otherErr=%6")
+                         .arg(uid)
+                         .arg(deviceId)
+                         .arg(probed)
+                         .arg(ok)
+                         .arg(enoent)
+                         .arg(otherErr);
+}
+
+void IndexerService::applyWatchBatch(quint32 uid,
+                                     const QString& deviceId,
+                                     const QVariantList& touched,
+                                     bool overflowSeen) {
+    if (deviceId.trimmed().isEmpty()) return;
+
+    ensureLoadedForUid(uid);
+
+    // If the index doesn't exist for this uid/device, ignore.
+    auto uidIt = m_indexesByUid.find(uid);
+    if (uidIt == m_indexesByUid.end()) return;
+    if (uidIt->second.find(deviceId) == uidIt->second.end()) return;
+
+    if (watchProbeEnabled()) {
+        probeTouchedEntries(uid, deviceId, touched);
+    }
+
+    int structured = 0;
+    int generic = 0;
+    int malformed = 0;
+
+    for (const QVariant& v : touched) {
+        const QVariantMap m = v.toMap();
+        const QString name = m.value(QStringLiteral("name")).toString();
+        if (name == QStringLiteral("*")) {
+            generic++;
+            continue;
+        }
+
+        const QString fsidHex = m.value(QStringLiteral("fsidHex")).toString();
+        const QString handleHex = m.value(QStringLiteral("handleHex")).toString();
+        const auto maskVar = m.value(QStringLiteral("mask"));
+
+        const bool ok = !name.isEmpty() && !fsidHex.isEmpty() && !handleHex.isEmpty() && maskVar.isValid();
+        if (ok) structured++;
+        else malformed++;
+    }
+
+    qInfo().noquote() << QStringLiteral("[watch] batch uid=%1 device=%2 touched=%3 structured=%4 generic=%5 malformed=%6 overflow=%7")
+                         .arg(uid)
+                         .arg(deviceId)
+                         .arg(touched.size())
+                         .arg(structured)
+                         .arg(generic)
+                         .arg(malformed)
+                         .arg(overflowSeen ? QStringLiteral("1") : QStringLiteral("0"));
+
+    // If overflow, schedule delayed recovery.
+    if (overflowSeen) {
+        qWarning().noquote() << QStringLiteral("[watch] overflow uid=%1 device=%2 (queue overflow)")
+                                .arg(uid)
+                                .arg(deviceId);
+        scheduleOverflowRecovery(uid, deviceId);
+    }
+
+    // If we got a generic token, we don't have reliable per-entry info.
+    // Keep current behavior: quiet -> full rescan.
+    if (!touched.isEmpty()) {
+        for (const QVariant& v : touched) {
+            const QVariantMap m = v.toMap();
+            if (m.value(QStringLiteral("name")).toString() == QStringLiteral("*")) {
+                ensureWatchQuietTimer(uid, deviceId);
+                const QString k = watchKey(uid, deviceId);
+                WatchBatchState& st = m_watchBatchState[k];
+                st.overflowSeen = st.overflowSeen || overflowSeen;
+                if (st.quietTimer) st.quietTimer->start(kWatchQuietMs);
+                return;
+            }
+        }
+    }
+
+    if (touched.isEmpty() && !overflowSeen) return;
+
+    // Coalesce bursts via quiet timer, then do full rescan once.
+    ensureWatchQuietTimer(uid, deviceId);
+
+    const QString k = watchKey(uid, deviceId);
+    WatchBatchState& st = m_watchBatchState[k];
+    st.overflowSeen = st.overflowSeen || overflowSeen;
+
+    if (st.quietTimer) {
+        st.quietTimer->start(kWatchQuietMs);
+    }
 }

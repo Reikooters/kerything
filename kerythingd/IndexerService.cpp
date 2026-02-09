@@ -2904,6 +2904,41 @@ static std::optional<QString> readFdPath(int fd) {
     return QString::fromLocal8Bit(buf);
 }
 
+static void repairOrderAndRankForRecord(std::vector<quint32>& order,
+                                       std::vector<quint32>& rank,
+                                       quint32 recIdx,
+                                       const auto& lessByRecordAsc)
+{
+    if (order.empty() || rank.empty()) return;
+    if (rank.size() != order.size()) return;
+    if (recIdx >= rank.size()) return;
+
+    const quint32 oldPos = rank[recIdx];
+    if (oldPos >= order.size()) return;
+    if (order[oldPos] != recIdx) {
+        // Rank/order mismatch (shouldn't happen); don't try to "fix" blindly.
+        return;
+    }
+
+    // Remove
+    order.erase(order.begin() + static_cast<ptrdiff_t>(oldPos));
+
+    // Find new position (ascending)
+    auto it = std::lower_bound(order.begin(), order.end(), recIdx,
+                               [&](quint32 a, quint32 b) { return lessByRecordAsc(a, b); });
+
+    const quint32 newPos = static_cast<quint32>(std::distance(order.begin(), it));
+    order.insert(order.begin() + static_cast<ptrdiff_t>(newPos), recIdx);
+
+    // Update rank only for the affected interval
+    const quint32 lo = std::min(oldPos, newPos);
+    const quint32 hi = std::max(oldPos, newPos);
+
+    for (quint32 p = lo; p <= hi && p < order.size(); ++p) {
+        rank[order[p]] = p;
+    }
+}
+
 bool IndexerService::applyIncrementalBatchIfSafe(quint32 uid, const QString& deviceId, const QVariantList& touched) {
     // NOTE: caller must ensureLoadedForUid(uid)
     auto uidIt = m_indexesByUid.find(uid);
@@ -3033,6 +3068,35 @@ bool IndexerService::applyIncrementalBatchIfSafe(quint32 uid, const QString& dev
         r.modificationTime = static_cast<qint64>(st.st_mtime);
         r.isDir = S_ISDIR(st.st_mode);
         r.isSymlink = S_ISLNK(st.st_mode);
+
+        // Repair precomputed sort orders affected by mtime/size changes
+        {
+            auto nameView = [&](quint32 i) -> std::string_view {
+                const auto& rr = idx.records[i];
+                return std::string_view(idx.stringPool.data() + rr.nameOffset, rr.nameLen);
+            };
+
+            auto lessByMtimeAsc = [&](quint32 a, quint32 b) {
+                const auto ta = idx.records[a].modificationTime;
+                const auto tb = idx.records[b].modificationTime;
+                if (ta != tb) return ta < tb;
+                const int c = ciCompareBytes(nameView(a), nameView(b));
+                if (c != 0) return c < 0;
+                return a < b;
+            };
+
+            auto lessBySizeAsc = [&](quint32 a, quint32 b) {
+                const auto sa = idx.records[a].size;
+                const auto sb = idx.records[b].size;
+                if (sa != sb) return sa < sb;
+                const int c = ciCompareBytes(nameView(a), nameView(b));
+                if (c != 0) return c < 0;
+                return a < b;
+            };
+
+            repairOrderAndRankForRecord(idx.orderByMtime, idx.rankByMtime, recIdx, lessByMtimeAsc);
+            repairOrderAndRankForRecord(idx.orderBySize,  idx.rankBySize,  recIdx, lessBySizeAsc);
+        }
 
         ::close(parentFd);
         updated++;

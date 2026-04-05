@@ -2,6 +2,7 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include <QApplication>
+#include <QIcon>
 
 #include "AppController.h"
 
@@ -13,6 +14,12 @@ int main(int argc, char* argv[]) {
     QApplication::setApplicationName(QStringLiteral("kerything"));
     QApplication::setOrganizationName(QStringLiteral("Reikooters"));
     QApplication::setApplicationVersion(QStringLiteral("2.0"));
+
+    // This must match the .desktop filename exactly
+    QApplication::setDesktopFileName(QStringLiteral("net.reikooters.kerything"));
+
+    // Set window icon
+    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("kerything")));
 
     // Central coordinator for startup, windows, and single-instance handling.
     AppController controller(app);

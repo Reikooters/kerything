@@ -54,14 +54,14 @@ bool AppController::start() {
             this, [this]() {
                 // Update UI: daemon is ready
                 requestRefreshAllWindows();
-                // safe place to issue initial scan/sync requests
+
+                // TODO: demo only - send scan request on ready
+                const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/sda2"), QStringLiteral("ntfs"));
 
                 quint32 requestId;
-
-                const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/sda2"), QStringLiteral("ntfs"));
                 daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
 
-                std::cout << "ScanDevice request sent with ID: " << requestId << std::endl;
+                std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
             });
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,
@@ -78,20 +78,20 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanStarted,
             this, [this](quint32 requestId) {
-                std::cout << "GUI: scan started " << requestId << "\n";
+                std::cout << "GUI: scan started requestId=" << requestId << "\n";
                 requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanProgress,
             this, [this](quint32 requestId, quint64 seen, quint64 emitted) {
-                std::cout << "GUI: scan progress " << requestId
+                std::cout << "GUI: scan progress requestId=" << requestId
                           << " seen=" << seen
                           << " emitted=" << emitted << "\n";
             });
 
     connect(daemonClient_, &DaemonClient::scanChunkReceived,
             this, [this](quint32 requestId, const std::vector<FileRecord>& chunk) {
-                std::cout << "GUI: received chunk for request " << requestId
+                std::cout << "GUI: received scan chunk requestId=" << requestId
                           << " size=" << chunk.size() << "\n";
 
                 // TODO: Apply chunk to the in-memory index here.
@@ -102,19 +102,19 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanCompleted,
             this, [this](quint32 requestId) {
-                std::cout << "GUI: scan completed " << requestId << "\n";
+                std::cout << "GUI: scan completed requestId=" << requestId << "\n";
                 requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanCancelled,
             this, [this](quint32 requestId) {
-                std::cout << "GUI: scan cancelled " << requestId << "\n";
+                std::cout << "GUI: scan cancelled requestId=" << requestId << "\n";
                 requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanFailed,
             this, [this](quint32 requestId, const QString& errorText) {
-                std::cerr << "GUI: scan failed " << requestId
+                std::cerr << "GUI: scan failed requestId=" << requestId
                           << " " << errorText.toStdString() << "\n";
             });
 

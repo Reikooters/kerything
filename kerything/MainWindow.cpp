@@ -68,6 +68,9 @@ void MainWindow::refresh() {
     );
 
     counterLabel_->setText(
-        QString("Shared counter value: %1").arg(controller_->sharedCounter())
-    );
+        QString("Shared counter value: %1\nDaemon connection status: %2\nDaemon ready status: %3")
+            .arg(controller_->sharedCounter())
+            .arg(controller_->isDaemonConnected() ? "Connected" : "Disconnected")
+            .arg(controller_->isDaemonReady() ? "Ready" : "Not Ready")
+        );
 }

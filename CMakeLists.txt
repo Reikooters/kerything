@@ -15,6 +15,7 @@ set(CMAKE_AUTOUIC ON)
 # Find Qt6 components
 find_package(Qt6 REQUIRED COMPONENTS
         Widgets
+        Core
         Network
 )
 
@@ -26,15 +27,37 @@ add_executable(kerything
         kerything/main.cpp
         kerything/AppController.cpp
         kerything/AppController.h
+        kerything/DaemonClient.cpp
+        kerything/DaemonClient.h
         kerything/MainWindow.cpp
         kerything/MainWindow.h
         kerything/SingleInstanceServer.cpp
         kerything/SingleInstanceServer.h
+        shared/SocketFramer.cpp
+        shared/SocketFramer.h
+        shared/Protocol.h
+)
+
+add_executable(kerythingd
+        kerythingd/main.cpp
+        kerythingd/ClientConnection.cpp
+        kerythingd/ClientConnection.h
+        kerythingd/Server.cpp
+        kerythingd/Server.h
+        shared/SocketFramer.cpp
+        shared/SocketFramer.h
+        shared/Protocol.h
 )
 
 target_link_libraries(kerything
         PRIVATE
         Qt6::Widgets
+        Qt6::Network
+)
+
+target_link_libraries(kerythingd
+        PRIVATE
+        Qt6::Core
         Qt6::Network
 )
 

@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QList>
 
+#include "DaemonClient.h"
+
 class QApplication;
 class MainWindow;
 class SingleInstanceServer;
@@ -23,6 +25,8 @@ public:
     void requestRefreshAllWindows();
     void incrementSharedCounter();
     [[nodiscard]] int sharedCounter() const noexcept;
+    [[nodiscard]] bool isDaemonConnected() const noexcept;
+    [[nodiscard]] bool isDaemonReady() const noexcept;
 
 private slots:
     void onPrimaryRequestedOpenWindow();
@@ -33,6 +37,7 @@ private:
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
+    DaemonClient* daemonClient_ = nullptr;
     QList<QPointer<MainWindow>> windows_;
     int sharedCounter_ = 0;
 };

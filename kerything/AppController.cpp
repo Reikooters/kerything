@@ -3,10 +3,11 @@
 
 #include "AppController.h"
 
+#include <QApplication>
+
+#include "DaemonClient.h"
 #include "MainWindow.h"
 #include "SingleInstanceServer.h"
-
-#include <QApplication>
 
 AppController::AppController(QApplication& app, QObject* parent)
     : QObject(parent),
@@ -37,6 +38,35 @@ bool AppController::start() {
 
     // Primary instance opens its first window on startup.
     openNewWindow();
+
+    // Start the daemon client
+    daemonClient_ = new DaemonClient(this);
+
+    connect(daemonClient_, &DaemonClient::daemonAvailable,
+            this, [this]() {
+                // Update UI: daemon is connected, waiting for "ready" signal
+                requestRefreshAllWindows();
+            });
+
+    connect(daemonClient_, &DaemonClient::daemonReady,
+            this, [this]() {
+                // Update UI: daemon is ready
+                requestRefreshAllWindows();
+                // safe place to issue initial scan/sync requests
+            });
+
+    connect(daemonClient_, &DaemonClient::daemonUnavailable,
+            this, [this]() {
+                // Update UI: backend not available
+                requestRefreshAllWindows();
+            });
+
+    connect(daemonClient_, &DaemonClient::connectedChanged,
+            this, [this](bool connected) {
+                // Use this for a status bar / indicator
+                requestRefreshAllWindows();
+            });
+
     return true;
 }
 
@@ -82,6 +112,21 @@ int AppController::sharedCounter() const noexcept {
     return sharedCounter_;
 }
 
+bool AppController::isDaemonConnected() const noexcept {
+    if (!daemonClient_) {
+        return false;
+    }
+
+    return daemonClient_->isConnected();
+}
+
+bool AppController::isDaemonReady() const noexcept {
+    if (!daemonClient_) {
+        return false;
+    }
+
+    return daemonClient_->isReady();
+}
 
 void AppController::onPrimaryRequestedOpenWindow() {
     // IPC request from another process: just open a new window.

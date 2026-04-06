@@ -33,7 +33,7 @@ void Server::onNewConnection()
         connect(connection, &ClientConnection::disconnected,
                 this, &Server::onClientDisconnected);
 
-        sendReady(connection);
+        connection->sendReady();
 
         clients_.push_back(connection);
     }
@@ -46,10 +46,4 @@ void Server::onClientDisconnected(ClientConnection* connection)
         clients_.end());
 
     std::cout << "Client disconnected\n";
-}
-
-void Server::sendReady(const ClientConnection* clientConnection) {
-    const QByteArray payload = Protocol::makeReadyPayload();
-    const QByteArray msg = Protocol::packMessage(Protocol::MessageType::Ready, 0, payload);
-    clientConnection->send(msg);
 }

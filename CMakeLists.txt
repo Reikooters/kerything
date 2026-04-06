@@ -33,20 +33,27 @@ add_executable(kerything
         kerything/MainWindow.h
         kerything/SingleInstanceServer.cpp
         kerything/SingleInstanceServer.h
+        shared/FileRecord.h
+        shared/Protocol.h
         shared/SocketFramer.cpp
         shared/SocketFramer.h
-        shared/Protocol.h
 )
 
 add_executable(kerythingd
         kerythingd/main.cpp
         kerythingd/ClientConnection.cpp
         kerythingd/ClientConnection.h
+        kerythingd/ScanJob.h
+        kerythingd/ScannerHelper.h
+        kerythingd/ScannerHelper.cpp
+        kerythingd/ScannerWorker.h
+        kerythingd/ScannerWorker.cpp
         kerythingd/Server.cpp
         kerythingd/Server.h
+        shared/FileRecord.h
+        shared/Protocol.h
         shared/SocketFramer.cpp
         shared/SocketFramer.h
-        shared/Protocol.h
 )
 
 target_link_libraries(kerything
@@ -60,6 +67,9 @@ target_link_libraries(kerythingd
         Qt6::Core
         Qt6::Network
 )
+
+target_include_directories(kerything PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
+target_include_directories(kerythingd PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
 
 include(KDEInstallDirs)
 include(ECMInstallIcons)

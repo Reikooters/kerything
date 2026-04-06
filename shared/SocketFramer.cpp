@@ -5,15 +5,15 @@
 
 void SocketFramer::append(const QByteArray& data)
 {
-    m_buffer.append(data);
+    buffer_.append(data);
 }
 
 bool SocketFramer::tryTake(Protocol::MessageFrame& frame)
 {
-    return Protocol::tryParseFrame(m_buffer, frame);
+    return Protocol::tryParseFrame(buffer_, frame);
 }
 
 bool SocketFramer::hasBufferedData() const
 {
-    return !m_buffer.isEmpty();
+    return !buffer_.isEmpty();
 }

@@ -4,22 +4,33 @@
 #ifndef KERYTHINGD_CLIENTCONNECTION_H
 #define KERYTHINGD_CLIENTCONNECTION_H
 
-#include "../shared/Protocol.h"
-#include "../shared/SocketFramer.h"
+#include "ScanJob.h"
+#include "SocketFramer.h"
+#include "Protocol.h"
+#include "ScannerWorker.h"
+#include "FileRecord.h"
 
-#include <iostream>
-
-#include <QLocalSocket>
 #include <QObject>
 #include <QPointer>
+#include <QLocalSocket>
+#include <QHash>
+#include <QThread>
+#include <memory>
 
 class ClientConnection final : public QObject {
     Q_OBJECT
+
 public:
     explicit ClientConnection(QLocalSocket* socket, QObject* parent = nullptr);
+    ~ClientConnection() override;
 
-    [[nodiscard]] bool isAlive() const;
-    void send(const QByteArray& message) const;
+    void sendReady();
+    void sendScanStarted(quint32 requestId);
+    void sendScanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
+    bool sendScanChunk(quint32 requestId, const std::vector<FileRecord>& chunk);
+    void sendScanCompleted(quint32 requestId);
+    void sendScanCancelled(quint32 requestId);
+    void sendError(quint32 requestId, const QString& errorText);
 
 signals:
     void disconnected(ClientConnection* connection);
@@ -29,10 +40,22 @@ private slots:
     void onDisconnected();
 
 private:
-    static void handleMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleFrame(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleScanDevice(quint32 requestId, const QByteArray& payload);
+    void handleCancelRequest(quint32 requestId);
+
+    bool sendFrame(Protocol::MessageType type, quint32 requestId, const QByteArray& payload) const;
+    QByteArray encodeFrame(Protocol::MessageType type, quint32 requestId, const QByteArray& payload) const;
+    void cancelAllJobs();
 
     QPointer<QLocalSocket> socket_;
     SocketFramer framer_;
+
+    QThread scanThread_;
+    ScannerWorker* scannerWorker_ = nullptr;
+
+    QHash<quint32, std::shared_ptr<ScanJob>> activeJobs_;
+    bool shuttingDown_ = false;
 };
 
 #endif //KERYTHINGD_CLIENTCONNECTION_H

@@ -19,8 +19,6 @@ private slots:
     void onClientDisconnected(ClientConnection* connection);
 
 private:
-    static void sendReady(const ClientConnection* clientConnection);
-
     QLocalServer server_;
     std::vector<ClientConnection*> clients_;
 };

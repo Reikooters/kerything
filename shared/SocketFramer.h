@@ -15,7 +15,7 @@ public:
     [[nodiscard]] bool hasBufferedData() const;
 
 private:
-    QByteArray m_buffer;
+    QByteArray buffer_;
 };
 
 #endif //KERYTHING_SOCKETFRAMER_H

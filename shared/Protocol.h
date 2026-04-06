@@ -18,7 +18,14 @@ static const QString ServerName = "kerythingd";
 
 enum class MessageType : quint16 {
     Ready = 1,
-    Error = 2
+    ScanDevice = 2,
+    CancelRequest = 3,
+    ScanStarted = 4,
+    ScanProgress = 5,
+    ScanIndexResultChunk = 6,
+    ScanCompleted = 7,
+    ScanCancelled = 8,
+    Error = 9
 };
 
 struct MessageHeader {
@@ -93,6 +100,16 @@ inline QByteArray makeReadyPayload()
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
     out << Version << true;
+    return payload;
+}
+
+inline QByteArray makeScanDevicePayload(const QString& devicePath, const QString& fsType)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+    out << devicePath << fsType;
     return payload;
 }
 

@@ -93,16 +93,6 @@ inline bool tryParseFrame(QByteArray& buffer, MessageFrame& frame)
     return true;
 }
 
-inline QByteArray makeReadyPayload()
-{
-    QByteArray payload;
-    QDataStream out(&payload, QIODeviceBase::WriteOnly);
-    out.setByteOrder(QDataStream::BigEndian);
-    out.setVersion(QDataStream::Qt_6_0);
-    out << Version << true;
-    return payload;
-}
-
 inline QByteArray makeScanDevicePayload(const QString& devicePath, const QString& fsType)
 {
     QByteArray payload;
@@ -110,16 +100,6 @@ inline QByteArray makeScanDevicePayload(const QString& devicePath, const QString
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
     out << devicePath << fsType;
-    return payload;
-}
-
-inline QByteArray makeErrorPayload(const QString& errorText)
-{
-    QByteArray payload;
-    QDataStream out(&payload, QIODeviceBase::WriteOnly);
-    out.setByteOrder(QDataStream::BigEndian);
-    out.setVersion(QDataStream::Qt_6_0);
-    out << errorText;
     return payload;
 }
 

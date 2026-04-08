@@ -18,30 +18,33 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
 
     currentJob_ = std::move(job);
 
-    emit scanStarted(currentJob_->requestId);
+    const quint32 requestId = currentJob_->requestId;
+    const std::shared_ptr<ScanJob> jobRef = currentJob_;
+
+    emit scanStarted(requestId);
 
     const bool ok = ScannerHelper::scanDevice(
-        currentJob_->devicePath,
-        currentJob_->fsType,
-        [this](const std::vector<FileRecord>& chunk) -> bool {
-            emit scanChunkReady(currentJob_->requestId, chunk);
-            return !currentJob_->cancelled.load(std::memory_order_relaxed);
+        jobRef->devicePath,
+        jobRef->fsType,
+        [this, requestId, jobRef](const std::vector<FileRecord>& chunk) -> bool {
+            emit scanChunkReady(requestId, chunk);
+            return !jobRef->cancelled.load(std::memory_order_relaxed);
         },
-        [this](const QString& errorText) {
-            emit scanError(currentJob_->requestId, errorText);
+        [this, requestId](const QString& errorText) {
+            emit scanError(requestId, errorText);
         },
-        [this]() -> bool {
-            return currentJob_->cancelled.load(std::memory_order_relaxed);
+        [jobRef]() -> bool {
+            return jobRef->cancelled.load(std::memory_order_relaxed);
         },
-        [this](quint64 filesSeen, quint64 filesEmitted) {
-            emit scanProgress(currentJob_->requestId, filesSeen, filesEmitted);
+        [this, requestId](quint64 filesSeen, quint64 filesEmitted) {
+            emit scanProgress(requestId, filesSeen, filesEmitted);
         }
     );
 
-    if (currentJob_->cancelled.load(std::memory_order_relaxed)) {
-        emit scanCancelled(currentJob_->requestId);
+    if (jobRef->cancelled.load(std::memory_order_relaxed)) {
+        emit scanCancelled(requestId);
     } else if (ok) {
-        emit scanCompleted(currentJob_->requestId);
+        emit scanCompleted(requestId);
     }
 
     currentJob_.reset();

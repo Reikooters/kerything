@@ -44,12 +44,14 @@ add_executable(kerythingd
         kerythingd/ClientConnection.cpp
         kerythingd/ClientConnection.h
         kerythingd/ScanJob.h
-        kerythingd/ScannerHelper.h
         kerythingd/ScannerHelper.cpp
-        kerythingd/ScannerWorker.h
+        kerythingd/ScannerHelper.h
         kerythingd/ScannerWorker.cpp
+        kerythingd/ScannerWorker.h
         kerythingd/Server.cpp
         kerythingd/Server.h
+        kerythingd/scanners/NtfsScannerEngine.cpp
+        kerythingd/scanners/NtfsScannerEngine.h
         shared/FileRecord.h
         shared/Protocol.h
         shared/SocketFramer.cpp

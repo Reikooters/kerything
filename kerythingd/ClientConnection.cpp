@@ -214,9 +214,13 @@ bool ClientConnection::sendScanChunk(quint32 requestId,
     out << static_cast<quint32>(chunk.size());
 
     for (const auto& rec : chunk) {
-        out << rec.path
+        out << rec.fsIndex
+            << rec.parentRecordIdx
             << rec.size
-            << rec.mtime;
+            << rec.modificationTime
+            << rec.nameOffset
+            << rec.nameLen
+            << rec.flags;
     }
 
     return sendFrame(Protocol::MessageType::ScanIndexResultChunk, requestId, payload);

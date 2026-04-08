@@ -21,7 +21,7 @@ namespace ScannerHelper {
 
     bool isAllowedFsType(const QString& fsType);
 
-    std::expected<std::string, std::string> validateDevicePath(const std::string& inputPath);
+    std::expected<QString, QString> validateDevicePath(const QString& inputPath);
 
     bool scanDevice(const QString& devicePath,
                     const QString& fsType,

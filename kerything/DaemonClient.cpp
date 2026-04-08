@@ -399,15 +399,15 @@ void DaemonClient::handleScanIndexResultChunk(const Protocol::MessageHeader& hea
     chunk.reserve(count);
 
     for (quint32 i = 0; i < count; ++i) {
-        FileRecord rec;
-        in >> rec.path >> rec.size >> rec.mtime;
-
-        if (in.status() != QDataStream::Ok) {
-            std::cerr << "Malformed ScanIndexResultChunk payload body\n";
-            return;
-        }
-
-        chunk.push_back(std::move(rec));
+        // FileRecord rec;
+        // in >> rec.path >> rec.size >> rec.mtime;
+        //
+        // if (in.status() != QDataStream::Ok) {
+        //     std::cerr << "Malformed ScanIndexResultChunk payload body\n";
+        //     return;
+        // }
+        //
+        // chunk.push_back(std::move(rec));
     }
 
     std::cout << "Received chunk requestId=" << header.requestId

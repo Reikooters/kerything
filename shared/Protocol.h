@@ -7,14 +7,13 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDataStream>
 #include <QtCore/QString>
-#include <QtCore/QtGlobal>
 
 namespace Protocol {
 
 static constexpr quint32 Magic = 0x4B455259; // 'KERY'
 static constexpr quint16 Version = 1;
 static constexpr int HeaderSize = 16;
-static const QString ServerName = "kerythingd";
+static const QString ServerName = "/run/kerythingd/kerythingd.sock";
 
 enum class MessageType : quint16 {
     Ready = 1,
@@ -103,6 +102,6 @@ inline QByteArray makeScanDevicePayload(const QString& devicePath, const QString
     return payload;
 }
 
-} // namespace protocol
+} // namespace Protocol
 
 #endif //KERYTHING_PROTOCOL_H

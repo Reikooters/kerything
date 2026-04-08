@@ -11,8 +11,14 @@
 
 class Server : public QObject {
     Q_OBJECT
+
 public:
     explicit Server(QObject* parent = nullptr);
+
+private:
+    static std::optional<gid_t> resolveSocketGroupId();
+    static bool prepareSocketDirectory(gid_t socketGroupId);
+    static bool applySocketPermissions(gid_t socketGroupId);
 
 private slots:
     void onNewConnection();

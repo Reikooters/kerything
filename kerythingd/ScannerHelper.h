@@ -14,7 +14,7 @@
 
 namespace ScannerHelper {
 
-    using ChunkCallback = std::function<bool(const std::vector<FileRecord>&)>;
+    using ChunkCallback = std::function<bool(const std::vector<FileRecord>&, const std::vector<char>&)>;
     using ErrorCallback = std::function<void(const QString&)>;
     using CancelCallback = std::function<bool()>;
     using ProgressCallback = std::function<void(quint64 filesSeen, quint64 filesEmitted)>;

@@ -23,7 +23,7 @@ public slots:
 signals:
     void scanStarted(quint32 requestId);
     void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
-    void scanChunkReady(quint32 requestId, const std::vector<FileRecord>& chunk);
+    void scanChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk);
     void scanCompleted(quint32 requestId);
     void scanCancelled(quint32 requestId);
     void scanError(quint32 requestId, const QString& errorText);

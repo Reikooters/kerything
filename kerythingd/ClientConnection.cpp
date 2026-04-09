@@ -39,8 +39,8 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
             });
 
     connect(scannerWorker_, &ScannerWorker::scanChunkReady,
-            this, [this](quint32 requestId, const std::vector<FileRecord>& chunk) {
-                sendScanChunk(requestId, chunk);
+            this, [this](quint32 requestId, const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk) {
+                sendScanChunk(requestId, fileRecordChunk, stringPoolChunk);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanCompleted,
@@ -204,17 +204,19 @@ void ClientConnection::sendScanProgress(quint32 requestId,
 }
 
 bool ClientConnection::sendScanChunk(quint32 requestId,
-                                     const std::vector<FileRecord>& chunk)
+                                     const std::vector<FileRecord>& fileRecordChunk,
+                                     const std::vector<char>& stringPoolChunk)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
 
-    out << static_cast<quint32>(chunk.size());
+    out << static_cast<quint32>(fileRecordChunk.size());
 
-    for (const auto& rec : chunk) {
+    for (const auto& rec : fileRecordChunk) {
         out << rec.fsIndex
+            << rec.parentFsIndex
             << rec.parentRecordIdx
             << rec.size
             << rec.modificationTime
@@ -222,6 +224,10 @@ bool ClientConnection::sendScanChunk(quint32 requestId,
             << rec.nameLen
             << rec.flags;
     }
+
+    out << static_cast<quint32>(stringPoolChunk.size());
+
+    out.writeRawData(stringPoolChunk.data(), stringPoolChunk.size());
 
     return sendFrame(Protocol::MessageType::ScanIndexResultChunk, requestId, payload);
 }

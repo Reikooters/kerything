@@ -7,8 +7,9 @@
 #pragma pack(push, 1)
 
 struct FileRecord {
-    quint64 fsIndex;         // File System Index (MFT Index / Inode Number)
-    quint32 parentRecordIdx; // Index in the 'records' vector (NOT MFT index)
+    quint64 fsIndex;         // File System Index of record (48-bit MFT Index / 32-bit Inode Number)
+    quint64 parentFsIndex;   // File System Index of parent record (48-bit MFT Index / 32-bit Inode Number)
+    quint32 parentRecordIdx; // Parent's index in the 'records' vector (NOT File System Index)
     quint64 size;
     quint64 modificationTime;
     quint32 nameOffset;      // Offset into the global string pool

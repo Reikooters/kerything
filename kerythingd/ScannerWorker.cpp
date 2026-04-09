@@ -26,8 +26,8 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     const bool ok = ScannerHelper::scanDevice(
         jobRef->devicePath,
         jobRef->fsType,
-        [this, requestId, jobRef](const std::vector<FileRecord>& chunk) -> bool {
-            emit scanChunkReady(requestId, chunk);
+        [this, requestId, jobRef](const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk) -> bool {
+            emit scanChunkReady(requestId, fileRecordChunk, stringPoolChunk);
             return !jobRef->cancelled.load(std::memory_order_relaxed);
         },
         [this, requestId](const QString& errorText) {

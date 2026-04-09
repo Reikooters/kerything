@@ -168,11 +168,97 @@ namespace NtfsScannerEngine {
     static constexpr uint32_t IO_REPARSE_TAG_SYMLINK = 0xA000000C;
     static constexpr uint32_t IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003; // Junctions
 
+    /*
+     * BEGIN structs used for building FileRecords
+     */
+    struct TempFileLink {
+        std::string name;
+        uint64_t parent;
+        uint8_t namespaceType;
+        uint64_t modTime;
+        uint64_t dataSize; // Size cached in the filename attribute
+    };
+
+    struct FileLink {
+        std::string name;
+        uint64_t parentIndex;
+    };
+
+    struct FileInfo {
+        std::vector<FileLink> links;
+        uint64_t size;
+        bool isDir;
+        bool isSymlink;
+        uint64_t modificationTime;
+        uint64_t mftIndex; // Used to track the record's location
+    };
+
+    struct ExtensionFileInfo {
+        std::vector<TempFileLink> tempLinks;
+        bool isDir;
+        bool isSymlink;
+        uint64_t mftIndex; // Used to track the record's location
+        bool dataAttrFound;
+        uint64_t sizeFromData = 0;
+    };
+    /*
+     * END structs used for building FileRecords
+     */
+
+    /**
+     * Scans an NTFS device to process its Master File Table (MFT), extracting metadata and file information.
+     *
+     * This method attempts to open and scan the specified NTFS device. It processes the MFT records
+     * in chunks, handles errors, allows cancellation, and reports progress via provided callbacks.
+     *
+     * @param devicePath The path to the target device partition (e.g., "/dev/sdc2"). Must have proper permissions.
+     * @param onChunk Callback invoked for each processed chunk of MFT records.
+     *                Receives data about the processed files or records.
+     * @param onError Callback invoked when errors occur during the scan.
+     * @param shouldCancel Callback consulted to check if the scanning process should be canceled.
+     *                     The function terminates early if this callback returns true.
+     * @param onProgress Callback for reporting scan progress, typically represented as a percentage
+     *                   indicating how much of the MFT has been processed.
+     * @return Returns true if the scan completes successfully; otherwise, returns false if an error occurs
+     *         or if the device is not a valid NTFS partition.
+     */
     bool scanDevice(const QString& devicePath,
                     const ScannerHelper::ChunkCallback& onChunk,
                     const ScannerHelper::ErrorCallback& onError,
                     const ScannerHelper::CancelCallback& shouldCancel,
                     const ScannerHelper::ProgressCallback& onProgress);
+
+    /**
+     * The MFT itself is a file ($MFT) and can be fragmented.
+     * This function decodes "Data Runs" (compressed byte streams) to find where the MFT fragments are
+     * located physically on the disk.
+     *
+     * NTFS Data Runs describe the mapping between Virtual Cluster Numbers (VCNs) and Logical Cluster Numbers (LCNs),
+     * and this method extracts these mappings into a list of runs for use in subsequent operations.
+     *
+     * @param buffer A pointer to the buffer containing the NTFS attribute data. This buffer should contain
+     *               the raw attribute including the attribute header and the Data Runs.
+     * @param attrOffset The offset, in bytes, within the buffer where the attribute starts. The Data Runs are
+     *                   expected to begin at a specific offset relative to this base position.
+     * @param mftRuns A reference to a vector where the parsed MFT runs will be stored. Each run represents
+     *                a mapping from a Virtual Cluster Number (VCN) to a Logical Cluster Number (LCN).
+     */
+    void parseMftRuns(char* buffer, uint32_t attrOffset, std::vector<MftRun>& mftRuns);
+
+    /**
+     * NTFS Fixups (Update Sequence Array):
+     * To detect partial writes, NTFS saves the last 2 bytes of every 512-byte
+     * sector into an array and replaces them with a "sequence number".
+     * Before reading, we must "fix" the sectors by putting the original bytes back.
+     *
+     * Applies the fixup procedure to a given MFT record buffer. The fixup process replaces
+     * the last 2 bytes of each sector in the record with their correct values, based
+     * on the update sequence array. This ensures integrity and consistency of the record.
+     *
+     * @param buffer Pointer to the buffer containing the MFT record data.
+     * @param recordSize The size of the MFT record in bytes, used to calculate sector boundaries.
+     */
+    void applyFixups(char* buffer, uint32_t recordSize);
 
 } // namespace NtfsScannerEngine
 

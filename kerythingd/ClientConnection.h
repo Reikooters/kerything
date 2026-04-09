@@ -27,7 +27,7 @@ public:
     void sendReady();
     void sendScanStarted(quint32 requestId);
     void sendScanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
-    bool sendScanChunk(quint32 requestId, const std::vector<FileRecord>& chunk);
+    bool sendScanChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk);
     void sendScanCompleted(quint32 requestId);
     void sendScanCancelled(quint32 requestId);
     void sendError(quint32 requestId, const QString& errorText);

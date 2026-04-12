@@ -44,8 +44,14 @@ bool AppController::start() {
     // Create index controller
     indexController_ = new IndexController(this);
 
+    connect(indexController_, &IndexController::deviceRemoved,
+        this, [this](quint64 deviceId) {
+            Q_UNUSED(deviceId);
+            requestRefreshAllWindows();
+        });
+
     // Start the daemon client
-    daemonClient_ = new DaemonClient(indexController_, this);
+    daemonClient_ = new DaemonClient(this, this);
 
     connect(daemonClient_, &DaemonClient::daemonAvailable,
             this, [this]() {
@@ -84,6 +90,9 @@ bool AppController::start() {
                 std::cout << "GUI: scan started requestId=" << requestId
                           << " devicePath=" << devicePath.toStdString()
                           << " fsType=" << fsType.toStdString() << "\n";
+
+                indexController_->addDevice(devicePath, fsType, "TODO", requestId);
+
                 requestRefreshAllWindows();
             });
 
@@ -94,26 +103,44 @@ bool AppController::start() {
                           << " emitted=" << emitted << "\n";
             });
 
-    connect(daemonClient_, &DaemonClient::scanChunkReceived,
+    connect(daemonClient_, &DaemonClient::scanFileRecordChunkReceived,
             this, [this](quint32 requestId, const std::vector<FileRecord>& chunk) {
-                std::cout << "GUI: received scan chunk requestId=" << requestId
+                std::cout << "GUI: received scan file record chunk requestId=" << requestId
                           << " size=" << chunk.size() << "\n";
 
-                // TODO: Apply chunk to the in-memory index here.
-                // index.addChunk(chunk);
+                indexController_->appendDeviceFileRecordsByRequestId(requestId, chunk);
+
+                requestRefreshAllWindows();
+            });
+
+    connect(daemonClient_, &DaemonClient::scanStringPoolChunkReceived,
+            this, [this](quint32 requestId, QByteArrayView chunk) {
+                std::cout << "GUI: received scan file record chunk requestId=" << requestId
+                          << " size=" << chunk.size() << "\n";
+
+                indexController_->appendDeviceStringPoolByRequestId(requestId, chunk);
 
                 requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanCompleted,
             this, [this](quint32 requestId) {
-                std::cout << "GUI: scan completed requestId=" << requestId << "\n";
+                std::cout << "GUI: scan completed successfully requestId=" << requestId << "\n";
+
+                // Clean up the requestId as the scan has completed successfully
+                indexController_->removeRequestId(requestId);
+
                 requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanCancelled,
             this, [this](quint32 requestId) {
                 std::cout << "GUI: scan cancelled requestId=" << requestId << "\n";
+
+                // Clean up the requestId and any device associated with it,
+                // as the scan was cancelled.
+                indexController_->removeDeviceByRequestId(requestId);
+
                 requestRefreshAllWindows();
             });
 
@@ -121,6 +148,12 @@ bool AppController::start() {
             this, [this](quint32 requestId, const QString& errorText) {
                 std::cerr << "GUI: scan failed requestId=" << requestId
                           << " " << errorText.toStdString() << "\n";
+
+                // Clean up the requestId and any device associated with it,
+                // as the scan failed.
+                indexController_->removeDeviceByRequestId(requestId);
+
+                requestRefreshAllWindows();
             });
 
     return true;
@@ -159,15 +192,6 @@ void AppController::requestRefreshAllWindows() {
     }
 }
 
-void AppController::incrementSharedCounter() {
-    // Placeholder for shared application state that all windows can observe.
-    ++sharedCounter_;
-}
-
-int AppController::sharedCounter() const noexcept {
-    return sharedCounter_;
-}
-
 bool AppController::isDaemonConnected() const noexcept {
     if (!daemonClient_) {
         return false;
@@ -182,6 +206,10 @@ bool AppController::isDaemonReady() const noexcept {
     }
 
     return daemonClient_->isReady();
+}
+
+IndexController* AppController::indexController() const noexcept {
+    return indexController_;
 }
 
 void AppController::onPrimaryRequestedOpenWindow() {

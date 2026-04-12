@@ -24,10 +24,9 @@ public:
     bool start();
     void openNewWindow();
     void requestRefreshAllWindows();
-    void incrementSharedCounter();
-    [[nodiscard]] int sharedCounter() const noexcept;
     [[nodiscard]] bool isDaemonConnected() const noexcept;
     [[nodiscard]] bool isDaemonReady() const noexcept;
+    IndexController* indexController() const noexcept;
 
 private slots:
     void onPrimaryRequestedOpenWindow();
@@ -41,7 +40,6 @@ private:
     DaemonClient* daemonClient_ = nullptr;
     IndexController* indexController_ = nullptr;
     QList<QPointer<MainWindow>> windows_;
-    int sharedCounter_ = 0;
 };
 
 #endif // KERYTHING_APPCONTROLLER_H

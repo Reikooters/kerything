@@ -6,13 +6,13 @@
 #include <QDataStream>
 #include <iostream>
 
+#include "AppController.h"
 #include "FileRecord.h"
 
-DaemonClient::DaemonClient(QPointer<IndexController> indexController, QObject* parent)
-    : QObject(parent)
+DaemonClient::DaemonClient(AppController* controller, QObject* parent)
+    : QObject(parent),
+      controller_(controller)
 {
-    indexController_ = std::move(indexController);
-
     connect(&socket_, &QLocalSocket::connected, this, &DaemonClient::onConnected);
     connect(&socket_, &QLocalSocket::disconnected, this, &DaemonClient::onDisconnected);
     connect(&socket_, &QLocalSocket::readyRead, this, &DaemonClient::onReadyRead);
@@ -376,8 +376,6 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
               << " devicePath=" << devicePath.toStdString()
               << " fsType=" << fsType.toStdString()<< "\n";
 
-    indexController_->addDevice(devicePath, fsType, "TODO", header.requestId);
-
     emit scanStarted(header.requestId, devicePath, fsType);
 }
 
@@ -446,11 +444,7 @@ void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageH
     std::cout << "Received file record chunk requestId=" << header.requestId
               << " count=" << chunk.size() << "\n";
 
-    indexController_->appendDeviceFileRecords(header.requestId, chunk);
-
-    // TODO: Update the GUI-side index here.
-    // For now this is just a signal.
-    //emit scanChunkReceived(header.requestId, chunk);
+    emit scanFileRecordChunkReceived(header.requestId, chunk);
 }
 
 void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -458,7 +452,7 @@ void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageH
     std::cout << "Received string pool chunk requestId=" << header.requestId
               << " length=" << payload.size() << "\n";
 
-    indexController_->appendDeviceStringPool(header.requestId, QByteArrayView(payload));
+    emit scanStringPoolChunkReceived(header.requestId, QByteArrayView(payload));
 }
 
 void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload)

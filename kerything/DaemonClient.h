@@ -9,18 +9,18 @@
 #include <QHash>
 #include <QLocalSocket>
 #include <QObject>
-#include <QPointer>
 #include <QQueue>
 #include <QTimer>
 
 #include "FileRecord.h"
-#include "IndexController.h"
+
+class AppController;
 
 class DaemonClient final : public QObject {
     Q_OBJECT
 
 public:
-    explicit DaemonClient(QPointer<IndexController> indexController = nullptr, QObject* parent = nullptr);
+    explicit DaemonClient(AppController* controller, QObject* parent = nullptr);
     ~DaemonClient() override;
 
     [[nodiscard]] bool isConnected() const noexcept;
@@ -38,7 +38,8 @@ signals:
 
     void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
     void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
-    void scanChunkReceived(quint32 requestId, const std::vector<FileRecord>& chunk);
+    void scanFileRecordChunkReceived(quint32 requestId, const std::vector<FileRecord>& chunk);
+    void scanStringPoolChunkReceived(quint32 requestId, QByteArrayView chunk);
     void scanCompleted(quint32 requestId);
     void scanCancelled(quint32 requestId);
     void scanFailed(quint32 requestId, const QString& errorText);
@@ -72,7 +73,7 @@ private:
     void handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
 
-    QPointer<IndexController> indexController_;
+    AppController* controller_ = nullptr;
     QLocalSocket socket_;
     SocketFramer framer_;
     QTimer reconnectTimer_;
@@ -80,7 +81,7 @@ private:
     bool ready_ = false;
     bool shuttingDown_ = false;
 
-    quint32 nextRequestId_ = 0;
+    quint32 nextRequestId_ = 1;
     QHash<quint32, QString> pendingRequests_;
     QQueue<PendingRequest> outgoingQueue_;
 };

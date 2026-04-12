@@ -12,6 +12,9 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# Find TBB for parallel algorithms
+find_package(TBB REQUIRED)
+
 # Find Qt6 components
 find_package(Qt6 REQUIRED COMPONENTS
         Widgets
@@ -29,6 +32,10 @@ add_executable(kerything
         kerything/AppController.h
         kerything/DaemonClient.cpp
         kerything/DaemonClient.h
+        kerything/FileModel.cpp
+        kerything/FileModel.h
+        kerything/GuiUtils.cpp
+        kerything/GuiUtils.h
         kerything/IndexController.cpp
         kerything/IndexController.h
         kerything/MainWindow.cpp
@@ -62,6 +69,7 @@ add_executable(kerythingd
 
 target_link_libraries(kerything
         PRIVATE
+        TBB::tbb # Parallelism
         Qt6::Widgets
         Qt6::Network
 )

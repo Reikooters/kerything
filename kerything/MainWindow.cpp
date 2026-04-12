@@ -4,6 +4,7 @@
 #include "MainWindow.h"
 
 #include <QLabel>
+#include <QMenu>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -19,58 +20,68 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     setAttribute(Qt::WA_DeleteOnClose);
 
     // Central widget that holds the window's main UI.
-    auto* central = new QWidget(this);
-    auto* layout = new QVBoxLayout(central);
+    auto* centralWidget = new QWidget(this);
+    auto* layout = new QVBoxLayout(centralWidget);
 
-    // Text shown to explain the current app state.
-    infoLabel_ = new QLabel(this);
-    infoLabel_->setWordWrap(true);
+    searchLine = new QLineEdit(centralWidget);
+    searchLine->setPlaceholderText("Search files...");
+    searchLine->setClearButtonEnabled(true);
 
-    // Displays shared app state, such as the counter.
-    counterLabel_ = new QLabel(this);
+    // Add magnifying glass icon to the search bar
+    searchLine->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
 
-    // Actions exposed in the demo UI.
-    auto* openWindowButton = new QPushButton("Open another window", this);
-    auto* incrementButton = new QPushButton("Increment shared counter", this);
+    // --- Burger Menu Setup ---
+    auto *menu = new QMenu(this);
 
-    layout->addWidget(infoLabel_);
-    layout->addWidget(counterLabel_);
-    layout->addWidget(openWindowButton);
-    layout->addWidget(incrementButton);
-    layout->addStretch();
+    auto *changePartitionAct = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
+    //connect(changePartitionAct, &QAction::triggered, this, &MainWindow::changePartition);
+    changePartitionAct->setShortcut(QKeySequence::Open);
+    menu->addAction(changePartitionAct);
+    addAction(changePartitionAct); // Register with window for shortcuts
 
-    setCentralWidget(central);
+    auto *rescanPartitionAct = new QAction(QIcon::fromTheme("view-refresh"), "Rescan Partition", this);
+    //connect(rescanPartitionAct, &QAction::triggered, this, &MainWindow::rescanPartition);
+    rescanPartitionAct->setShortcut(QKeySequence::Refresh);
+    menu->addAction(rescanPartitionAct);
+    addAction(rescanPartitionAct); // Register with window for shortcuts
 
-    // Ask the controller to open a new window.
-    connect(openWindowButton, &QPushButton::clicked, this, [this]() {
-        if (controller_) {
-            controller_->openNewWindow();
-        }
+    menu->addSeparator();
+
+    auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
+    //connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
+    menu->addAction(aboutAct);
+
+    auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit", this);
+    quitAct->setShortcut(QKeySequence::Quit);
+    //connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+    menu->addAction(quitAct);
+    addAction(quitAct); // Register with window for shortcuts
+
+    // Add the menu to a button inside the search line
+    auto *menuAction = searchLine->addAction(QIcon::fromTheme("application-menu"), QLineEdit::TrailingPosition);
+    connect(menuAction, &QAction::triggered, [this, menu, menuAction]() {
+        // Show the menu just below the icon
+        menu->exec(QCursor::pos());
     });
+    // ---------------------
 
-    // Update shared application state and then refresh all windows so they show
-    // the new value.
-    connect(incrementButton, &QPushButton::clicked, this, [this]() {
-        if (controller_) {
-            controller_->incrementSharedCounter();
-            controller_->requestRefreshAllWindows();
-        }
-    });
+    layout->addWidget(searchLine);
 
-    refresh();
-    resize(450, 220);
+    setCentralWidget(centralWidget);
+    //refresh();
+    resize(1200, 800);
 }
 
 void MainWindow::refresh() {
-    infoLabel_->setText(
-        "This window belongs to the primary process.\n"
-        "Launching the app again will ask this process to open another window."
-    );
-
-    counterLabel_->setText(
-        QString("Shared counter value: %1\nDaemon connection status: %2\nDaemon ready status: %3")
-            .arg(controller_->sharedCounter())
-            .arg(controller_->isDaemonConnected() ? "Connected" : "Disconnected")
-            .arg(controller_->isDaemonReady() ? "Ready" : "Not Ready")
-        );
+    // infoLabel_->setText(
+    //     "This window belongs to the primary process.\n"
+    //     "Launching the app again will ask this process to open another window."
+    // );
+    //
+    // counterLabel_->setText(
+    //     QString("Shared counter value: %1\nDaemon connection status: %2\nDaemon ready status: %3")
+    //         .arg(controller_->sharedCounter())
+    //         .arg(controller_->isDaemonConnected() ? "Connected" : "Disconnected")
+    //         .arg(controller_->isDaemonReady() ? "Ready" : "Not Ready")
+    //     );
 }

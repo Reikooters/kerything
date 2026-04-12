@@ -89,7 +89,8 @@ std::expected<QString, QString> validateDevicePath(const QString& inputPath)
 
 bool scanDevice(const QString& devicePath,
                 const QString& fsType,
-                const ChunkCallback& onChunk,
+                const FileRecordChunkCallback& onFileRecordChunk,
+                const StringPoolChunkCallback& onStringPoolChunk,
                 const ErrorCallback& onError,
                 const CancelCallback& shouldCancel,
                 const ProgressCallback& onProgress)
@@ -112,11 +113,11 @@ bool scanDevice(const QString& devicePath,
     const QString& resolvedPath = *validated;
 
     if (fsType == "ntfs") {
-        return NtfsScannerEngine::scanDevice(resolvedPath, onChunk, onError, shouldCancel, onProgress);
+        return NtfsScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
     }
     else {
         return false;
-        //return scanDeviceOther(resolvedPath, fsType, onChunk, onError, shouldCancel, onProgress);
+        //return scanDeviceOther(resolvedPath, fsType, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
     }
 
     // std::vector<FileRecord> chunk;

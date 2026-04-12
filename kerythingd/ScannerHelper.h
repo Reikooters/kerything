@@ -11,10 +11,12 @@
 #include <QString>
 
 #include "FileRecord.h"
+#include "Protocol.h"
 
 namespace ScannerHelper {
 
-    using ChunkCallback = std::function<bool(const std::vector<FileRecord>&, const std::vector<char>&)>;
+    using FileRecordChunkCallback = std::function<bool(const std::vector<FileRecord>&)>;
+    using StringPoolChunkCallback = std::function<bool(const std::vector<char>&)>;
     using ErrorCallback = std::function<void(const QString&)>;
     using CancelCallback = std::function<bool()>;
     using ProgressCallback = std::function<void(quint64 filesSeen, quint64 filesEmitted)>;
@@ -25,7 +27,8 @@ namespace ScannerHelper {
 
     bool scanDevice(const QString& devicePath,
                     const QString& fsType,
-                    const ChunkCallback& onChunk,
+                    const FileRecordChunkCallback& onFileRecordChunk,
+                    const StringPoolChunkCallback& onStringPoolChunk,
                     const ErrorCallback& onError,
                     const CancelCallback& shouldCancel,
                     const ProgressCallback& onProgress);

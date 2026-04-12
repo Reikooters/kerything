@@ -21,9 +21,10 @@ public slots:
     void startScan(std::shared_ptr<ScanJob> job);
 
 signals:
-    void scanStarted(quint32 requestId);
+    void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
     void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
-    void scanChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk);
+    void scanFileRecordChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
+    void scanStringPoolChunkReady(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void scanCompleted(quint32 requestId);
     void scanCancelled(quint32 requestId);
     void scanError(quint32 requestId, const QString& errorText);

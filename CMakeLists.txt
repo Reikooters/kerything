@@ -29,6 +29,8 @@ add_executable(kerything
         kerything/AppController.h
         kerything/DaemonClient.cpp
         kerything/DaemonClient.h
+        kerything/IndexController.cpp
+        kerything/IndexController.h
         kerything/MainWindow.cpp
         kerything/MainWindow.h
         kerything/SingleInstanceServer.cpp

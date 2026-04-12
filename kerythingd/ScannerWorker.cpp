@@ -21,13 +21,17 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     const quint32 requestId = currentJob_->requestId;
     const std::shared_ptr<ScanJob> jobRef = currentJob_;
 
-    emit scanStarted(requestId);
+    emit scanStarted(requestId, currentJob_->devicePath, currentJob_->fsType);
 
     const bool ok = ScannerHelper::scanDevice(
         jobRef->devicePath,
         jobRef->fsType,
-        [this, requestId, jobRef](const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk) -> bool {
-            emit scanChunkReady(requestId, fileRecordChunk, stringPoolChunk);
+        [this, requestId, jobRef](const std::vector<FileRecord>& fileRecordChunk) -> bool {
+            emit scanFileRecordChunkReady(requestId, fileRecordChunk);
+            return !jobRef->cancelled.load(std::memory_order_relaxed);
+        },
+        [this, requestId, jobRef](const std::vector<char>& stringPoolChunk) -> bool {
+            emit scanStringPoolChunkReady(requestId, stringPoolChunk);
             return !jobRef->cancelled.load(std::memory_order_relaxed);
         },
         [this, requestId](const QString& errorText) {

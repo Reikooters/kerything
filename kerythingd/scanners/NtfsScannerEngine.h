@@ -8,8 +8,8 @@
 #include <unordered_map>
 #include <vector>
 #include <string_view>
-#include <functional>
 
+#include "Protocol.h"
 #include "../ScannerHelper.h"
 
 namespace NtfsScannerEngine {
@@ -201,6 +201,53 @@ namespace NtfsScannerEngine {
         bool dataAttrFound;
         uint64_t sizeFromData = 0;
     };
+
+    struct NtfsDatabase {
+        std::vector<FileRecord> records;
+        std::vector<char> stringPool;
+        uint32_t totalStringPoolLength = 0;
+
+        // Map to store extension record file information, as we have to wait to process
+        // these after we've finished reading the full disk so we have all details.
+        // Extension records usually make up only a very small percentage of the disk.
+        std::unordered_map<uint64_t, std::vector<ExtensionFileInfo>> extensionRecordFileInfos;
+
+        // Average filename length estimate
+        static constexpr uint32_t kFileNameLengthHeuristic = 20;
+
+        // Target a 4MB buffer for IPC efficiency, on my machine: /proc/sys/net/core/wmem_max = 4194304
+        // Need to subtract the header size from the buffer size, as the header needs to fit
+        // within the 4MB buffer too. As well as the chunk type byte.
+        static constexpr uint32_t kTargetIpcBufferSizeMB = 4;
+        static constexpr uint32_t kMaxIpcBufferSizeBytes = (kTargetIpcBufferSizeMB * 1024 * 1024) - Protocol::HeaderSize - sizeof(Protocol::ScanIndexResultChunkType);
+
+        // Calculate how many full records fit in that byte limit
+        static constexpr uint32_t kRecordsPerIpcChunk = kMaxIpcBufferSizeBytes / sizeof(FileRecord);
+
+        /**
+         * Adds a file or directory record to the database.
+         *
+         * @param name The name of the file or directory.
+         * @param mftIndex The MFT (Master File Table) index of the file or directory.
+         * @param parentMftIndex The MFT index of the parent directory.
+         * @param size The size of the file in bytes.
+         * @param mod The last modification time of the file or directory, represented as a timestamp.
+         * @param isDir A flag indicating whether the entry is a directory.
+         * @param isSymlink A flag indicating whether the entry is a symbolic link.
+         * @param onFileRecordChunk A callback function to handle file record chunk processing.
+         * @param onStringPoolChunk A callback function to handle string pool chunk processing.
+         */
+        void add(
+            std::string_view name,
+            uint64_t mftIndex,
+            uint64_t parentMftIndex,
+            uint64_t size,
+            uint64_t mod,
+            bool isDir,
+            bool isSymlink,
+            const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+            const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+    };
     /*
      * END structs used for building FileRecords
      */
@@ -212,8 +259,10 @@ namespace NtfsScannerEngine {
      * in chunks, handles errors, allows cancellation, and reports progress via provided callbacks.
      *
      * @param devicePath The path to the target device partition (e.g., "/dev/sdc2"). Must have proper permissions.
-     * @param onChunk Callback invoked for each processed chunk of MFT records.
-     *                Receives data about the processed files or records.
+     * @param onFileRecordChunk Callback invoked for each processed chunk of MFT records.
+     *                          Receives data about the processed files or records.
+     * @param onStringPoolChunk Callback invoked for each processed chunk of the string pool which stores file names.
+     *                          Receives data about the processed string pool entries.
      * @param onError Callback invoked when errors occur during the scan.
      * @param shouldCancel Callback consulted to check if the scanning process should be canceled.
      *                     The function terminates early if this callback returns true.
@@ -223,7 +272,8 @@ namespace NtfsScannerEngine {
      *         or if the device is not a valid NTFS partition.
      */
     bool scanDevice(const QString& devicePath,
-                    const ScannerHelper::ChunkCallback& onChunk,
+                    const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                    const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
                     const ScannerHelper::ErrorCallback& onError,
                     const ScannerHelper::CancelCallback& shouldCancel,
                     const ScannerHelper::ProgressCallback& onProgress);
@@ -259,6 +309,74 @@ namespace NtfsScannerEngine {
      * @param recordSize The size of the MFT record in bytes, used to calculate sector boundaries.
      */
     void applyFixups(char* buffer, uint32_t recordSize);
+
+    /**
+     * Processes a Master File Table (MFT) record, extracting metadata and attributes,
+     * and determines whether the record can be finalized immediately or requires additional processing.
+     *
+     * @param header Pointer to the MFT record header, containing metadata and attribute references.
+     * @param buffer Raw binary data representing the content of the MFT record.
+     * @param mftxInex The index of the current MFT record being processed.
+     * @param db Reference to the NtfsDatabase for storing file records and string pool.
+     * @param onFileRecordChunk Callback function to handle file record chunks.
+     * @param onStringPoolChunk Callback function to handle string pool chunks.
+     */
+    void processMftRecord(
+        MFT_RecordHeader* header,
+        char* buffer,
+        uint64_t mftxInex,
+        NtfsDatabase& db,
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+
+    /**
+     * Finalizes the processing of a file's metadata and adds it to the NtfsDatabase.
+     *
+     * @param info A reference to the FileInfo object containing the file's metadata.
+     * @param allNames A vector of TempFileLink objects representing all names (links) associated with the file.
+     * @param dataAttrFound A boolean indicating whether a DATA attribute was found for the file.
+     * @param sizeFromData A 64-bit integer specifying the file size derived from the DATA attribute, if available.
+     * @param db Reference to a NtfsDatabase where the finalized file information will be stored.
+     * @param mftIndex A 64-bit integer representing the MFT index of the file.
+     * @param onFileRecordChunk A callback function to handle file record chunk processing.
+     * @param onStringPoolChunk A callback function to handle string pool chunk processing.
+     */
+    void finalizeAndAddFile(
+        FileInfo& info,
+        const std::vector<TempFileLink>& allNames,
+        bool dataAttrFound,
+        uint64_t sizeFromData,
+        NtfsDatabase& db,
+        uint64_t mftIndex,
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+
+    /**
+     * Converts a UTF-16 string to a UTF-8 encoded string.
+     *
+     * This function takes a pointer to a UTF-16 encoded string and its length,
+     * converts it to a UTF-8 encoded string, and returns the result. If the
+     * input is null or its length is zero, it returns an empty string.
+     *
+     * @param utf16_ptr Pointer to the UTF-16 encoded string. Must not be null.
+     * @param length The number of UTF-16 code units in the string.
+     *
+     * @return A UTF-8 encoded string. If the UTF-16 data is invalid,
+     *         returns "Invalid UTF-16 Data".
+     */
+    std::string utf16ToUtf8(const char16_t* utf16_ptr, size_t length);
+
+    /**
+     * Converts an NTFS FILETIME value to Unix time in seconds.
+     * NTFS FILETIME represents the number of 100-nanosecond intervals since
+     * January 1, 1601 (UTC). Unix time represents the number of seconds since
+     * January 1, 1970 (UTC).
+     *
+     * @param filetime100ns The NTFS FILETIME value in 100-nanosecond intervals.
+     * @return The corresponding Unix time in seconds. If the NTFS FILETIME is
+     *         before the Unix epoch, the method returns 0.
+     */
+    uint64_t ntfsFiletimeToUnixSeconds(uint64_t filetime100ns);
 
 } // namespace NtfsScannerEngine
 

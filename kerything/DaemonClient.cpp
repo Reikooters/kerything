@@ -8,9 +8,11 @@
 
 #include "FileRecord.h"
 
-DaemonClient::DaemonClient(QObject* parent)
+DaemonClient::DaemonClient(QPointer<IndexController> indexController, QObject* parent)
     : QObject(parent)
 {
+    indexController_ = std::move(indexController);
+
     connect(&socket_, &QLocalSocket::connected, this, &DaemonClient::onConnected);
     connect(&socket_, &QLocalSocket::disconnected, this, &DaemonClient::onDisconnected);
     connect(&socket_, &QLocalSocket::readyRead, this, &DaemonClient::onReadyRead);
@@ -284,8 +286,12 @@ void DaemonClient::handleMessage(const Protocol::MessageHeader& header, const QB
             handleScanProgress(header, payload);
             break;
 
-        case Protocol::MessageType::ScanIndexResultChunk:
-            handleScanIndexResultChunk(header, payload);
+        case Protocol::MessageType::ScanIndexResultFileRecordChunk:
+            handleScanIndexResultFileRecordChunk(header, payload);
+            break;
+
+        case Protocol::MessageType::ScanIndexResultStringPoolChunk:
+            handleScanIndexResultStringPoolChunk(header, payload);
             break;
 
         case Protocol::MessageType::ScanCompleted:
@@ -353,10 +359,26 @@ void DaemonClient::handleReadyMessage(const Protocol::MessageHeader&, const QByt
 
 void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
-    Q_UNUSED(payload);
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
 
-    std::cout << "Scan started for requestId=" << header.requestId << "\n";
-    emit scanStarted(header.requestId);
+    QString devicePath;
+    QString fsType;
+    in >> devicePath >> fsType;
+
+    if (in.status() != QDataStream::Ok) {
+        std::cerr << "Malformed ScanStarted payload\n";
+        return;
+    }
+
+    std::cout << "Scan started for requestId=" << header.requestId
+              << " devicePath=" << devicePath.toStdString()
+              << " fsType=" << fsType.toStdString()<< "\n";
+
+    indexController_->addDevice(devicePath, fsType, "TODO", header.requestId);
+
+    emit scanStarted(header.requestId, devicePath, fsType);
 }
 
 void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -381,7 +403,7 @@ void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, con
     emit scanProgress(header.requestId, filesSeen, filesEmitted);
 }
 
-void DaemonClient::handleScanIndexResultChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
+void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
     QDataStream in(payload);
     in.setByteOrder(QDataStream::BigEndian);
@@ -398,24 +420,45 @@ void DaemonClient::handleScanIndexResultChunk(const Protocol::MessageHeader& hea
     std::vector<FileRecord> chunk;
     chunk.reserve(count);
 
-    for (quint32 i = 0; i < count; ++i) {
-        // FileRecord rec;
-        // in >> rec.path >> rec.size >> rec.mtime;
-        //
-        // if (in.status() != QDataStream::Ok) {
-        //     std::cerr << "Malformed ScanIndexResultChunk payload body\n";
-        //     return;
-        // }
-        //
-        // chunk.push_back(std::move(rec));
+    if (count == 0) {
+        return;
     }
 
-    std::cout << "Received chunk requestId=" << header.requestId
+    if (count > (payload.size() - sizeof(quint32)) / sizeof(FileRecord)) {
+        std::cerr << "Invalid ScanIndexResultChunk payload size\n";
+        return;
+    }
+
+    for (quint32 i = 0; i < count; ++i) {
+        FileRecord rec{};
+        in >> rec.fsIndex
+           >> rec.parentFsIndex
+           >> rec.parentRecordIdx
+           >> rec.size
+           >> rec.modificationTime
+           >> rec.nameOffset
+           >> rec.nameLen
+           >> rec.flags;
+
+        chunk.push_back(rec);
+    }
+
+    std::cout << "Received file record chunk requestId=" << header.requestId
               << " count=" << chunk.size() << "\n";
+
+    indexController_->appendDeviceFileRecords(header.requestId, chunk);
 
     // TODO: Update the GUI-side index here.
     // For now this is just a signal.
-    emit scanChunkReceived(header.requestId, chunk);
+    //emit scanChunkReceived(header.requestId, chunk);
+}
+
+void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
+{
+    std::cout << "Received string pool chunk requestId=" << header.requestId
+              << " length=" << payload.size() << "\n";
+
+    indexController_->appendDeviceStringPool(header.requestId, QByteArrayView(payload));
 }
 
 void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload)

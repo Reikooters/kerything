@@ -9,6 +9,7 @@
 #include <QList>
 
 #include "DaemonClient.h"
+#include "IndexController.h"
 
 class QApplication;
 class MainWindow;
@@ -38,6 +39,7 @@ private:
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
     DaemonClient* daemonClient_ = nullptr;
+    IndexController* indexController_ = nullptr;
     QList<QPointer<MainWindow>> windows_;
     int sharedCounter_ = 0;
 };

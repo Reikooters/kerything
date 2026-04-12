@@ -9,16 +9,18 @@
 #include <QHash>
 #include <QLocalSocket>
 #include <QObject>
+#include <QPointer>
 #include <QQueue>
 #include <QTimer>
 
 #include "FileRecord.h"
+#include "IndexController.h"
 
 class DaemonClient final : public QObject {
     Q_OBJECT
 
 public:
-    explicit DaemonClient(QObject* parent = nullptr);
+    explicit DaemonClient(QPointer<IndexController> indexController = nullptr, QObject* parent = nullptr);
     ~DaemonClient() override;
 
     [[nodiscard]] bool isConnected() const noexcept;
@@ -34,7 +36,7 @@ signals:
     void daemonUnavailable();
     void daemonReady();
 
-    void scanStarted(quint32 requestId);
+    void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
     void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
     void scanChunkReceived(quint32 requestId, const std::vector<FileRecord>& chunk);
     void scanCompleted(quint32 requestId);
@@ -64,11 +66,13 @@ private:
     void handleReadyMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanStarted(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload);
-    void handleScanIndexResultChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
 
+    QPointer<IndexController> indexController_;
     QLocalSocket socket_;
     SocketFramer framer_;
     QTimer reconnectTimer_;

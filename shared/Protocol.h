@@ -21,10 +21,11 @@ enum class MessageType : quint16 {
     CancelRequest = 3,
     ScanStarted = 4,
     ScanProgress = 5,
-    ScanIndexResultChunk = 6,
-    ScanCompleted = 7,
-    ScanCancelled = 8,
-    Error = 9
+    ScanIndexResultFileRecordChunk = 6,
+    ScanIndexResultStringPoolChunk = 7,
+    ScanCompleted = 8,
+    ScanCancelled = 9,
+    Error = 10
 };
 
 struct MessageHeader {
@@ -38,6 +39,11 @@ struct MessageHeader {
 struct MessageFrame {
     MessageHeader header;
     QByteArray payload;
+};
+
+enum ScanIndexResultChunkType : quint8 {
+    FileRecord = 1,
+    StringPool = 2
 };
 
 inline QByteArray packMessage(MessageType type, quint32 requestId, const QByteArray& payload)

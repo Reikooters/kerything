@@ -29,8 +29,8 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
             scannerWorker_, &QObject::deleteLater);
 
     connect(scannerWorker_, &ScannerWorker::scanStarted,
-            this, [this](quint32 requestId) {
-                sendScanStarted(requestId);
+            this, [this](quint32 requestId, const QString& devicePath, const QString& fsType) {
+                sendScanStarted(requestId, devicePath, fsType);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanProgress,
@@ -38,9 +38,14 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
                 sendScanProgress(requestId, filesSeen, filesEmitted);
             });
 
-    connect(scannerWorker_, &ScannerWorker::scanChunkReady,
-            this, [this](quint32 requestId, const std::vector<FileRecord>& fileRecordChunk, const std::vector<char>& stringPoolChunk) {
-                sendScanChunk(requestId, fileRecordChunk, stringPoolChunk);
+    connect(scannerWorker_, &ScannerWorker::scanFileRecordChunkReady,
+            this, [this](quint32 requestId, const std::vector<FileRecord>& fileRecordChunk) {
+                sendScanFileRecordChunk(requestId, fileRecordChunk);
+            });
+
+    connect(scannerWorker_, &ScannerWorker::scanStringPoolChunkReady,
+            this, [this](quint32 requestId, const std::vector<char>& stringPoolChunk) {
+                sendScanStringPoolChunk(requestId, stringPoolChunk);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanCompleted,
@@ -176,14 +181,14 @@ void ClientConnection::sendReady()
     sendFrame(Protocol::MessageType::Ready, 0, payload);
 }
 
-void ClientConnection::sendScanStarted(quint32 requestId)
+void ClientConnection::sendScanStarted(quint32 requestId, const QString& devicePath, const QString& fsType)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
 
-    out << QStringLiteral("started");
+    out << devicePath << fsType;
 
     sendFrame(Protocol::MessageType::ScanStarted, requestId, payload);
 }
@@ -203,9 +208,7 @@ void ClientConnection::sendScanProgress(quint32 requestId,
     sendFrame(Protocol::MessageType::ScanProgress, requestId, payload);
 }
 
-bool ClientConnection::sendScanChunk(quint32 requestId,
-                                     const std::vector<FileRecord>& fileRecordChunk,
-                                     const std::vector<char>& stringPoolChunk)
+bool ClientConnection::sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
@@ -225,11 +228,19 @@ bool ClientConnection::sendScanChunk(quint32 requestId,
             << rec.flags;
     }
 
-    out << static_cast<quint32>(stringPoolChunk.size());
+    return sendFrame(Protocol::MessageType::ScanIndexResultFileRecordChunk, requestId, payload);
+}
+
+bool ClientConnection::sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODevice::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
 
     out.writeRawData(stringPoolChunk.data(), stringPoolChunk.size());
 
-    return sendFrame(Protocol::MessageType::ScanIndexResultChunk, requestId, payload);
+    return sendFrame(Protocol::MessageType::ScanIndexResultStringPoolChunk, requestId, payload);
 }
 
 void ClientConnection::sendScanCompleted(quint32 requestId)

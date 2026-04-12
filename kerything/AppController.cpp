@@ -41,8 +41,11 @@ bool AppController::start() {
     // Primary instance opens its first window on startup.
     openNewWindow();
 
+    // Create index controller
+    indexController_ = new IndexController(this);
+
     // Start the daemon client
-    daemonClient_ = new DaemonClient(this);
+    daemonClient_ = new DaemonClient(indexController_, this);
 
     connect(daemonClient_, &DaemonClient::daemonAvailable,
             this, [this]() {
@@ -56,7 +59,7 @@ bool AppController::start() {
                 requestRefreshAllWindows();
 
                 // TODO: demo only - send scan request on ready
-                const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/sda2"), QStringLiteral("ntfs"));
+                const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/89a0622c-75e2-427c-9766-b2fd2a2e69d8"), QStringLiteral("ntfs"));
 
                 quint32 requestId;
                 daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
@@ -77,8 +80,10 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanStarted,
-            this, [this](quint32 requestId) {
-                std::cout << "GUI: scan started requestId=" << requestId << "\n";
+            this, [this](quint32 requestId, const QString& devicePath, const QString& fsType) {
+                std::cout << "GUI: scan started requestId=" << requestId
+                          << " devicePath=" << devicePath.toStdString()
+                          << " fsType=" << fsType.toStdString() << "\n";
                 requestRefreshAllWindows();
             });
 

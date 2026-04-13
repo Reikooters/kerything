@@ -17,10 +17,10 @@ class ScannerWorker final : public QObject {
 public:
     explicit ScannerWorker(QObject* parent = nullptr);
 
-public slots:
+public Q_SLOTS:
     void startScan(std::shared_ptr<ScanJob> job);
 
-signals:
+Q_SIGNALS:
     void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
     void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
     void scanFileRecordChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);

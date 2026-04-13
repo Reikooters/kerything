@@ -5,9 +5,9 @@
 #define KERYTHING_MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QLabel>
 #include <QLineEdit>
 #include <QTableView>
-#include <QLabel>
 #include <QString>
 #include <vector>
 #include <string>
@@ -57,7 +57,7 @@ protected:
      */
     // bool eventFilter(QObject* watched, QEvent* event) override;
 
-private slots:
+private Q_SLOTS:
     /**
      * @brief Tracks which row is currently hovered so we can paint a full-row hover highlight.
      */
@@ -71,7 +71,7 @@ private slots:
     /**
      * @brief Triggered when the search text changes. Performs a trigram search and updates the view.
      */
-    // void updateSearch(const QString &text);
+    void updateSearch(const QString &text);
 
     /**
      * @brief Shows a placeholder for the change partition logic.
@@ -124,16 +124,6 @@ private slots:
     // void openTerminal();
 
 private:
-    /**
-     * @brief Performs the high-speed trigram-based keyword search.
-     */
-    // std::vector<uint32_t> performTrigramSearch(const std::string& query);
-
-    /**
-     * @brief Case-insensitive substring helper.
-     */
-    // static bool contains(std::string_view haystack, std::string_view needle);
-
     AppController* controller_ = nullptr;
     // QString fsType_;
     // QString mountPath_;

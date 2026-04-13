@@ -17,11 +17,11 @@ public:
     bool isPrimary() const noexcept;
     bool notifyPrimary(const QString& command = QStringLiteral("OPEN_WINDOW")) const;
 
-signals:
+Q_SIGNALS:
     void requestOpenWindow();
     void requestCommand(const QString& command);
 
-private slots:
+private Q_SLOTS:
     void onNewConnection();
 
 private:

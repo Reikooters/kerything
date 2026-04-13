@@ -55,9 +55,9 @@ void SingleInstanceServer::onNewConnection() {
             const QString message = QString::fromUtf8(socket->readAll()).trimmed();
 
             if (message == QStringLiteral("OPEN_WINDOW")) {
-                emit requestOpenWindow();
+                Q_EMIT requestOpenWindow();
             } else if (!message.isEmpty()) {
-                emit requestCommand(message);
+                Q_EMIT requestCommand(message);
             }
 
             // Close and delete the socket once the message has been processed.

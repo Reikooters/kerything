@@ -33,10 +33,10 @@ public:
     void sendScanCancelled(quint32 requestId);
     void sendError(quint32 requestId, const QString& errorText);
 
-signals:
+Q_SIGNALS:
     void disconnected(ClientConnection* connection);
 
-private slots:
+private Q_SLOTS:
     void onReadyRead();
     void onDisconnected();
 

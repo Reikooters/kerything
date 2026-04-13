@@ -230,12 +230,12 @@ void DaemonClient::setConnectedState(bool connected)
     }
 
     connected_ = connected;
-    emit connectedChanged(connected_);
+    Q_EMIT connectedChanged(connected_);
 
     if (connected_) {
-        emit daemonAvailable();
+        Q_EMIT daemonAvailable();
     } else {
-        emit daemonUnavailable();
+        Q_EMIT daemonUnavailable();
     }
 }
 
@@ -246,10 +246,10 @@ void DaemonClient::setReadyState(bool ready)
     }
 
     ready_ = ready;
-    emit readyChanged(ready_);
+    Q_EMIT readyChanged(ready_);
 
     if (ready_) {
-        emit daemonReady();
+        Q_EMIT daemonReady();
         flushOutgoingQueue();
     }
 }
@@ -376,7 +376,7 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
               << " devicePath=" << devicePath.toStdString()
               << " fsType=" << fsType.toStdString()<< "\n";
 
-    emit scanStarted(header.requestId, devicePath, fsType);
+    Q_EMIT scanStarted(header.requestId, devicePath, fsType);
 }
 
 void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -398,7 +398,7 @@ void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, con
               << " seen=" << filesSeen
               << " emitted=" << filesEmitted << "\n";
 
-    emit scanProgress(header.requestId, filesSeen, filesEmitted);
+    Q_EMIT scanProgress(header.requestId, filesSeen, filesEmitted);
 }
 
 void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -444,7 +444,7 @@ void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageH
     std::cout << "Received file record chunk requestId=" << header.requestId
               << " count=" << chunk.size() << "\n";
 
-    emit scanFileRecordChunkReceived(header.requestId, chunk);
+    Q_EMIT scanFileRecordChunkReceived(header.requestId, chunk);
 }
 
 void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -452,7 +452,7 @@ void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageH
     std::cout << "Received string pool chunk requestId=" << header.requestId
               << " length=" << payload.size() << "\n";
 
-    emit scanStringPoolChunkReceived(header.requestId, QByteArrayView(payload));
+    Q_EMIT scanStringPoolChunkReceived(header.requestId, QByteArrayView(payload));
 }
 
 void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -462,7 +462,7 @@ void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, co
     std::cout << "Scan completed requestId=" << header.requestId << "\n";
 
     pendingRequests_.remove(header.requestId);
-    emit scanCompleted(header.requestId);
+    Q_EMIT scanCompleted(header.requestId);
 }
 
 void DaemonClient::handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -472,7 +472,7 @@ void DaemonClient::handleScanCancelled(const Protocol::MessageHeader& header, co
     std::cout << "Scan cancelled requestId=" << header.requestId << "\n";
 
     pendingRequests_.remove(header.requestId);
-    emit scanCancelled(header.requestId);
+    Q_EMIT scanCancelled(header.requestId);
 }
 
 void DaemonClient::handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -492,5 +492,5 @@ void DaemonClient::handleErrorMessage(const Protocol::MessageHeader& header, con
     std::cerr << "Server error requestId=" << header.requestId
               << ": " << errorText.toStdString() << "\n";
 
-    emit scanFailed(header.requestId, errorText);
+    Q_EMIT scanFailed(header.requestId, errorText);
 }

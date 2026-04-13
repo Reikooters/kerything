@@ -4,7 +4,10 @@
 #ifndef KERYTHING_INDEXCONTROLLER_H
 #define KERYTHING_INDEXCONTROLLER_H
 
+#include <execution>
+#include <iostream>
 #include <QObject>
+#include <shared_mutex>
 
 #include "FileRecord.h"
 
@@ -14,10 +17,25 @@ class IndexController final : public QObject {
 public:
     explicit IndexController(QObject* parent = nullptr);
 
+    struct TrigramEntry {
+        uint32_t trigram;
+        uint32_t recordIdx;
+
+        // Sorting by trigram first, then recordIdx
+        bool operator<(const TrigramEntry& other) const {
+            if (trigram != other.trigram) {
+                return trigram < other.trigram;
+            }
+
+            return recordIdx < other.recordIdx;
+        }
+    };
+
     struct DeviceIndex {
         quint64 deviceId;
         QString fsType;
         quint64 generation = 0;
+        bool isReady = false;
 
         // unix seconds; 0 means unknown
         qint64 lastIndexedTime = 0;
@@ -29,6 +47,151 @@ public:
         std::vector<FileRecord> fileRecords;
         std::vector<char> stringPool;
         std::unordered_map<uint64_t, uint32_t> fsIndexToRecordIdx;
+
+        // A single sorted vector of all trigram-record pairs
+        std::vector<TrigramEntry> flatIndex;
+
+        /**
+         * Resolves parent-child relationships between file records in the NTFS database.
+         * This is called once after the MFT scan is completely finished
+         *
+         * This method converts temporary parent MFT indices into internal indices and updates
+         * the database entries to reflect the hierarchical relationships. Any unresolved parent
+         * pointers, such as those referencing the root directory, are marked accordingly.
+         * Additionally, all temporary data structures used during the setup phase are freed
+         * to optimize memory usage.
+         */
+        void resolveParentPointers() {
+            std::cerr << "Resolving parent pointers..." << std::endl;
+
+            // Convert parent MFT index to internal index
+            for (size_t i = 0; i < fileRecords.size(); ++i) {
+                auto it = fsIndexToRecordIdx.find(fileRecords[i].parentFsIndex);
+                if (it != fsIndexToRecordIdx.end()) {
+                    fileRecords[i].parentRecordIdx = it->second;
+                } else {
+                    // If parent isn't in our DB (like MFT Index 5's parent), mark as root
+                    fileRecords[i].parentRecordIdx = 0xFFFFFFFF;
+                }
+            }
+        }
+
+        void sortByNameAscendingParallel() {
+            if (fileRecords.empty()) {
+                return;
+            }
+
+            std::cerr << "Pre-sorting records by name ascending (case-insensitive) in parallel..." << std::endl;
+
+            auto compareCaseInsensitive = [&](const FileRecord& a, const FileRecord& b) {
+                std::string_view s1(&stringPool[a.nameOffset], a.nameLen);
+                std::string_view s2(&stringPool[b.nameOffset], b.nameLen);
+
+                return std::lexicographical_compare(
+                    s1.begin(), s1.end(),
+                    s2.begin(), s2.end(),
+                    [](char a, char b) {
+                        return std::tolower(static_cast<unsigned char>(a)) <
+                               static_cast<unsigned char>(std::tolower(b));
+                    }
+                );
+            };
+
+            // NOTE: We cannot simply sort 'records' because parentRecordIdx
+            // depends on the original vector indices. We must re-map them.
+
+            // 1. Create an index mapping
+            std::vector<uint32_t> p(fileRecords.size());
+            std::iota(p.begin(), p.end(), 0);
+
+            // 2. Sort the index mapping based on names
+            std::sort(std::execution::par, p.begin(), p.end(), [&](uint32_t i, uint32_t j) {
+                return compareCaseInsensitive(fileRecords[i], fileRecords[j]);
+            });
+
+            // 3. Create a reverse mapping to update parentRecordIdx
+            std::vector<uint32_t> rev(p.size());
+            for (uint32_t i = 0; i < p.size(); ++i) {
+                rev[p[i]] = i;
+            }
+
+            // 4. Reorder records and update parent indices
+            std::vector<FileRecord> newRecords(fileRecords.size());
+            for (size_t i = 0; i < p.size(); ++i) {
+                newRecords[i] = fileRecords[p[i]];
+                if (newRecords[i].parentRecordIdx != 0xFFFFFFFF) {
+                    newRecords[i].parentRecordIdx = rev[newRecords[i].parentRecordIdx];
+                }
+            }
+
+            fileRecords = std::move(newRecords);
+        }
+
+        void buildTrigramIndexParallel() {
+            std::cerr << "Building Flat Trigram Index in parallel..." << std::endl;
+
+            // 1. Calculate how many trigrams we'll have in total to avoid reallocations
+            // (Roughly: sum of all filename lengths - 2)
+            size_t totalTrigrams = 0;
+
+            for (const auto& rec : fileRecords) {
+                if (rec.nameLen >= 3) {
+                    totalTrigrams += (rec.nameLen - 2);
+                }
+            }
+
+            flatIndex.resize(totalTrigrams);
+
+            // 2. Fill the flatIndex in parallel
+            // We divide the records into chunks to give to each thread
+            const size_t numRecords = fileRecords.size();
+            std::vector<size_t> startOffsets(numRecords);
+
+            // This part is serial but very fast (calculating where each record starts in flatIndex)
+            size_t currentOffset = 0;
+            for (size_t i = 0; i < numRecords; ++i) {
+                startOffsets[i] = currentOffset;
+
+                if (fileRecords[i].nameLen >= 3) {
+                    currentOffset += (fileRecords[i].nameLen - 2);
+                }
+            }
+
+            std::vector<uint32_t> workIndices(numRecords);
+            std::iota(workIndices.begin(), workIndices.end(), 0);
+
+            std::for_each(std::execution::par, workIndices.begin(), workIndices.end(), [&](uint32_t i) {
+                const auto& rec = fileRecords[i];
+                if (rec.nameLen < 3) {
+                    return;
+                }
+
+                std::string_view name(&stringPool[rec.nameOffset], rec.nameLen);
+                size_t writePos = startOffsets[i];
+
+                for (size_t j = 0; j <= name.length() - 3; ++j) {
+                    uint32_t tri = (static_cast<uint32_t>(static_cast<unsigned char>(std::tolower(name[j]))) << 16) |
+                                   (static_cast<uint32_t>(static_cast<unsigned char>(std::tolower(name[j+1]))) << 8) |
+                                   (static_cast<uint32_t>(static_cast<unsigned char>(std::tolower(name[j+2]))));
+
+                    flatIndex[writePos++] = { tri, i };
+                }
+            });
+
+            // 3. Sort the entire index in parallel
+            std::cerr << "Sorting " << flatIndex.size() << " trigrams..." << std::endl;
+            std::sort(std::execution::par, flatIndex.begin(), flatIndex.end());
+
+            // 4. Remove exact duplicates (same trigram in same file)
+            std::cerr << "Removing duplicate trigrams..." << std::endl;
+            auto last = std::unique(std::execution::par, flatIndex.begin(), flatIndex.end(), [](const auto& a, const auto& b) {
+                return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
+            });
+            flatIndex.erase(last, flatIndex.end());
+
+            // 5. Reclaim memory used by the duplicates which were removed
+            flatIndex.shrink_to_fit();
+        }
 
         [[nodiscard]] std::string getFullPath(const uint32_t recordIdx) const {
             std::vector<uint32_t> chain;
@@ -108,12 +271,39 @@ public:
     void appendDeviceFileRecordsByRequestId(quint32 requestId, const std::vector<FileRecord>& records);
     void appendDeviceStringPoolByRequestId(quint32 requestId, QByteArrayView stringPool);
     bool removeRequestId(quint32 requestId);
+    std::vector<RecordHandle> performTrigramSearch(const std::string& query);
+    void resolveParentPointersByRequestId(quint32 requestId);
+    void sortByNameAscendingParallelByRequestId(quint32 requestId);
+    void buildTrigramIndexParallelByRequestId(quint32 requestId);
+    void setReadyState(quint32 requestId, bool isReady);
 
-signals:
+    template <typename Fn>
+    auto withDeviceIndexRead(quint64 deviceId, Fn&& fn) const
+        -> std::invoke_result_t<Fn, const DeviceIndex*> {
+        std::shared_lock lock(indexMutex_);
+
+        const auto it = indexByDeviceId_.find(deviceId);
+        if (it == indexByDeviceId_.end()) {
+            return std::invoke_result_t<Fn, const DeviceIndex*>{};
+        }
+
+        return std::forward<Fn>(fn)(it->second.get());
+    }
+
+    /**
+     * @brief Case-insensitive substring helper.
+     */
+    static bool contains(std::string_view haystack, std::string_view needle);
+
+Q_SIGNALS:
     void deviceRemoved(quint64 deviceId);
 
 private:
+    void removeDeviceByDeviceIdUnlocked(quint64 deviceId);
+
     quint64 nextDeviceId_ = 1;
+
+    mutable std::shared_mutex indexMutex_;
 
     // deviceId -> in-memory index
     std::unordered_map<quint64, std::unique_ptr<DeviceIndex>> indexByDeviceId_;

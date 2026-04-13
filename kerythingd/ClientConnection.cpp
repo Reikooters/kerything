@@ -106,7 +106,7 @@ void ClientConnection::onDisconnected()
     shuttingDown_ = true;
     cancelAllJobs();
 
-    emit disconnected(this);
+    Q_EMIT disconnected(this);
     deleteLater();
 }
 

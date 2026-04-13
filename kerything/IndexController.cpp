@@ -4,6 +4,8 @@
 #include "IndexController.h"
 
 #include <iostream>
+#include <shared_mutex>
+#include <mutex>
 
 IndexController::IndexController(QObject* parent)
     : QObject(parent)
@@ -11,6 +13,8 @@ IndexController::IndexController(QObject* parent)
 }
 
 const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 deviceId) const {
+    std::shared_lock lock(indexMutex_);
+
     const auto it = indexByDeviceId_.find(deviceId);
     if (it == indexByDeviceId_.end()) {
         return nullptr;
@@ -20,6 +24,8 @@ const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 deviceI
 }
 
 quint64 IndexController::addDevice(const QString &devicePath, const QString &fsType, const QString &label, quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
     // Check whether devicePath is valid
     if (devicePath.isEmpty()) {
         std::cerr << "IndexController: Empty device path provided for requestId=" << requestId << "\n";
@@ -79,6 +85,11 @@ quint64 IndexController::addDevice(const QString &devicePath, const QString &fsT
 }
 
 void IndexController::removeDeviceByDeviceId(quint64 deviceId) {
+    std::unique_lock lock(indexMutex_);
+    removeDeviceByDeviceIdUnlocked(deviceId);
+}
+
+void IndexController::removeDeviceByDeviceIdUnlocked(quint64 deviceId) {
     // Look up the owning entry in the deviceId -> DeviceIndex map.
     // We use find() instead of operator[] so we don't accidentally create
     // a new empty entry if the deviceId does not exist.
@@ -117,10 +128,12 @@ void IndexController::removeDeviceByDeviceId(quint64 deviceId) {
               << devicePath.toStdString()
               << " deviceId=" << deviceId << "\n";
 
-    emit deviceRemoved(deviceId);
+    Q_EMIT deviceRemoved(deviceId);
 }
 
 bool IndexController::removeDeviceByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
     // Resolve the request to the device it belongs to.
     const auto requestIt = deviceIdByRequestId_.find(requestId);
     if (requestIt == deviceIdByRequestId_.end()) {
@@ -133,12 +146,14 @@ bool IndexController::removeDeviceByRequestId(quint32 requestId) {
     deviceIdByRequestId_.erase(requestIt);
 
     // Remove the associated device and all of its reverse mappings.
-    removeDeviceByDeviceId(deviceId);
+    removeDeviceByDeviceIdUnlocked(deviceId);
 
     return true;
 }
 
 void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId, const std::vector<FileRecord> &records) {
+    std::unique_lock lock(indexMutex_);
+
     const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
     if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
         std::cerr << "IndexController: appendDeviceFileRecords: No device index for requestId=" << requestId << "\n";
@@ -178,6 +193,8 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
 }
 
 void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId, QByteArrayView stringPool) {
+    std::unique_lock lock(indexMutex_);
+
     const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
     if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
         std::cerr << "IndexController: appendDeviceFileRecords: No device index for requestId=" << requestId << "\n";
@@ -209,5 +226,271 @@ void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId,
 }
 
 bool IndexController::removeRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
     return deviceIdByRequestId_.erase(requestId) > 0;
+}
+
+void IndexController::setReadyState(quint32 requestId, bool isReady) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
+    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+        std::cerr << "IndexController: setReadyState: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingDeviceId = existingDeviceIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
+    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
+        std::cerr << "IndexController: setReadyState: No device index for deviceId=" << existingDeviceId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.isReady = isReady;
+}
+
+bool IndexController::contains(std::string_view haystack, std::string_view needle) {
+    if (needle.empty()) {
+        return true;
+    }
+
+    auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+        [](char ch1, char ch2) {
+            return std::tolower(static_cast<unsigned char>(ch1)) == std::tolower(static_cast<unsigned char>(ch2));
+        }
+    );
+
+    return it != haystack.end();
+}
+
+std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch(const std::string& query) {
+    std::shared_lock lock(indexMutex_);
+
+    // 1. Tokenize query: "valley dragonforce" -> ["valley", "dragonforce"]
+    // 2. For each word >= 3 chars, get candidate IDs from trigramIndex
+    // 3. Intersect the ID lists (Candidate Filtering)
+    // 4. For remaining candidates, do a case-insensitive sub-string check (Refinement)
+
+    std::vector<RecordHandle> results;
+
+    if (indexByDeviceId_.empty()) {
+        return results;
+    }
+
+    // 1. Tokenize query by spaces
+    std::vector<std::string> keywords;
+    size_t start = 0, end = 0;
+
+    while ((end = query.find(' ', start)) != std::string::npos) {
+        if (end != start) {
+            keywords.push_back(query.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+
+    if (start < query.length()) {
+        keywords.push_back(query.substr(start));
+    }
+
+    // IF EMPTY: Return everything
+    if (keywords.empty()) {
+        std::size_t totalSize = 0;
+
+        for (const auto& [deviceId, indexPtr] : indexByDeviceId_) {
+            if (!indexPtr || !indexPtr->isReady) {
+                continue;
+            }
+
+            totalSize += indexPtr->fileRecords.size();
+        }
+
+        results.reserve(totalSize);
+
+        for (const auto& [deviceId, indexPtr] : indexByDeviceId_) {
+            if (!indexPtr || !indexPtr->isReady) {
+                continue;
+            }
+
+            const auto& index = *indexPtr;
+            for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
+                results.emplace_back(index.deviceId, index.generation, i);
+            }
+        }
+
+        return results;
+    }
+
+    for (const auto& [deviceId, indexPtr] : indexByDeviceId_) {
+        if (!indexPtr || !indexPtr->isReady) {
+            continue;
+        }
+
+        // 2. Candidate Filtering via Trigrams
+        std::vector<uint32_t> candidates;
+        bool firstKeyword = true;
+        bool trigramsUsed = false; // Track if we actually used the index
+
+        for (const auto& kw : keywords) {
+            if (kw.length() < 3) {
+                // Skip short words for now, as they won't be in our trigram index
+                continue;
+            }
+
+            // Generate all trigrams for this keyword and intersect them
+            for (size_t i = 0; i <= kw.length() - 3; ++i) {
+                trigramsUsed = true;
+                uint32_t tri = (static_cast<uint32_t>(std::tolower(kw[i])) << 16) |
+                               (static_cast<uint32_t>(std::tolower(kw[i+1])) << 8) |
+                               (static_cast<uint32_t>(std::tolower(kw[i+2])));
+
+                // Binary search for the trigram in the flat index
+                auto range = std::equal_range(indexPtr->flatIndex.begin(), indexPtr->flatIndex.end(),
+                                              TrigramEntry{tri, 0},
+                                              [](const auto& a, const auto& b) { return a.trigram < b.trigram; });
+
+                if (range.first == range.second) {
+                    // No matches for this trigram
+                    return results;
+                }
+
+                // 3. Intersect candidates (Candidate Filtering)
+                if (firstKeyword) {
+                    // First trigram: populate candidates directly from the range
+                    candidates.reserve(std::distance(range.first, range.second));
+
+                    for (auto it = range.first; it != range.second; ++it) {
+                        candidates.push_back(it->recordIdx);
+                    }
+
+                    firstKeyword = false;
+                } else {
+                    // Subsequent trigrams: intersect existing candidates with the range
+                    std::vector<uint32_t> nextCandidates;
+                    nextCandidates.reserve(std::min(candidates.size(), static_cast<size_t>(std::distance(range.first, range.second))));
+
+                    // Custom intersection that works between a vector<uint32_t> and a range of TrigramEntry
+                    auto candIt = candidates.begin();
+                    auto rangeIt = range.first;
+
+                    while (candIt != candidates.end() && rangeIt != range.second) {
+                        if (*candIt < rangeIt->recordIdx) {
+                            ++candIt;
+                        } else if (rangeIt->recordIdx < *candIt) {
+                            ++rangeIt;
+                        } else {
+                            nextCandidates.push_back(*candIt);
+                            ++candIt;
+                            ++rangeIt;
+                        }
+                    }
+
+                    candidates = std::move(nextCandidates);
+                }
+
+                if (candidates.empty()) {
+                    return results;
+                }
+            }
+        }
+
+        // 4. Refinement Phase
+        // If no trigrams were used (all keywords < 3 chars), we scan everything.
+        // Otherwise, we only scan the filtered candidates.
+        auto resultCallback = [&](uint32_t recordIdx) {
+            const auto& rec = indexPtr->fileRecords[recordIdx];
+            std::string_view name(&indexPtr->stringPool[rec.nameOffset], rec.nameLen);
+
+            for (const auto& kw : keywords) {
+                if (!contains(name, kw)) {
+                    return;
+                }
+            }
+
+            results.emplace_back(indexPtr->deviceId, indexPtr->generation, recordIdx);
+        };
+
+        if (!trigramsUsed) {
+            // Fallback: Linear scan of all records (All keywords were too short)
+            for (uint32_t i = 0; i < static_cast<uint32_t>(indexPtr->fileRecords.size()); ++i) {
+                resultCallback(i);
+            }
+        } else {
+            // High-speed scan of candidates
+            for (uint32_t idx : candidates) {
+                resultCallback(idx);
+            }
+        }
+    }
+
+    return results;
+}
+
+void IndexController::resolveParentPointersByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
+    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+        std::cerr << "IndexController: resolveParentPointersByRequestId: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingDeviceId = existingDeviceIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
+    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
+        std::cerr << "IndexController: resolveParentPointersByRequestId: No device index for deviceId=" << existingDeviceId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.resolveParentPointers();
+}
+
+void IndexController::sortByNameAscendingParallelByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
+    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+        std::cerr << "IndexController: sortByNameAscendingParallelByRequestId: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingDeviceId = existingDeviceIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
+    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
+        std::cerr << "IndexController: sortByNameAscendingParallelByRequestId: No device index for deviceId=" << existingDeviceId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.sortByNameAscendingParallel();
+}
+
+void IndexController::buildTrigramIndexParallelByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
+    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+        std::cerr << "IndexController: buildTrigramIndexParallelByRequestId: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingDeviceId = existingDeviceIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
+    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
+        std::cerr << "IndexController: buildTrigramIndexParallelByRequestId: No device index for deviceId=" << existingDeviceId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.buildTrigramIndexParallel();
 }

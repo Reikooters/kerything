@@ -9,126 +9,262 @@
 #include <QUrl>
 #include <QDir>
 #include "FileModel.h"
+
+#include "AppController.h"
 #include "GuiUtils.h"
 
 #include "IndexController.h"
 
-FileModel::FileModel(IndexController* indexController, QObject *parent)
+FileModel::FileModel(AppController* controller, QObject *parent)
     : QAbstractTableModel(parent),
-      indexController_(indexController) {}
+      controller_(controller) {}
 
-void FileModel::setSearchResults(
-    std::vector<IndexController::RecordHandle> newResults,
-    QString mountPath,
-    QString fsType)
+void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newResults)
 {
     beginResetModel(); // Notify views that the entire model is being reset
     searchResults_ = std::move(newResults);
-    mountPath_ = std::move(mountPath);
-    fsType_ = std::move(fsType);
     endResetModel();
 }
 
+// const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {
+//     if (!controller_->indexController()) {
+//         return nullptr;
+//     }
+//
+//     const IndexController::DeviceIndex* deviceIndex = controller_->indexController()->deviceIndex(handle.deviceId);
+//     if (!deviceIndex) {
+//         return nullptr;
+//     }
+//
+//     if (deviceIndex->generation != handle.generation) {
+//         return nullptr;
+//     }
+//
+//     return deviceIndex;
+// }
+
 const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {
-    if (!indexController_) {
+    if (!controller_->indexController()) {
         return nullptr;
     }
 
-    const IndexController::DeviceIndex* deviceIndex = indexController_->deviceIndex(handle.deviceId);
-    if (!deviceIndex) {
-        return nullptr;
-    }
+    return controller_->indexController()->withDeviceIndexRead(handle.deviceId, [&](const IndexController::DeviceIndex* deviceIndex) -> const IndexController::DeviceIndex* {
+        if (!deviceIndex) {
+            return nullptr;
+        }
 
-    if (deviceIndex->generation != handle.generation) {
-        return nullptr;
-    }
+        if (deviceIndex->generation != handle.generation) {
+            return nullptr;
+        }
 
-    return deviceIndex;
+        if (!deviceIndex->isReady) {
+            return nullptr;
+        }
+
+        return deviceIndex;
+    });
 }
 
+// void FileModel::sort(int column, Qt::SortOrder order) {
+//     if (!controller_->indexController() || searchResults_.empty()) {
+//         return;
+//     }
+//
+//     beginResetModel();
+//
+//     // Helper for case-insensitive comparison
+//     auto compareCaseInsensitive = [](std::string_view s1, std::string_view s2) {
+//         return std::lexicographical_compare(
+//             s1.begin(), s1.end(),
+//             s2.begin(), s2.end(),
+//             [](char a, char b) {
+//                 return std::tolower(static_cast<unsigned char>(a)) <
+//                        std::tolower(static_cast<unsigned char>(b));
+//             }
+//         );
+//     };
+//
+//     auto compare = [&](const IndexController::RecordHandle& aHandle, const IndexController::RecordHandle& bHandle) {
+//         const auto* aDevice = resolveDeviceIndex(aHandle);
+//         const auto* bDevice = resolveDeviceIndex(bHandle);
+//
+//         if (!aDevice || !bDevice) {
+//             return false;
+//         }
+//
+//         const auto& a = aDevice->fileRecords[aHandle.recordIdx];
+//         const auto& b = bDevice->fileRecords[bHandle.recordIdx];
+//
+//         if (order == Qt::AscendingOrder) {
+//             // To ensure strict weak ordering and avoid crashes, we must handle
+//             // the 'ascending vs descending' logic carefully.
+//             auto isLess = [&]() {
+//                 switch (column) {
+//                     case 0: // Name
+//                         return compareCaseInsensitive(
+//                             std::string_view(&aDevice->stringPool[a.nameOffset], a.nameLen),
+//                             std::string_view(&bDevice->stringPool[b.nameOffset], b.nameLen)
+//                         );
+//                     case 1: // Path
+//                         return compareCaseInsensitive(
+//                             aDevice->getFullPath(a.parentRecordIdx),
+//                             bDevice->getFullPath(b.parentRecordIdx)
+//                         );
+//                     case 2: // Size
+//                         return a.size < b.size;
+//                     case 3: // Date
+//                         return a.modificationTime < b.modificationTime;
+//                     default:
+//                         return false;
+//                 }
+//             };
+//             return isLess();
+//         } else {
+//             // For descending, we check if B < A
+//             // This preserves strict weak ordering and prevents segfaults
+//             auto isGreater = [&]() {
+//                 switch (column) {
+//                     case 0: // Name
+//                         return compareCaseInsensitive(
+//                             std::string_view(&bDevice->stringPool[b.nameOffset], b.nameLen),
+//                             std::string_view(&aDevice->stringPool[a.nameOffset], a.nameLen)
+//                         );
+//                     case 1: // Path
+//                         return compareCaseInsensitive(
+//                             bDevice->getFullPath(b.parentRecordIdx),
+//                             aDevice->getFullPath(a.parentRecordIdx)
+//                         );
+//                     case 2: // Size
+//                         return b.size < a.size;
+//                     case 3: // Date
+//                         return b.modificationTime < a.modificationTime;
+//                     default:
+//                         return false;
+//                 }
+//             };
+//             return isGreater();
+//         }
+//     };
+//
+//     // Sort using parallel execution policy to leverage multiple CPU cores via TBB
+//     std::sort(std::execution::par, searchResults_.begin(), searchResults_.end(), compare);
+//
+//     endResetModel();
+// }
+
 void FileModel::sort(int column, Qt::SortOrder order) {
-    if (!indexController_ || searchResults_.empty()) {
+    if (!controller_ || !controller_->indexController() || searchResults_.empty()) {
         return;
     }
 
     beginResetModel();
 
-    // Helper for case-insensitive comparison
-    auto compareCaseInsensitive = [](std::string_view s1, std::string_view s2) {
-        return std::lexicographical_compare(
-            s1.begin(), s1.end(),
-            s2.begin(), s2.end(),
-            [](char a, char b) {
-                return std::tolower(static_cast<unsigned char>(a)) <
-                       std::tolower(static_cast<unsigned char>(b));
+    struct SortEntry {
+        IndexController::RecordHandle handle;
+        std::string textKey;    // used for Name / Path
+        quint64 numericKey = 0; // used for Size / Date
+    };
+
+    std::vector<SortEntry> entries;
+    entries.reserve(searchResults_.size());
+
+    auto toLowerCopy = [](std::string_view s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (unsigned char ch : s) {
+            out.push_back(static_cast<char>(std::tolower(ch)));
+        }
+        return out;
+    };
+
+    auto handleLess = [](const IndexController::RecordHandle& a, const IndexController::RecordHandle& b) {
+        if (a.deviceId != b.deviceId) {
+            return a.deviceId < b.deviceId;
+        }
+        if (a.generation != b.generation) {
+            return a.generation < b.generation;
+        }
+        return a.recordIdx < b.recordIdx;
+    };
+
+    for (const auto& handle : searchResults_) {
+        SortEntry entry;
+        entry.handle = handle;
+
+        const auto* device = resolveDeviceIndex(handle);
+        if (device && handle.recordIdx < device->fileRecords.size()) {
+            const auto& record = device->fileRecords[handle.recordIdx];
+
+            switch (column) {
+                case 0:
+                    entry.textKey = toLowerCopy(std::string_view(
+                        &device->stringPool[record.nameOffset],
+                        record.nameLen
+                    ));
+                    break;
+                case 1:
+                    entry.textKey = device->getFullPath(handle.recordIdx);
+                    break;
+                case 2:
+                    entry.numericKey = record.size;
+                    break;
+                case 3:
+                    entry.numericKey = record.modificationTime;
+                    break;
+                default:
+                    break;
             }
-        );
-    };
-
-    auto compare = [&](const IndexController::RecordHandle& aHandle, const IndexController::RecordHandle& bHandle) {
-        const auto* aDevice = resolveDeviceIndex(aHandle);
-        const auto* bDevice = resolveDeviceIndex(bHandle);
-
-        if (!aDevice || !bDevice) {
-            return false;
         }
 
-        const auto& a = aDevice->fileRecords[aHandle.recordIdx];
-        const auto& b = bDevice->fileRecords[bHandle.recordIdx];
+        entries.push_back(std::move(entry));
+    }
 
-        if (order == Qt::AscendingOrder) {
-            // To ensure strict weak ordering and avoid crashes, we must handle
-            // the 'ascending vs descending' logic carefully.
-            auto isLess = [&]() {
-                switch (column) {
-                    case 0: // Name
-                        return compareCaseInsensitive(
-                            std::string_view(&aDevice->stringPool[a.nameOffset], a.nameLen),
-                            std::string_view(&bDevice->stringPool[b.nameOffset], b.nameLen)
-                        );
-                    case 1: // Path
-                        return compareCaseInsensitive(
-                            aDevice->getFullPath(a.parentRecordIdx),
-                            bDevice->getFullPath(b.parentRecordIdx)
-                        );
-                    case 2: // Size
-                        return a.size < b.size;
-                    case 3: // Date
-                        return a.modificationTime < b.modificationTime;
-                    default:
-                        return false;
-                }
-            };
-            return isLess();
+    auto less = [&](const SortEntry& a, const SortEntry& b) {
+        bool result = false;
+
+        switch (column) {
+            case 0:
+            case 1:
+                result = a.textKey < b.textKey;
+                break;
+            case 2:
+            case 3:
+                result = a.numericKey < b.numericKey;
+                break;
+            default:
+                result = false;
+                break;
+        }
+
+        if (result) {
+            return true;
+        }
+
+        if (column == 0 || column == 1) {
+            if (a.textKey == b.textKey) {
+                return handleLess(a.handle, b.handle);
+            }
         } else {
-            // For descending, we check if B < A
-            // This preserves strict weak ordering and prevents segfaults
-            auto isGreater = [&]() {
-                switch (column) {
-                    case 0: // Name
-                        return compareCaseInsensitive(
-                            std::string_view(&bDevice->stringPool[b.nameOffset], b.nameLen),
-                            std::string_view(&aDevice->stringPool[a.nameOffset], a.nameLen)
-                        );
-                    case 1: // Path
-                        return compareCaseInsensitive(
-                            bDevice->getFullPath(b.parentRecordIdx),
-                            aDevice->getFullPath(a.parentRecordIdx)
-                        );
-                    case 2: // Size
-                        return b.size < a.size;
-                    case 3: // Date
-                        return b.modificationTime < a.modificationTime;
-                    default:
-                        return false;
-                }
-            };
-            return isGreater();
+            if (a.numericKey == b.numericKey) {
+                return handleLess(a.handle, b.handle);
+            }
         }
+
+        return false;
     };
 
-    // Sort using parallel execution policy to leverage multiple CPU cores via TBB
-    std::sort(std::execution::par, searchResults_.begin(), searchResults_.end(), compare);
+    if (order == Qt::AscendingOrder) {
+        std::sort(std::execution::par, entries.begin(), entries.end(), less);
+    } else {
+        std::sort(std::execution::par, entries.begin(), entries.end(),
+                  [&](const SortEntry& a, const SortEntry& b) {
+                      return less(b, a);
+                  });
+    }
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        searchResults_[i] = std::move(entries[i].handle);
+    }
 
     endResetModel();
 }
@@ -154,8 +290,7 @@ QVariant FileModel::headerData(int section, Qt::Orientation orientation, int rol
 
 QVariant FileModel::data(const QModelIndex &index, int role) const {
     if (!index.isValid()
-        || (!(role == Qt::DecorationRole && index.column() == 0) && role != Qt::DisplayRole)
-        || !indexController_) {
+        || (!(role == Qt::DecorationRole && index.column() == 0) && role != Qt::DisplayRole)) {
         return {};
     }
 
@@ -166,6 +301,10 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     }
 
     const FileRecord &rec = deviceIndex->fileRecords[handle.recordIdx];
+
+    if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+        return {};
+    }
 
     // DecorationRole provides the icon shown next to the filename
     // This is used to differentiate Files vs Folders
@@ -199,16 +338,8 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
 
             // Formats the raw byte count with appropriate thousands separators
             return QLocale().toString(static_cast<qlonglong>(rec.size));
-        case 3: // Date: Formatted using NTFS-specific logic
-            if (fsType_ == "ntfs") {
-                // TODO: Check this - NtfsScannerEngine already converts the time to unix seconds,
-                // so GuiUtils::uint64ToFormattedTime() should probably be used no matter the fsType.
-                return QString::fromStdString(GuiUtils::ntfsTimeToLocalStr(rec.modificationTime));
-            }
-            if (fsType_ == "ext4") {
-                return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
-            }
-            return QString::fromStdString(std::to_string(rec.modificationTime));
+        case 3: // Date: Formatted from unix seconds to local time
+            return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
         default:
             return {};
     }
@@ -238,7 +369,7 @@ QStringList FileModel::mimeTypes() const {
 }
 
 QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
-    if (!indexController_ || mountPath_.isEmpty()) {
+    if (!controller_->indexController()) {
         return nullptr;
     }
 
@@ -259,6 +390,10 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
 
         const auto &rec = deviceIndex->fileRecords[handle.recordIdx];
 
+        if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+            continue;
+        }
+
         // Resolve file name from string pool
         QString fileName = QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
 
@@ -266,7 +401,8 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
         QString internalPath = QString::fromStdString(deviceIndex->getFullPath(rec.parentRecordIdx));
 
         // Construct the absolute Linux path and wrap it in a QUrl
-        QString fullPath = QDir::cleanPath(mountPath_ + "/" + internalPath + "/" + fileName);
+        // QString fullPath = QDir::cleanPath(mountPath_ + "/" + internalPath + "/" + fileName);
+        QString fullPath = QDir::cleanPath(internalPath + "/" + fileName);
         urls.append(QUrl::fromLocalFile(fullPath));
     }
 

@@ -28,7 +28,7 @@ public:
     [[nodiscard]] bool isDaemonReady() const noexcept;
     IndexController* indexController() const noexcept;
 
-private slots:
+private Q_SLOTS:
     void onPrimaryRequestedOpenWindow();
     void onPrimaryRequestedCommand(const QString& command);
 

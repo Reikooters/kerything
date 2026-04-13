@@ -20,7 +20,7 @@ private:
     static bool prepareSocketDirectory(gid_t socketGroupId);
     static bool applySocketPermissions(gid_t socketGroupId);
 
-private slots:
+private Q_SLOTS:
     void onNewConnection();
     void onClientDisconnected(ClientConnection* connection);
 

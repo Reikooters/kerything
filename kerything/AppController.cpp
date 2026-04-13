@@ -38,9 +38,6 @@ bool AppController::start() {
         // If the primary instance cannot be reached, fall back to becoming primary.
     }
 
-    // Primary instance opens its first window on startup.
-    openNewWindow();
-
     // Create index controller
     indexController_ = new IndexController(this);
 
@@ -64,13 +61,25 @@ bool AppController::start() {
                 // Update UI: daemon is ready
                 requestRefreshAllWindows();
 
-                // TODO: demo only - send scan request on ready
-                const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/89a0622c-75e2-427c-9766-b2fd2a2e69d8"), QStringLiteral("ntfs"));
+                {
+                    // TODO: demo only - send scan request on ready
+                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/89a0622c-75e2-427c-9766-b2fd2a2e69d8"), QStringLiteral("ntfs"));
 
-                quint32 requestId;
-                daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
+                    quint32 requestId;
+                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
 
-                std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
+                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
+                }
+
+                {
+                    // TODO: demo only - send scan request on ready
+                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/070bfe6c-f951-4b3c-9ec1-f6e54bc485a5"), QStringLiteral("ntfs"));
+
+                    quint32 requestId;
+                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
+
+                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
+                }
             });
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,
@@ -127,6 +136,18 @@ bool AppController::start() {
             this, [this](quint32 requestId) {
                 std::cout << "GUI: scan completed successfully requestId=" << requestId << "\n";
 
+                // Resolve parent pointers
+                indexController_->resolveParentPointersByRequestId(requestId);
+
+                // Sort by name ascending
+                indexController_->sortByNameAscendingParallelByRequestId(requestId);
+
+                // Build trigram index
+                indexController_->buildTrigramIndexParallelByRequestId(requestId);
+
+                // Mark ready
+                indexController_->setReadyState(requestId, true);
+
                 // Clean up the requestId as the scan has completed successfully
                 indexController_->removeRequestId(requestId);
 
@@ -155,6 +176,9 @@ bool AppController::start() {
 
                 requestRefreshAllWindows();
             });
+
+    // Primary instance opens its first window on startup.
+    openNewWindow();
 
     return true;
 }

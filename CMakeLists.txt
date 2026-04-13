@@ -67,6 +67,10 @@ add_executable(kerythingd
         shared/SocketFramer.h
 )
 
+target_compile_definitions(kerything PRIVATE QT_NO_KEYWORDS)
+
+target_compile_definitions(kerythingd PRIVATE QT_NO_KEYWORDS)
+
 target_link_libraries(kerything
         PRIVATE
         TBB::tbb # Parallelism

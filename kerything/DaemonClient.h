@@ -29,7 +29,7 @@ public:
     bool sendRequest(Protocol::MessageType type, const QByteArray& payload, quint32* requestIdOut = nullptr);
     bool cancelRequest(quint32 requestId);
 
-signals:
+Q_SIGNALS:
     void connectedChanged(bool connected);
     void readyChanged(bool ready);
     void daemonAvailable();
@@ -44,7 +44,7 @@ signals:
     void scanCancelled(quint32 requestId);
     void scanFailed(quint32 requestId, const QString& errorText);
 
-private slots:
+private Q_SLOTS:
     void tryConnect();
     void onConnected();
     void onDisconnected();

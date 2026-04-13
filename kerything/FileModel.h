@@ -7,7 +7,7 @@
 #include <QAbstractTableModel>
 #include <vector>
 
-#include "IndexController.h"
+#include "AppController.h"
 
 /**
  * @brief The FileModel class provides a custom table model for displaying NTFS search results.
@@ -19,18 +19,13 @@ class FileModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
-    explicit FileModel(IndexController* indexController, QObject *parent = nullptr);
+    explicit FileModel(AppController* controller, QObject *parent = nullptr);
 
     /**
      * @brief Updates the model with a new set of search results.
      * @param newResults A vector of record handles pointing into the database.
-     * @param mountPath The base path where the scanned partition is mounted.
-     * @param fsType The type of the file system (e.g., "ntfs", "ext4").
      */
-    void setSearchResults(
-        std::vector<IndexController::RecordHandle> newResults,
-        QString mountPath,
-        QString fsType);
+    void setSearchResults(std::vector<IndexController::RecordHandle> newResults);
 
     /**
      * @brief Sorts the search results based on the specified column and order.
@@ -78,10 +73,8 @@ public:
 private:
     const IndexController::DeviceIndex* resolveDeviceIndex(const IndexController::RecordHandle& handle) const;
 
-    IndexController* indexController_ = nullptr;
+    AppController* controller_ = nullptr;
     std::vector<IndexController::RecordHandle> searchResults_;
-    QString mountPath_;
-    QString fsType_;
 };
 
 #endif //KERYTHING_FILEMODEL_H

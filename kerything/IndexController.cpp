@@ -260,7 +260,7 @@ bool IndexController::contains(std::string_view haystack, std::string_view needl
 
     auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
         [](char ch1, char ch2) {
-            return std::tolower(static_cast<unsigned char>(ch1)) == std::tolower(static_cast<unsigned char>(ch2));
+            return ch1 == ch2;
         }
     );
 
@@ -281,19 +281,24 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         return results;
     }
 
+    // Convert query to lowercase
+    std::string lowercaseQuery = query;
+    std::transform(lowercaseQuery.begin(), lowercaseQuery.end(), lowercaseQuery.begin(),
+           [](unsigned char c) { return std::tolower(c); });
+
     // 1. Tokenize query by spaces
     std::vector<std::string> keywords;
     size_t start = 0, end = 0;
 
-    while ((end = query.find(' ', start)) != std::string::npos) {
+    while ((end = lowercaseQuery.find(' ', start)) != std::string::npos) {
         if (end != start) {
-            keywords.push_back(query.substr(start, end - start));
+            keywords.push_back(lowercaseQuery.substr(start, end - start));
         }
         start = end + 1;
     }
 
-    if (start < query.length()) {
-        keywords.push_back(query.substr(start));
+    if (start < lowercaseQuery.length()) {
+        keywords.push_back(lowercaseQuery.substr(start));
     }
 
     // IF EMPTY: Return everything
@@ -402,7 +407,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         // Otherwise, we only scan the filtered candidates.
         auto resultCallback = [&](uint32_t recordIdx) {
             const auto& rec = indexPtr->fileRecords[recordIdx];
-            std::string_view name(&indexPtr->stringPool[rec.nameOffset], rec.nameLen);
+            std::string_view name(&indexPtr->lowercaseStringPool[rec.nameOffset], rec.nameLen);
 
             for (const auto& kw : keywords) {
                 if (!contains(name, kw)) {
@@ -449,6 +454,28 @@ void IndexController::resolveParentPointersByRequestId(quint32 requestId) {
 
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
     deviceIndex.resolveParentPointers();
+}
+
+void IndexController::buildLowercaseStringPoolByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
+    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+        std::cerr << "IndexController: buildLowercaseStringPoolByRequestId: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingDeviceId = existingDeviceIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
+    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
+        std::cerr << "IndexController: buildLowercaseStringPoolByRequestId: No device index for deviceId=" << existingDeviceId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.buildLowercaseStringPool();
 }
 
 void IndexController::sortByNameAscendingParallelByRequestId(quint32 requestId) {

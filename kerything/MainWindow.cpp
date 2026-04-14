@@ -268,21 +268,26 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 }
 
 void MainWindow::updateSearch(const QString &text) {
-    auto start = std::chrono::steady_clock::now();
-
+    auto start1 = std::chrono::steady_clock::now();
     auto results = controller_->indexController()->performTrigramSearch(text.toStdString());
     model->setSearchResults(std::move(results));
+    auto end1 = std::chrono::steady_clock::now();
 
+    auto start2 = std::chrono::steady_clock::now();
     int sortCol = tableView->horizontalHeader()->sortIndicatorSection();
     model->sort(sortCol, tableView->horizontalHeader()->sortIndicatorOrder());
+    auto end2 = std::chrono::steady_clock::now();
 
-    auto end = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
+    std::chrono::duration<double> elapsed1 = end1 - start1;
+    std::chrono::duration<double> elapsed2 = end2 - start2;
+    std::chrono::duration<double> elapsed = end2 - start1;
 
     // Update status bar
-    statusLabel->setText(QString("%L1 objects found in %2s")
+    statusLabel->setText(QString("%L1 objects found in %2s (search: %3s, sort: %4s)")
         .arg(model->rowCount())
-        .arg(elapsed.count(), 0, 'f', 4));
+        .arg(elapsed.count(), 0, 'f', 4)
+        .arg(elapsed1.count(), 0, 'f', 4)
+        .arg(elapsed2.count(), 0, 'f', 4));
 }
 
 void MainWindow::refresh() {

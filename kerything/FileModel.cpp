@@ -161,21 +161,13 @@ void FileModel::sort(int column, Qt::SortOrder order) {
 
     struct SortEntry {
         IndexController::RecordHandle handle;
-        std::string textKey;    // used for Name / Path
+        std::string_view nameKey;    // used for Name
+        std::string pathKey;    // used for Path
         quint64 numericKey = 0; // used for Size / Date
     };
 
     std::vector<SortEntry> entries;
     entries.reserve(searchResults_.size());
-
-    auto toLowerCopy = [](std::string_view s) -> std::string {
-        std::string out;
-        out.reserve(s.size());
-        for (unsigned char ch : s) {
-            out.push_back(static_cast<char>(std::tolower(ch)));
-        }
-        return out;
-    };
 
     auto handleLess = [](const IndexController::RecordHandle& a, const IndexController::RecordHandle& b) {
         if (a.deviceId != b.deviceId) {
@@ -196,19 +188,19 @@ void FileModel::sort(int column, Qt::SortOrder order) {
             const auto& record = device->fileRecords[handle.recordIdx];
 
             switch (column) {
-                case 0:
-                    entry.textKey = toLowerCopy(std::string_view(
-                        &device->stringPool[record.nameOffset],
+                case 0: // Name
+                    entry.nameKey = std::string_view(
+                        &device->lowercaseStringPool[record.nameOffset],
                         record.nameLen
-                    ));
+                    );
                     break;
-                case 1:
-                    entry.textKey = device->getFullPath(handle.recordIdx);
+                case 1: // Path
+                    entry.pathKey = device->getFullPath(handle.recordIdx);
                     break;
-                case 2:
+                case 2: // Size
                     entry.numericKey = record.size;
                     break;
-                case 3:
+                case 3: // Date
                     entry.numericKey = record.modificationTime;
                     break;
                 default:
@@ -223,12 +215,14 @@ void FileModel::sort(int column, Qt::SortOrder order) {
         bool result = false;
 
         switch (column) {
-            case 0:
-            case 1:
-                result = a.textKey < b.textKey;
+            case 0: // Name
+                result = a.nameKey < b.nameKey;
                 break;
-            case 2:
-            case 3:
+            case 1: // Path
+                result = a.pathKey < b.pathKey;
+                break;
+            case 2: // Size
+            case 3: // Datae
                 result = a.numericKey < b.numericKey;
                 break;
             default:
@@ -240,8 +234,12 @@ void FileModel::sort(int column, Qt::SortOrder order) {
             return true;
         }
 
-        if (column == 0 || column == 1) {
-            if (a.textKey == b.textKey) {
+        if (column == 0) {
+            if (a.nameKey == b.nameKey) {
+                return handleLess(a.handle, b.handle);
+            }
+        } else if (column == 1) {
+            if (a.pathKey == b.pathKey) {
                 return handleLess(a.handle, b.handle);
             }
         } else {

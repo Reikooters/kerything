@@ -102,7 +102,7 @@ bool AppController::start() {
 
                 indexController_->addDevice(devicePath, fsType, "TODO", requestId);
 
-                requestRefreshAllWindows();
+                // requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanProgress,
@@ -119,7 +119,7 @@ bool AppController::start() {
 
                 indexController_->appendDeviceFileRecordsByRequestId(requestId, chunk);
 
-                requestRefreshAllWindows();
+                // requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanStringPoolChunkReceived,
@@ -129,7 +129,7 @@ bool AppController::start() {
 
                 indexController_->appendDeviceStringPoolByRequestId(requestId, chunk);
 
-                requestRefreshAllWindows();
+                // requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanCompleted,
@@ -138,6 +138,9 @@ bool AppController::start() {
 
                 // Resolve parent pointers
                 indexController_->resolveParentPointersByRequestId(requestId);
+
+                // Build lowercase string pool
+                indexController_->buildLowercaseStringPoolByRequestId(requestId);
 
                 // Sort by name ascending
                 indexController_->sortByNameAscendingParallelByRequestId(requestId);

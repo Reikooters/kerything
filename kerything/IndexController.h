@@ -48,6 +48,9 @@ public:
         std::vector<char> stringPool;
         std::unordered_map<uint64_t, uint32_t> fsIndexToRecordIdx;
 
+        // Lowercase mirror of the string pool for sorting and searching
+        std::vector<char> lowercaseStringPool;
+
         // A single sorted vector of all trigram-record pairs
         std::vector<TrigramEntry> flatIndex;
 
@@ -76,6 +79,18 @@ public:
             }
         }
 
+        void buildLowercaseStringPool() {
+            // Reserve memory once
+            lowercaseStringPool.resize(stringPool.size());
+
+            // Convert the string pool to lowercase in parallel and store it in lowercaseStringPool
+            std::transform(std::execution::par_unseq, stringPool.begin(), stringPool.end(),
+                      lowercaseStringPool.begin(),
+                           [](unsigned char c) {
+                               return (c >= 'A' && c <= 'Z') ? (c | 32) : c;
+                           });
+        }
+
         void sortByNameAscendingParallel() {
             if (fileRecords.empty()) {
                 return;
@@ -84,15 +99,14 @@ public:
             std::cerr << "Pre-sorting records by name ascending (case-insensitive) in parallel..." << std::endl;
 
             auto compareCaseInsensitive = [&](const FileRecord& a, const FileRecord& b) {
-                std::string_view s1(&stringPool[a.nameOffset], a.nameLen);
-                std::string_view s2(&stringPool[b.nameOffset], b.nameLen);
+                std::string_view s1(&lowercaseStringPool[a.nameOffset], a.nameLen);
+                std::string_view s2(&lowercaseStringPool[b.nameOffset], b.nameLen);
 
                 return std::lexicographical_compare(
                     s1.begin(), s1.end(),
                     s2.begin(), s2.end(),
-                    [](char a, char b) {
-                        return std::tolower(static_cast<unsigned char>(a)) <
-                               static_cast<unsigned char>(std::tolower(b));
+                    [](char first, char second) {
+                        return first < second;
                     }
                 );
             };
@@ -166,13 +180,13 @@ public:
                     return;
                 }
 
-                std::string_view name(&stringPool[rec.nameOffset], rec.nameLen);
+                std::string_view name(&lowercaseStringPool[rec.nameOffset], rec.nameLen);
                 size_t writePos = startOffsets[i];
 
                 for (size_t j = 0; j <= name.length() - 3; ++j) {
-                    uint32_t tri = (static_cast<uint32_t>(static_cast<unsigned char>(std::tolower(name[j]))) << 16) |
-                                   (static_cast<uint32_t>(static_cast<unsigned char>(std::tolower(name[j+1]))) << 8) |
-                                   (static_cast<uint32_t>(static_cast<unsigned char>(std::tolower(name[j+2]))));
+                    uint32_t tri = (static_cast<uint32_t>(static_cast<unsigned char>(name[j])) << 16) |
+                                   (static_cast<uint32_t>(static_cast<unsigned char>(name[j+1])) << 8) |
+                                   (static_cast<uint32_t>(static_cast<unsigned char>(name[j+2])));
 
                     flatIndex[writePos++] = { tri, i };
                 }
@@ -273,6 +287,7 @@ public:
     bool removeRequestId(quint32 requestId);
     std::vector<RecordHandle> performTrigramSearch(const std::string& query);
     void resolveParentPointersByRequestId(quint32 requestId);
+    void buildLowercaseStringPoolByRequestId(quint32 requestId);
     void sortByNameAscendingParallelByRequestId(quint32 requestId);
     void buildTrigramIndexParallelByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);

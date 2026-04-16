@@ -286,6 +286,7 @@ public:
     void appendDeviceStringPoolByRequestId(quint32 requestId, QByteArrayView stringPool);
     bool removeRequestId(quint32 requestId);
     std::vector<RecordHandle> performTrigramSearch(const std::string& query);
+    std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;
     void resolveParentPointersByRequestId(quint32 requestId);
     void buildLowercaseStringPoolByRequestId(quint32 requestId);
     void sortByNameAscendingParallelByRequestId(quint32 requestId);

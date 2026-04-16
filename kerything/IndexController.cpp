@@ -434,6 +434,203 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     return results;
 }
 
+std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const {
+    if (results.size() < 2) {
+        return results;
+    }
+
+    auto handleLess = [](const RecordHandle& a, const RecordHandle& b) {
+        if (a.deviceId != b.deviceId) {
+            return a.deviceId < b.deviceId;
+        }
+        if (a.generation != b.generation) {
+            return a.generation < b.generation;
+        }
+        return a.recordIdx < b.recordIdx;
+    };
+
+    std::vector<size_t> resultsOrder(results.size());
+    std::iota(resultsOrder.begin(), resultsOrder.end(), size_t{0});
+
+    if (column == 0) { // Name column
+        struct NameKey {
+            std::string_view nameKey;
+            RecordHandle handle{};
+            bool valid = false;
+        };
+
+        std::vector<NameKey> keys(results.size());
+
+        {
+            std::shared_lock lock(indexMutex_);
+
+            for (size_t i = 0; i < results.size(); ++i) {
+                const auto& handle = results[i];
+                auto& key = keys[i];
+                key.handle = handle;
+
+                const auto it = indexByDeviceId_.find(handle.deviceId);
+                if (it == indexByDeviceId_.end()) {
+                    continue;
+                }
+
+                const auto* device = it->second.get();
+                if (!device || !device->isReady || device->generation != handle.generation
+                    || handle.recordIdx >= device->fileRecords.size()) {
+                    continue;
+                }
+
+                const auto& record = device->fileRecords[handle.recordIdx];
+                if (record.nameOffset + record.nameLen <= device->lowercaseStringPool.size()) {
+                    key.nameKey = std::string_view(
+                        &device->lowercaseStringPool[record.nameOffset],
+                        record.nameLen
+                    );
+                    key.valid = true;
+                }
+            }
+        }
+
+        auto lessByIndex = [&](size_t lhs, size_t rhs) {
+            const auto& a = keys[lhs];
+            const auto& b = keys[rhs];
+
+            if (!a.valid || !b.valid) {
+                return handleLess(a.handle, b.handle);
+            }
+
+            if (a.nameKey != b.nameKey) {
+                return a.nameKey < b.nameKey;
+            }
+
+            return handleLess(a.handle, b.handle);
+        };
+
+        if (sortOrder == Qt::AscendingOrder) {
+            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(), lessByIndex);
+        } else {
+            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(),
+                      [&](size_t lhs, size_t rhs) {
+                          return lessByIndex(rhs, lhs);
+                      });
+        }
+    } else if (column == 1) { // Path column
+        struct PathKey {
+            std::string pathKey;
+            RecordHandle handle{};
+            bool valid = false;
+        };
+
+        std::vector<PathKey> keys(results.size());
+
+        {
+            std::shared_lock lock(indexMutex_);
+
+            for (size_t i = 0; i < results.size(); ++i) {
+                const auto& handle = results[i];
+                auto& key = keys[i];
+                key.handle = handle;
+
+                const auto it = indexByDeviceId_.find(handle.deviceId);
+                if (it == indexByDeviceId_.end()) {
+                    continue;
+                }
+
+                const auto* device = it->second.get();
+                if (!device || !device->isReady || device->generation != handle.generation
+                    || handle.recordIdx >= device->fileRecords.size()) {
+                    continue;
+                }
+
+                key.pathKey = device->getFullPath(handle.recordIdx);
+                key.valid = true;
+            }
+        }
+
+        auto lessByIndex = [&](size_t lhs, size_t rhs) {
+            const auto& a = keys[lhs];
+            const auto& b = keys[rhs];
+
+            if (!a.valid || !b.valid) {
+                return handleLess(a.handle, b.handle);
+            }
+
+            if (a.pathKey != b.pathKey) {
+                return a.pathKey < b.pathKey;
+            }
+
+            return handleLess(a.handle, b.handle);
+        };
+
+        if (sortOrder == Qt::AscendingOrder) {
+            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(), lessByIndex);
+        } else {
+            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(),
+                      [&](size_t lhs, size_t rhs) {
+                          return lessByIndex(rhs, lhs);
+                      });
+        }
+    } else if (column == 2 || column == 3) { // Size or Modification time column
+        std::vector<quint64> numericKeys(results.size());
+        std::vector<RecordHandle> handles(results.size());
+
+        {
+            std::shared_lock lock(indexMutex_);
+
+            for (size_t i = 0; i < results.size(); ++i) {
+                const auto& handle = results[i];
+                handles[i] = handle;
+
+                const auto it = indexByDeviceId_.find(handle.deviceId);
+                if (it == indexByDeviceId_.end()) {
+                    continue;
+                }
+
+                const auto* device = it->second.get();
+                if (!device || !device->isReady || device->generation != handle.generation
+                    || handle.recordIdx >= device->fileRecords.size()) {
+                    continue;
+                }
+
+                const auto& record = device->fileRecords[handle.recordIdx];
+                numericKeys[i] = (column == 2) ? record.size : record.modificationTime;
+            }
+        }
+
+        auto lessByIndex = [&](size_t lhs, size_t rhs) {
+            const auto aKey = numericKeys[lhs];
+            const auto bKey = numericKeys[rhs];
+
+            if (aKey != bKey) {
+                return aKey < bKey;
+            }
+
+            return handleLess(handles[lhs], handles[rhs]);
+        };
+
+        // Sort using parallel execution policy to leverage multiple CPU cores via TBB
+        if (sortOrder == Qt::AscendingOrder) {
+            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(), lessByIndex);
+        } else {
+            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(),
+                      [&](size_t lhs, size_t rhs) {
+                          return lessByIndex(rhs, lhs);
+                      });
+        }
+    } else {
+        return results;
+    }
+
+    std::vector<RecordHandle> sorted;
+    sorted.resize(results.size());
+
+    for (size_t i = 0; i < resultsOrder.size(); ++i) {
+        sorted[i] = std::move(results[resultsOrder[i]]);
+    }
+
+    return sorted;
+}
+
 void IndexController::resolveParentPointersByRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 

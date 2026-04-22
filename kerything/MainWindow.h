@@ -36,6 +36,7 @@ public:
     [[nodiscard]] int hoveredRow() const { return hoveredRow_; }
 
     void refresh();
+    void showTemporaryStatus(const QString& text, int timeoutMs);
 
 protected:
     /**
@@ -124,14 +125,16 @@ private Q_SLOTS:
     // void openTerminal();
 
 private:
+
     AppController* controller_ = nullptr;
     // QString fsType_;
     // QString mountPath_;
     // QString devicePath_;
-    QLineEdit *searchLine;
-    QTableView *tableView;
-    FileModel *model;
-    QLabel *statusLabel;
+    QLineEdit *searchLine_ = nullptr;
+    QTableView *tableView_ = nullptr;
+    FileModel *model_ = nullptr;
+    QLabel *statusLabel_ = nullptr;
+    quint64 statusMessageId_ = 0;
 
     int hoveredRow_ = -1;
 };

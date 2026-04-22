@@ -24,6 +24,7 @@ public:
     bool start();
     void openNewWindow();
     void requestRefreshAllWindows();
+    void requestWindowStatusMessage(const QString& message, int timeoutMs);
     [[nodiscard]] bool isDaemonConnected() const noexcept;
     [[nodiscard]] bool isDaemonReady() const noexcept;
     IndexController* indexController() const noexcept;

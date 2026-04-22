@@ -59,6 +59,7 @@ add_executable(kerythingd
         kerythingd/ScannerWorker.h
         kerythingd/Server.cpp
         kerythingd/Server.h
+        kerythingd/ThrottledProgressReporter.h
         kerythingd/scanners/NtfsScannerEngine.cpp
         kerythingd/scanners/NtfsScannerEngine.h
         shared/FileRecord.h

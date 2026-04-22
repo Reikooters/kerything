@@ -37,7 +37,7 @@ Q_SIGNALS:
     void daemonReady();
 
     void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
-    void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
+    void scanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
     void scanFileRecordChunkReceived(quint32 requestId, const std::vector<FileRecord>& chunk);
     void scanStringPoolChunkReceived(quint32 requestId, QByteArrayView chunk);
     void scanCompleted(quint32 requestId);

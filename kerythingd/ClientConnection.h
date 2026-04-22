@@ -26,7 +26,7 @@ public:
 
     void sendReady();
     void sendScanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
-    void sendScanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
+    void sendScanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
     bool sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
     bool sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void sendScanCompleted(quint32 requestId);

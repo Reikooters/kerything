@@ -4,6 +4,7 @@
 #include "ScannerWorker.h"
 
 #include "FileRecord.h"
+#include "ThrottledProgressReporter.h"
 
 ScannerWorker::ScannerWorker(QObject* parent)
     : QObject(parent)
@@ -23,6 +24,19 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
 
     Q_EMIT scanStarted(requestId, currentJob_->devicePath, currentJob_->fsType);
 
+    // Wrap the Qt signal emission in a small throttler so fast scans do not
+    // flood the UI with progress updates.
+    //
+    // The helper keeps the timing policy separate from the actual Qt signal.
+    // That makes the scan code easier to read and keeps the throttling logic
+    // reusable if we ever want to report progress somewhere else.
+    auto progressReporter = ThrottledProgressReporter{
+        [this, requestId](quint64 filesProcessed, quint64 filesTotal) {
+            Q_EMIT scanProgress(requestId, filesProcessed, filesTotal);
+        },
+        std::chrono::milliseconds(100) // Maximum update rate: 10 times per second.
+    };
+
     const bool ok = ScannerHelper::scanDevice(
         jobRef->devicePath,
         jobRef->fsType,
@@ -40,8 +54,10 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
         [jobRef]() -> bool {
             return jobRef->cancelled.load(std::memory_order_relaxed);
         },
-        [this, requestId](quint64 filesSeen, quint64 filesEmitted) {
-            Q_EMIT scanProgress(requestId, filesSeen, filesEmitted);
+        [&progressReporter](quint64 filesProcessed, quint64 filesTotal) {
+            // Forward raw progress into the throttler.
+            // It will decide whether to emit now or skip this update.
+            progressReporter(filesProcessed, filesTotal);
         }
     );
 

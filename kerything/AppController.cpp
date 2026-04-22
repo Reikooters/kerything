@@ -106,10 +106,22 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanProgress,
-            this, [this](quint32 requestId, quint64 seen, quint64 emitted) {
+            this, [this](quint32 requestId, quint64 processed, quint64 total) {
                 std::cout << "GUI: scan progress requestId=" << requestId
-                          << " seen=" << seen
-                          << " emitted=" << emitted << "\n";
+                          << " processed=" << processed
+                          << " total=" << total << "\n";
+
+                // Calculate percentage progress with rounding
+                const quint64 pct64 = (processed * 100 + total / 2) / total;
+                const quint8 pct = static_cast<quint8>(pct64);
+
+                requestWindowStatusMessage(
+                    QStringLiteral("RequestId: %1, Processed: %2/%3 (%4%)")
+                        .arg(requestId)
+                        .arg(processed)
+                        .arg(total)
+                        .arg(pct)
+                , processed < total ? 0 : 3000);
             });
 
     connect(daemonClient_, &DaemonClient::scanFileRecordChunkReceived,
@@ -204,6 +216,19 @@ void AppController::openNewWindow() {
     window->show();
     window->raise();
     window->activateWindow();
+}
+
+void AppController::requestWindowStatusMessage(const QString& message, const int timeoutMs) {
+    // Remove dead entries first so iteration is safe and clean.
+    cleanupWindows();
+
+    // Send message to every live window. QPointer becomes null automatically if a window
+    // has already been destroyed.
+    for (auto& window : windows_) {
+        if (window) {
+            window->showTemporaryStatus(message, timeoutMs);
+        }
+    }
 }
 
 void AppController::requestRefreshAllWindows() {

@@ -34,8 +34,8 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
             });
 
     connect(scannerWorker_, &ScannerWorker::scanProgress,
-            this, [this](quint32 requestId, quint64 filesSeen, quint64 filesEmitted) {
-                sendScanProgress(requestId, filesSeen, filesEmitted);
+            this, [this](quint32 requestId, quint64 filesProcessed, quint64 filesTotal) {
+                sendScanProgress(requestId, filesProcessed, filesTotal);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanFileRecordChunkReady,
@@ -194,16 +194,16 @@ void ClientConnection::sendScanStarted(quint32 requestId, const QString& deviceP
 }
 
 void ClientConnection::sendScanProgress(quint32 requestId,
-                                        quint64 filesSeen,
-                                        quint64 filesEmitted)
+                                        quint64 filesProcessed,
+                                        quint64 filesTotal)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
 
-    out << filesSeen
-        << filesEmitted;
+    out << filesProcessed
+        << filesTotal;
 
     sendFrame(Protocol::MessageType::ScanProgress, requestId, payload);
 }

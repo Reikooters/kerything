@@ -449,6 +449,12 @@ namespace NtfsScannerEngine {
                     //     progressCb(scannedRecords, totalRecords);
                     // }
 
+                    // Notify progress
+                    static constexpr uint64_t kProgressEvery = 4096; // must be power of two
+                    if (onProgress && ((scannedRecords & (kProgressEvery - 1)) == 0)) {
+                        onProgress(scannedRecords, totalRecords);
+                    }
+
                     char* mftRecordPtr = batchBuffer.data() + (i * mftRecordSize);
                     auto* mftRecordHeader = reinterpret_cast<MFT_RecordHeader*>(mftRecordPtr);
 
@@ -488,6 +494,10 @@ namespace NtfsScannerEngine {
             }
             db.stringPool.clear();
         }
+
+        // Report completion
+        onProgress(scannedRecords, totalRecords);
+
         return true;
     }
 

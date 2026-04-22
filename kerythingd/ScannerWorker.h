@@ -22,7 +22,7 @@ public Q_SLOTS:
 
 Q_SIGNALS:
     void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
-    void scanProgress(quint32 requestId, quint64 filesSeen, quint64 filesEmitted);
+    void scanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
     void scanFileRecordChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
     void scanStringPoolChunkReady(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void scanCompleted(quint32 requestId);

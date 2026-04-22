@@ -385,9 +385,9 @@ void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, con
     in.setByteOrder(QDataStream::BigEndian);
     in.setVersion(QDataStream::Qt_6_0);
 
-    quint64 filesSeen = 0;
-    quint64 filesEmitted = 0;
-    in >> filesSeen >> filesEmitted;
+    quint64 filesProcessed = 0;
+    quint64 filesTotal = 0;
+    in >> filesProcessed >> filesTotal;
 
     if (in.status() != QDataStream::Ok) {
         std::cerr << "Malformed ScanProgress payload\n";
@@ -395,10 +395,10 @@ void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, con
     }
 
     std::cout << "Scan progress requestId=" << header.requestId
-              << " seen=" << filesSeen
-              << " emitted=" << filesEmitted << "\n";
+              << " processed=" << filesProcessed
+              << " total=" << filesTotal << "\n";
 
-    Q_EMIT scanProgress(header.requestId, filesSeen, filesEmitted);
+    Q_EMIT scanProgress(header.requestId, filesProcessed, filesTotal);
 }
 
 void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload)

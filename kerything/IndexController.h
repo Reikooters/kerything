@@ -46,7 +46,8 @@ public:
 
         std::vector<FileRecord> fileRecords;
         std::vector<char> stringPool;
-        std::unordered_map<uint64_t, uint32_t> fsIndexToRecordIdx;
+        std::unordered_map<uint64_t, uint32_t> directoryFsIndexToRecordIdx;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> fsIndexToRecordIndices;
 
         // Lowercase mirror of the string pool for sorting and searching
         std::vector<char> lowercaseStringPool;
@@ -54,27 +55,64 @@ public:
         // A single sorted vector of all trigram-record pairs
         std::vector<TrigramEntry> flatIndex;
 
+        void rebuildFsIndexMaps() {
+            directoryFsIndexToRecordIdx.clear();
+            fsIndexToRecordIndices.clear();
+
+            directoryFsIndexToRecordIdx.reserve(fileRecords.size());
+            fsIndexToRecordIndices.reserve(fileRecords.size());
+
+            for (uint32_t i = 0; i < fileRecords.size(); ++i) {
+                const FileRecord& rec = fileRecords[i];
+
+                // Full inode/filesystem-index map.
+                // This intentionally stores every record using this fsIndex, because
+                // hard links can produce multiple FileRecords with the same inode.
+                fsIndexToRecordIndices[rec.fsIndex].push_back(i);
+
+                // Directory-only map used for parent resolution.
+                // Normal ext4 does not allow arbitrary hard-linked directories, so a
+                // single directory inode -> one record index is suitable here.
+                if ((rec.flags & FileRecord_IsDir) != 0) {
+                    directoryFsIndexToRecordIdx.emplace(rec.fsIndex, i);
+                }
+            }
+        }
+
         /**
-         * Resolves parent-child relationships between file records in the NTFS database.
-         * This is called once after the MFT scan is completely finished
+         * @brief Resolves parent pointers for all file records in the current device index.
+         * This is called once after the device scan is finished.
          *
-         * This method converts temporary parent MFT indices into internal indices and updates
-         * the database entries to reflect the hierarchical relationships. Any unresolved parent
-         * pointers, such as those referencing the root directory, are marked accordingly.
-         * Additionally, all temporary data structures used during the setup phase are freed
-         * to optimize memory usage.
+         * This method maps the file system parent indices to internal record indices
+         * for all entries in the `fileRecords` vector. If a parent index does not
+         * exist in the `directoryFsIndexToRecordIdx` map, the corresponding record is marked
+         * as belonging to the root by setting its `parentRecordIdx` to `0xFFFFFFFF`.
+         *
+         * The method is used to establish hierarchical relationships between file
+         * records, which is critical for operations that need to navigate or
+         * manipulate the directory structure.
          */
         void resolveParentPointers() {
             std::cerr << "Resolving parent pointers..." << std::endl;
 
-            // Convert parent MFT index to internal index
+            rebuildFsIndexMaps();
+
+            // Convert parent filesystem indices to internal record indices.
             for (size_t i = 0; i < fileRecords.size(); ++i) {
-                auto it = fsIndexToRecordIdx.find(fileRecords[i].parentFsIndex);
-                if (it != fsIndexToRecordIdx.end()) {
-                    fileRecords[i].parentRecordIdx = it->second;
+                FileRecord& rec = fileRecords[i];
+
+                // Root/self-parent safety.
+                if (rec.fsIndex == rec.parentFsIndex) {
+                    rec.parentRecordIdx = 0xFFFFFFFF;
+                    continue;
+                }
+
+                auto it = directoryFsIndexToRecordIdx.find(rec.parentFsIndex);
+                if (it != directoryFsIndexToRecordIdx.end()) {
+                    rec.parentRecordIdx = it->second;
                 } else {
-                    // If parent isn't in our DB (like MFT Index 5's parent), mark as root
-                    fileRecords[i].parentRecordIdx = 0xFFFFFFFF;
+                    // If parent is not in our DB, mark as root.
+                    rec.parentRecordIdx = 0xFFFFFFFF;
                 }
             }
         }
@@ -123,19 +161,27 @@ public:
                 return compareCaseInsensitive(fileRecords[i], fileRecords[j]);
             });
 
-            // 3. Create a reverse mapping to update parentRecordIdx
-            std::vector<uint32_t> rev(p.size());
-            for (uint32_t i = 0; i < p.size(); ++i) {
-                rev[p[i]] = i;
-            }
+            // // 3. Create a reverse mapping to update parentRecordIdx
+            // std::vector<uint32_t> rev(p.size());
+            // for (uint32_t i = 0; i < p.size(); ++i) {
+            //     rev[p[i]] = i;
+            // }
+            //
+            // // 4. Reorder records and update parent indices
+            // std::vector<FileRecord> newRecords(fileRecords.size());
+            // for (size_t i = 0; i < p.size(); ++i) {
+            //     newRecords[i] = fileRecords[p[i]];
+            //     if (newRecords[i].parentRecordIdx != 0xFFFFFFFF) {
+            //         newRecords[i].parentRecordIdx = rev[newRecords[i].parentRecordIdx];
+            //     }
+            // }
 
-            // 4. Reorder records and update parent indices
+            // 3. Reorder records. parentRecordIdx is intentionally not remapped here,
+            // because parent pointers are resolved after this sort.
             std::vector<FileRecord> newRecords(fileRecords.size());
             for (size_t i = 0; i < p.size(); ++i) {
                 newRecords[i] = fileRecords[p[i]];
-                if (newRecords[i].parentRecordIdx != 0xFFFFFFFF) {
-                    newRecords[i].parentRecordIdx = rev[newRecords[i].parentRecordIdx];
-                }
+                newRecords[i].parentRecordIdx = 0xFFFFFFFF;
             }
 
             fileRecords = std::move(newRecords);
@@ -268,6 +314,15 @@ public:
             }
 
             return base;
+        }
+
+        [[nodiscard]] const std::vector<uint32_t>* recordIndicesForFsIndex(uint64_t fsIndex) const {
+            const auto it = fsIndexToRecordIndices.find(fsIndex);
+            if (it == fsIndexToRecordIndices.end()) {
+                return nullptr;
+            }
+
+            return &it->second;
         }
     };
 

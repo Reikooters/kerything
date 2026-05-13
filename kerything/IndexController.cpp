@@ -49,7 +49,8 @@ quint64 IndexController::addDevice(const QString &devicePath, const QString &fsT
             deviceIndex.devicePath = devicePath;
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
-            deviceIndex.fsIndexToRecordIdx.clear();
+            deviceIndex.directoryFsIndexToRecordIdx.clear();
+            deviceIndex.fsIndexToRecordIndices.clear();
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
 
@@ -180,16 +181,12 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     // Reserve space for the new records
     deviceIndex.fileRecords.reserve(deviceIndex.fileRecords.size() + records.size());
 
-    // Insert the new records into the device index
+    // Insert the new records into the device index.
+    // Parent pointers are resolved once after the full scan has completed.
     deviceIndex.fileRecords.insert(deviceIndex.fileRecords.end(), records.begin(), records.end());
 
     std::cout << "IndexController: The index now contains " << deviceIndex.fileRecords.size()
               << " file records for device " << deviceIndex.devicePath.toStdString() << "\n";
-
-    // Update the fsIndex to record index mapping
-    for (int i = 0; i < records.size(); ++i) {
-        deviceIndex.fsIndexToRecordIdx[records[i].fsIndex] = fileRecordsCountBefore + i;
-    }
 }
 
 void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId, QByteArrayView stringPool) {

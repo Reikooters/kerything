@@ -168,14 +168,14 @@ bool AppController::start() {
             this, [this](quint32 requestId) {
                 std::cout << "GUI: scan completed successfully requestId=" << requestId << "\n";
 
-                // Resolve parent pointers
-                indexController_->resolveParentPointersByRequestId(requestId);
-
                 // Build lowercase string pool
                 indexController_->buildLowercaseStringPoolByRequestId(requestId);
 
                 // Sort by name ascending
                 indexController_->sortByNameAscendingParallelByRequestId(requestId);
+
+                // Resolve parent pointers
+                indexController_->resolveParentPointersByRequestId(requestId);
 
                 // Build trigram index
                 indexController_->buildTrigramIndexParallelByRequestId(requestId);

@@ -3,144 +3,33 @@
 
 #include "Ext4ScannerEngine.h"
 
+#include <algorithm>
+#include <string_view>
+
+#include "ScopedTimer.h"
+
 namespace Ext4ScannerEngine {
 
-    // Helper struct to pass multiple pieces of data to dirCallback
-    struct ScanContext {
-        Ext4Database& db;
-        uint32_t maxInodes;
-    };
+    namespace {
 
-    int dirCallback(ext2_ino_t dir_ino, int entry_flags, struct ext2_dir_entry *dirent,
-                    int offset, int blocksize, char *buf, void *priv_data) {
-        // Ignore invalid entries or empty inodes
-        if (dirent->inode == 0) {
-            return 0;
+        constexpr uint32_t kInvalidRecordIndex = 0xFFFFFFFF;
+        constexpr uint64_t kProgressEvery = 4096; // must be power of two
+
+        [[nodiscard]] std::string makeExt2Error(const char* prefix, errcode_t code) {
+            std::ostringstream out;
+            out << prefix << ": " << error_message(code);
+            return out.str();
         }
 
-        // dirent->name_len is sometimes encoded with file type info in modern EXT4,
-        // so we mask it with 0xFF to get the actual length.
-        uint16_t len = dirent->name_len & 0xFF;
-        if (len == 0) {
-            return 0;
-        }
-
-        // Ignore '.' and '..'
-        if (len == 1 && dirent->name[0] == '.') {
-            return 0;
-        }
-        if (len == 2 && dirent->name[0] == '.' && dirent->name[1] == '.') {
-            return 0;
-        }
-
-        // Get scan context
-        ScanContext *ctx = static_cast<ScanContext *>(priv_data);
-
-        uint32_t max_inodes = ctx->maxInodes;
-        if (dirent->inode > max_inodes) {
-            return 0;
-        }
-
-        // Check if this inode already has a record (e.g. from another hard link)
-        auto it = ctx->db.inodeToRecordIdx.find(dirent->inode);
-        uint32_t recordIndex;
-
-        if (it == ctx->db.inodeToRecordIdx.end()) {
-            // "Birth" the record here because we have a name
-            FileRecord newRecord{};
-            newRecord.parentRecordIdx = 0xFFFFFFFF;
-
-            ctx->db.records.push_back(newRecord);
-            recordIndex = ctx->db.records.size() - 1;
-            ctx->db.inodeToRecordIdx[dirent->inode] = recordIndex;
-
-            // Keep the parallel vector in sync
-            ctx->db.tempParentInodes.push_back(dir_ino);
-        } else {
-            recordIndex = it->second;
-            // Update the parent just in case (though usually doesn't change for the same name)
-            ctx->db.tempParentInodes[recordIndex] = dir_ino;
-        }
-
-        // Store the name in the string pool
-        FileRecord& record = ctx->db.records[recordIndex];
-        record.nameOffset = ctx->db.stringPool.size();
-        record.nameLen = len;
-        ctx->db.stringPool.insert(ctx->db.stringPool.end(), dirent->name, dirent->name + len);
-
-        return 0;
-    }
-
-    bool scanDevice(const QString& devicePath,
-                const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
-                const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
-                const ScannerHelper::ErrorCallback& onError,
-                const ScannerHelper::CancelCallback& shouldCancel,
-                const ScannerHelper::ProgressCallback& onProgress) {
-        ext2_filsys fs;
-        errcode_t retval = ext2fs_open(devicePath.toStdString().c_str(), 0, 0, 0, unix_io_manager, &fs);
-        if (retval) {
-            onError(QStringLiteral("ext2fs_open failed: %1").arg(error_message(retval)));
-            return false;
-        }
-
-        const uint32_t totalInodes = fs->super->s_inodes_count;
-        const uint32_t freeInodes  = fs->super->s_free_inodes_count;
-        const uint32_t inodesInUse = (freeInodes <= totalInodes) ? (totalInodes - freeInodes) : totalInodes;
-
-        Ext4Database db{};
-        db.records.reserve(Ext4Database::kRecordsPerIpcChunk);
-        db.tempParentInodes.reserve(Ext4Database::kRecordsPerIpcChunk);
-        db.inodeToRecordIdx.reserve(Ext4Database::kRecordsPerIpcChunk);
-        db.inodeToFileStats.reserve(Ext4Database::kRecordsPerIpcChunk);
-
-        db.stringPool.reserve(Ext4Database::kMaxIpcBufferSizeBytes);
-
-        // totalStringPoolLength is not used yet. doesn't break anything right now,
-        // because we only send the chunks at the very end of the scan. Will break nameOffset
-        // in FileRecords when we switch to sending chunks as we process them unless we
-        // switch to using this instead of `ctx->db.stringPool.size()`.
-        db.totalStringPoolLength = 0;
-
-        // Explicitly add the root entry first
-        FileRecord rootRec{};
-        rootRec.parentRecordIdx = 0xFFFFFFFF;
-        db.records.push_back(rootRec);
-        db.inodeToRecordIdx[EXT2_ROOT_INO] = 0;
-        db.tempParentInodes.push_back(0);
-
-        int bufferBlocks = 4096;
-
-        ext2_inode_scan scan;
-        ext2fs_open_inode_scan(fs, bufferBlocks, &scan);
-
-        ext2_ino_t ino;
-        ext2_inode inode;
-
-        ScanContext ctx{db, totalInodes};
-
-        uint64_t usedInodesSeen = 0;
-
-        if (onProgress) {
-            onProgress(0, inodesInUse);
-        }
-
-        // Crawl the directory tree to discover all names and structure
-        // We start from the root inode (2) and let ext2fs_dir_iterate2 recurse
-        // through directories.
-        while (ext2fs_get_next_inode(scan, &ino, &inode) == 0 && ino != 0) {
-            if (shouldCancel && shouldCancel()) {
-                ext2fs_close_inode_scan(scan);
-                ext2fs_close(fs);
-                return false;
+        void reportError(const ScannerHelper::ErrorCallback& onError, const std::string& message) {
+            if (onError) {
+                onError(QString::fromStdString(message));
             }
 
-            if (inode.i_links_count == 0) {
-                continue;
-            }
+            std::cerr << "[Ext4ScannerEngine] " << message << "\n";
+        }
 
-            ++usedInodesSeen;
-
+        [[nodiscard]] FileStats makeFileStats(const ext2_inode& inode) {
             FileStats stats{};
             stats.size = EXT2_I_SIZE(&inode);
             stats.modificationTime = inode.i_mtime;
@@ -153,130 +42,385 @@ namespace Ext4ScannerEngine {
                 stats.flags |= FileRecord_IsSymlink;
             }
 
-            db.inodeToFileStats[ino] = stats;
-
-            // Notify progress
-            static constexpr uint64_t kProgressEvery = 4096; // must be power of two
-            if (onProgress && ((usedInodesSeen & (kProgressEvery - 1)) == 0)) {
-                onProgress(usedInodesSeen, inodesInUse);
-            }
-
-            if (LINUX_S_ISDIR(inode.i_mode)) {
-                // This will trigger dirCallback for every file inside this directory
-                ext2fs_dir_iterate2(fs, ino, 0, nullptr, dirCallback, &ctx);
-            }
+            return stats;
         }
 
-        // Close the scan
-        ext2fs_close_inode_scan(scan);
-        ext2fs_close(fs);
+        [[nodiscard]] const FileStats* findStatsByInode(const std::vector<InodeStatsEntry>& inodeStats,
+                                                        uint32_t inode) {
+            const auto it = std::lower_bound(
+                inodeStats.begin(),
+                inodeStats.end(),
+                inode,
+                [](const InodeStatsEntry& entry, uint32_t value) {
+                    return entry.inode < value;
+                });
 
-        // Resolve parent Inodes to parent Record Indices
-        db.resolveParentPointers();
+            if (it == inodeStats.end() || it->inode != inode) {
+                return nullptr;
+            }
 
-        // Populate stats into records
-        db.populateStatsIntoRecords();
+            return &it->stats;
+        }
 
-        // Flush remaining file records
-        if (!db.records.empty()) {
-            // Copy string pool chunk, so we can clear it after sending
-            std::vector<FileRecord> fileRecordChunk = db.records;
+        [[nodiscard]] bool collectInodeStats(ext2_filsys fs,
+                                             std::vector<InodeStatsEntry>& inodeStats,
+                                             std::vector<uint32_t>& directoryInodes,
+                                             uint64_t inodesInUse,
+                                             const ScannerHelper::ErrorCallback& onError,
+                                             const ScannerHelper::CancelCallback& shouldCancel,
+                                             const ScannerHelper::ProgressCallback& onProgress) {
+            ScopedTimer timer("[Ext4ScannerEngine] inode stats scan");
+
+            ext2_inode_scan scan = nullptr;
+            constexpr int bufferBlocks = 4096;
+
+            errcode_t retval = ext2fs_open_inode_scan(fs, bufferBlocks, &scan);
+            if (retval) {
+                reportError(onError, makeExt2Error("ext2fs_open_inode_scan failed", retval));
+                return false;
+            }
+
+            ext2_ino_t ino = 0;
+            ext2_inode inode{};
+
+            uint64_t usedInodesSeen = 0;
+
+            if (onProgress) {
+                onProgress(0, inodesInUse);
+            }
+
+            while (true) {
+                retval = ext2fs_get_next_inode(scan, &ino, &inode);
+                if (retval) {
+                    ext2fs_close_inode_scan(scan);
+                    reportError(onError, makeExt2Error("ext2fs_get_next_inode failed", retval));
+                    return false;
+                }
+
+                if (ino == 0) {
+                    break;
+                }
+
+                if (inode.i_links_count == 0) {
+                    continue;
+                }
+
+                ++usedInodesSeen;
+
+                const FileStats stats = makeFileStats(inode);
+
+                inodeStats.push_back(InodeStatsEntry{
+                    static_cast<uint32_t>(ino),
+                    stats
+                });
+
+                if ((stats.flags & FileRecord_IsDir) != 0) {
+                    directoryInodes.push_back(static_cast<uint32_t>(ino));
+                }
+
+                if (onProgress && ((usedInodesSeen & (kProgressEvery - 1)) == 0)) {
+                    onProgress(usedInodesSeen, inodesInUse);
+                }
+
+                if (shouldCancel && shouldCancel()) {
+                    ext2fs_close_inode_scan(scan);
+                    return false;
+                }
+            }
+
+            ext2fs_close_inode_scan(scan);
+
+            if (onProgress) {
+                onProgress(inodesInUse, inodesInUse);
+            }
+
+            return true;
+        }
+
+    } // namespace
+
+    struct DirCallbackContext {
+        ext2_filsys fs = nullptr;
+        Ext4StreamState& stream;
+        const std::vector<InodeStatsEntry>& inodeStats;
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk;
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk;
+        const ScannerHelper::CancelCallback& shouldCancel;
+        bool cancelled = false;
+        bool failed = false;
+    };
+
+    bool Ext4StreamState::flush(const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                                const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk) {
+        if (!records.empty()) {
+            std::vector<FileRecord> fileRecordChunk = std::move(records);
+            records.clear();
+            records.reserve(kRecordsPerIpcChunk);
+
             if (!onFileRecordChunk(fileRecordChunk)) {
-                // TODO: scan aborted by receiver
-                std::cerr << "scan aborted by receiver\n";
+                std::cerr << "[Ext4ScannerEngine] scan aborted by file record receiver\n";
                 return false;
             }
-            db.records.clear();
         }
 
-        // Flush remaining string pool records
-        if (!db.stringPool.empty()) {
-            // Copy string pool chunk, so we can clear it after sending
-            std::vector<char> stringPoolChunk = db.stringPool;
+        if (!stringPool.empty()) {
+            std::vector<char> stringPoolChunk = std::move(stringPool);
+
+            totalStringPoolLength += static_cast<uint32_t>(stringPoolChunk.size());
+
+            stringPool.clear();
+            stringPool.reserve(kMaxIpcBufferSizeBytes);
+
             if (!onStringPoolChunk(stringPoolChunk)) {
-                // TODO: scan aborted by receiver
-                std::cerr << "scan aborted by receiver\n";
+                std::cerr << "[Ext4ScannerEngine] scan aborted by string pool receiver\n";
                 return false;
             }
-            db.stringPool.clear();
         }
-
-        // Report completion
-        if (onProgress) {
-            onProgress(inodesInUse, inodesInUse);
-        }
-
-        // TODO FOR SHANE IN FUTURE:
-        // Currently, the Ext4ScannerEngine builds both a vector of file stats,
-        // and a vector of FileRecords which have the name only.
-        //
-        // At the end, `db.resolveParentPointers();` and `db.populateStatsIntoRecords();`
-        // resolve the parent pointers and populate stats into the FileRecords respectively.
-        // The implementations of these functions have not been copied into the project yet.
-        //
-        // Ideally we want this to work similar as possible to the NTFS implementation:
-        // - Try to complete FileRecords early if possible
-        // - Once we have filled a buffer of complete FileRecords, push them over the socket
-        // - Then clear the buffer
-        //
-        // If it can't be done, then we will have to wait until the end to send all records
-        // at once like we did previously.
-        //
-        // Furthermore, Ext4Database currently has an `add()` function in Ext4ScannerEngine.h
-        // which is currently not used - it was simply copied from the NtfsDatabase
-        // and should be either used if possible or just removed if not needed.
 
         return true;
     }
 
-    // We call this once after the scan is completely finished
-    void Ext4Database::resolveParentPointers() {
-        std::cerr << "Resolving parent pointers..." << std::endl;
+    bool Ext4StreamState::addRecord(uint32_t inode,
+                                    uint32_t parentInode,
+                                    std::string_view name,
+                                    const FileStats& stats,
+                                    const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                                    const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk) {
+        if (name.size() > std::numeric_limits<uint16_t>::max()) {
+            return true;
+        }
 
-        // Convert parent inode index to internal index
-        for (size_t i = 0; i < records.size(); ++i) {
-            uint64_t parentInode = tempParentInodes[i]; // Look up from parallel vector
-
-            // If parent inode is the root inode, mark as root
-            if (parentInode == EXT2_ROOT_INO) {
-                records[i].parentRecordIdx = 0xFFFFFFFF;
-                continue;
-            }
-
-            auto it = inodeToRecordIdx.find(parentInode);
-            if (it != inodeToRecordIdx.end()) {
-                records[i].parentRecordIdx = it->second;
-            } else {
-                // If parent isn't in our DB, mark as root
-                records[i].parentRecordIdx = 0xFFFFFFFF;
+        if (records.size() >= kRecordsPerIpcChunk ||
+            stringPool.size() + name.size() >= kMaxIpcBufferSizeBytes) {
+            if (!flush(onFileRecordChunk, onStringPoolChunk)) {
+                return false;
             }
         }
 
-        // Clean up parent inodes temporary data
-        tempParentInodes.clear();
-        tempParentInodes.shrink_to_fit();
+        FileRecord record{};
+        record.fsIndex = inode;
+        record.parentFsIndex = parentInode;
+        record.parentRecordIdx = kInvalidRecordIndex;
+        record.size = stats.size;
+        record.modificationTime = stats.modificationTime;
+        record.nameOffset = totalStringPoolLength + static_cast<uint32_t>(stringPool.size());
+        record.nameLen = static_cast<uint16_t>(name.size());
+        record.flags = stats.flags;
+
+        records.push_back(record);
+        stringPool.insert(stringPool.end(), name.begin(), name.end());
+
+        return true;
     }
 
-    void Ext4Database::populateStatsIntoRecords() {
-        std::cerr << "Populating stats into records..." << std::endl;
+    int dirCallback(ext2_ino_t dir_ino, int entry_flags, struct ext2_dir_entry *dirent,
+                    int offset, int blocksize, char *buf, void *priv_data) {
+        Q_UNUSED(entry_flags);
+        Q_UNUSED(offset);
+        Q_UNUSED(blocksize);
+        Q_UNUSED(buf);
 
-        for (auto& it : inodeToRecordIdx) {
-            FileRecord& record = records[it.second];
+        auto* ctx = static_cast<DirCallbackContext*>(priv_data);
 
-            auto statsIt = inodeToFileStats.find(it.first);
-            if (statsIt == inodeToFileStats.end()) {
-                continue;
-            }
-
-            const FileStats& stats = statsIt->second;
-            record.size = stats.size;
-            record.modificationTime = stats.modificationTime;
-            record.flags = stats.flags;
+        if (!ctx || ctx->failed || ctx->cancelled) {
+            return 1;
         }
 
-        // Clean up remaining temporary data
-        // The memory is freed, and the GUI never even sees it.
-        inodeToRecordIdx.clear();
-        inodeToFileStats.clear();
+        if (ctx->shouldCancel && ctx->shouldCancel()) {
+            ctx->cancelled = true;
+            return 1;
+        }
+
+        // Ignore invalid entries or empty inodes
+        if (dirent->inode == 0) {
+            return 0;
+        }
+
+        // dirent->name_len is sometimes encoded with file type info in modern EXT4,
+        // so we mask it with 0xFF to get the actual length.
+        const uint16_t len = dirent->name_len & 0xFF;
+        if (len == 0) {
+            return 0;
+        }
+
+        // Ignore '.' and '..'
+        if (len == 1 && dirent->name[0] == '.') {
+            return 0;
+        }
+        if (len == 2 && dirent->name[0] == '.' && dirent->name[1] == '.') {
+            return 0;
+        }
+
+        const auto* stats = findStatsByInode(ctx->inodeStats, dirent->inode);
+        if (!stats) {
+            return 0;
+        }
+
+        const std::string_view name(dirent->name, len);
+
+        if (!ctx->stream.addRecord(static_cast<uint32_t>(dirent->inode),
+                                   static_cast<uint32_t>(dir_ino),
+                                   name,
+                                   *stats,
+                                   ctx->onFileRecordChunk,
+                                   ctx->onStringPoolChunk)) {
+            ctx->failed = true;
+            return 1;
+        }
+
+        return 0;
     }
-}
+
+    bool scanDevice(const QString& devicePath,
+                    const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                    const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                    const ScannerHelper::ErrorCallback& onError,
+                    const ScannerHelper::CancelCallback& shouldCancel,
+                    const ScannerHelper::ProgressCallback& onProgress) {
+        ScopedTimer totalTimer("[Ext4ScannerEngine] total ext4 scan");
+
+        ext2_filsys fs = nullptr;
+        const std::string devicePathStd = devicePath.toStdString();
+
+        errcode_t retval = ext2fs_open(devicePathStd.c_str(), 0, 0, 0, unix_io_manager, &fs);
+        if (retval) {
+            reportError(onError, makeExt2Error("ext2fs_open failed", retval));
+            return false;
+        }
+
+        const uint32_t totalInodes = fs->super->s_inodes_count;
+        const uint32_t freeInodes  = fs->super->s_free_inodes_count;
+        const uint32_t inodesInUse = (freeInodes <= totalInodes) ? (totalInodes - freeInodes) : totalInodes;
+
+        std::cerr << "[Ext4ScannerEngine] totalInodes=" << totalInodes
+                  << " freeInodes=" << freeInodes
+                  << " estimatedInodesInUse=" << inodesInUse
+                  << "\n";
+
+        std::vector<InodeStatsEntry> inodeStats;
+        std::vector<uint32_t> directoryInodes;
+
+        inodeStats.reserve(static_cast<size_t>(std::min<uint32_t>(inodesInUse, 1'000'000)));
+        directoryInodes.reserve(65536);
+
+        if (!collectInodeStats(fs,
+                               inodeStats,
+                               directoryInodes,
+                               inodesInUse,
+                               onError,
+                               shouldCancel,
+                               onProgress)) {
+            ext2fs_close(fs);
+            return false;
+        }
+
+        {
+            ScopedTimer timer("[Ext4ScannerEngine] inode stats sort");
+
+            if (!std::is_sorted(inodeStats.begin(),
+                    inodeStats.end(),
+                    [](const InodeStatsEntry& lhs, const InodeStatsEntry& rhs) {
+                        return lhs.inode < rhs.inode;
+                    })) {
+                std::sort(inodeStats.begin(),
+                          inodeStats.end(),
+                          [](const InodeStatsEntry& lhs, const InodeStatsEntry& rhs) {
+                              return lhs.inode < rhs.inode;
+                          });
+            }
+        }
+
+        Ext4StreamState stream{};
+        stream.records.reserve(Ext4StreamState::kRecordsPerIpcChunk);
+        stream.stringPool.reserve(Ext4StreamState::kMaxIpcBufferSizeBytes);
+
+        {
+            ScopedTimer timer("[Ext4ScannerEngine] directory entry streaming");
+
+            const FileStats* rootStats = findStatsByInode(inodeStats, EXT2_ROOT_INO);
+            if (rootStats) {
+                if (!stream.addRecord(EXT2_ROOT_INO,
+                                      EXT2_ROOT_INO,
+                                      std::string_view{},
+                                      *rootStats,
+                                      onFileRecordChunk,
+                                      onStringPoolChunk)) {
+                    ext2fs_close(fs);
+                    return false;
+                }
+            }
+
+            DirCallbackContext ctx{
+                fs,
+                stream,
+                inodeStats,
+                onFileRecordChunk,
+                onStringPoolChunk,
+                shouldCancel
+            };
+
+            uint64_t directoriesScanned = 0;
+
+            for (const uint32_t dirInode : directoryInodes) {
+                if (shouldCancel && shouldCancel()) {
+                    ext2fs_close(fs);
+                    return false;
+                }
+
+                retval = ext2fs_dir_iterate2(fs,
+                                             dirInode,
+                                             0,
+                                             nullptr,
+                                             dirCallback,
+                                             &ctx);
+
+                if (ctx.cancelled) {
+                    ext2fs_close(fs);
+                    return false;
+                }
+
+                if (ctx.failed) {
+                    ext2fs_close(fs);
+                    return false;
+                }
+
+                if (retval) {
+                    // Some directories may be unreadable/corrupt. Report it, but continue.
+                    std::cerr << "[Ext4ScannerEngine] ext2fs_dir_iterate2 failed for inode="
+                              << dirInode
+                              << ": "
+                              << error_message(retval)
+                              << "\n";
+                }
+
+                ++directoriesScanned;
+
+                if (onProgress && ((directoriesScanned & (kProgressEvery - 1)) == 0)) {
+                    onProgress(directoriesScanned, directoryInodes.size());
+                }
+            }
+        }
+
+        if (!stream.flush(onFileRecordChunk, onStringPoolChunk)) {
+            ext2fs_close(fs);
+            return false;
+        }
+
+        ext2fs_close(fs);
+
+        std::cerr << "[Ext4ScannerEngine] emitted stringPoolBytes="
+                  << stream.totalStringPoolLength
+                  << " inodeStatsCount="
+                  << inodeStats.size()
+                  << " directoryCount="
+                  << directoryInodes.size()
+                  << "\n";
+
+        if (onProgress) {
+            onProgress(directoryInodes.size(), directoryInodes.size());
+        }
+
+        return true;
+    }
+
+} // namespace Ext4ScannerEngine

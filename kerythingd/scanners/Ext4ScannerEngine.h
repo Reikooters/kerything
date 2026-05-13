@@ -4,12 +4,8 @@
 #ifndef KERYTHINGD_EXT4SCANNERENGINE_H
 #define KERYTHINGD_EXT4SCANNERENGINE_H
 
-#include <optional>
-#include <unordered_map>
 #include <vector>
 #include <iostream>
-#include <string>
-#include <functional>
 #include <ext2fs/ext2fs.h>
 
 #include "Protocol.h"
@@ -18,26 +14,25 @@
 namespace Ext4ScannerEngine {
 
     struct FileStats {
-        uint64_t size;
-        uint64_t modificationTime;
-        uint8_t flags;            // bit 0 = isDir, bit 1 = isSymlink
-        // uint8_t isDir : 1;
-        // uint8_t isSymlink : 1;
-        // uint8_t reserved : 6;
+        uint64_t size = 0;
+        uint64_t modificationTime = 0;
+        uint8_t flags = 0;            // bit 0 = isDir, bit 1 = isSymlink
     };
 
-    struct Ext4Database {
+    struct InodeStatsEntry {
+        uint32_t inode = 0;
+        FileStats stats{};
+    };
+
+    struct DirectoryEntry {
+        uint32_t inode = 0;
+    };
+
+    struct Ext4StreamState {
         std::vector<FileRecord> records;
         std::vector<char> stringPool;
-        uint32_t totalStringPoolLength = 0;
 
-        // TEMPORARY (Only used during scan/setup)
-        // We keep this here so add() can fill it, then we clear it in resolveParentPointers()
-        std::unordered_map<uint32_t, uint32_t> inodeToRecordIdx;
-        // Temporary storage for inodes index
-        std::vector<uint32_t> tempParentInodes;
-        // Temporary storage for inode stats
-        std::unordered_map<uint32_t, FileStats> inodeToFileStats;
+        uint32_t totalStringPoolLength = 0;
 
         // Average filename length estimate
         static constexpr uint32_t kFileNameLengthHeuristic = 20;
@@ -51,9 +46,15 @@ namespace Ext4ScannerEngine {
         // Calculate how many full records fit in that byte limit
         static constexpr uint32_t kRecordsPerIpcChunk = kMaxIpcBufferSizeBytes / sizeof(FileRecord);
 
-        // We call these once after the inode scan is completely finished
-        void resolveParentPointers();
-        void populateStatsIntoRecords();
+        bool flush(const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                   const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+
+        bool addRecord(uint32_t inode,
+                       uint32_t parentInode,
+                       std::string_view name,
+                       const FileStats& stats,
+                       const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                       const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
     };
 
     /**
@@ -84,15 +85,15 @@ namespace Ext4ScannerEngine {
 
     /**
      * Callback function invoked for each directory entry during a directory iteration in the Ext4 filesystem.
-     * This function processes directory entries, updates the inode-to-record mappings, and populates file records.
+     * This function processes directory entries and streams completed FileRecord objects.
      *
      * @param dir_ino The inode number of the directory being scanned.
-     * @param entry_flags Flags providing additional information about the directory entry (e.g., error conditions, entry type).
+     * @param entry_flags Flags providing additional information about the directory entry.
      * @param dirent A pointer to the `ext2_dir_entry` structure that represents the directory entry.
      * @param offset The byte offset of the directory entry within the directory block.
      * @param blocksize The size of the directory block in bytes.
      * @param buf A pointer to the data buffer containing the raw directory block data.
-     * @param priv_data A void pointer to user-defined private data (used to pass the scanning context, such as `ScanContext`).
+     * @param priv_data A void pointer to user-defined private data.
      * @return Returns 0 on successful processing of the entry. Non-zero values may indicate processing errors.
      */
     int dirCallback(ext2_ino_t dir_ino, int entry_flags, ext2_dir_entry *dirent, int offset, int blocksize, char *buf, void *priv_data);

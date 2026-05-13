@@ -16,6 +16,8 @@
 #include <QFile>
 
 #include "FileRecord.h"
+#include "ScopedTimer.h"
+#include "scanners/Ext4ScannerEngine.h"
 #include "scanners/NtfsScannerEngine.h"
 
 namespace ScannerHelper {
@@ -114,6 +116,13 @@ bool scanDevice(const QString& devicePath,
 
     if (fsType == "ntfs") {
         return NtfsScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
+    }
+    if (fsType == "ext4") {
+        {
+            ScopedTimer totalTimer("total ext4 scan");
+
+            return Ext4ScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
+        }
     }
     else {
         return false;

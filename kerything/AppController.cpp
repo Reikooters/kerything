@@ -80,6 +80,26 @@ bool AppController::start() {
 
                     std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
                 }
+
+                {
+                    // TODO: demo only - send scan request on ready
+                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/2d601c05-b2d1-40b4-a5a1-effd77f566b2"), QStringLiteral("ext4"));
+
+                    quint32 requestId;
+                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
+
+                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
+                }
+
+                {
+                    // TODO: demo only - send scan request on ready
+                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/5d774562-48bd-45c6-858e-f8a5a20d72d5"), QStringLiteral("ext4"));
+
+                    quint32 requestId;
+                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
+
+                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
+                }
             });
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,

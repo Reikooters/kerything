@@ -26,6 +26,15 @@ find_package(Qt6 REQUIRED COMPONENTS
 find_package(ECM REQUIRED NO_MODULE)
 set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 
+# Find PkgConfig
+find_package(PkgConfig REQUIRED)
+
+# Check for both ext2fs and com_err
+pkg_check_modules(EXT2FS REQUIRED ext2fs com_err)
+
+# libblkid (util-linux) for device inventory in the daemon
+pkg_check_modules(BLKID REQUIRED blkid)
+
 add_executable(kerything
         kerything/main.cpp
         kerything/AppController.cpp
@@ -60,6 +69,8 @@ add_executable(kerythingd
         kerythingd/Server.cpp
         kerythingd/Server.h
         kerythingd/ThrottledProgressReporter.h
+        kerythingd/scanners/Ext4ScannerEngine.cpp
+        kerythingd/scanners/Ext4ScannerEngine.h
         kerythingd/scanners/NtfsScannerEngine.cpp
         kerythingd/scanners/NtfsScannerEngine.h
         shared/FileRecord.h
@@ -83,10 +94,16 @@ target_link_libraries(kerythingd
         PRIVATE
         Qt6::Core
         Qt6::Network
+        ${BLKID_LIBRARIES}
+        ${EXT2FS_LIBRARIES} # Lib for parsing EXT4 inodes
 )
 
 target_include_directories(kerything PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
-target_include_directories(kerythingd PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
+target_include_directories(kerythingd
+        PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/shared"
+        ${EXT2FS_INCLUDE_DIRS}
+)
 
 include(KDEInstallDirs)
 include(ECMInstallIcons)

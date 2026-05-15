@@ -62,6 +62,14 @@ bool AppController::start() {
                 requestRefreshAllWindows();
 
                 {
+                    // TODO: demo only - list known devices
+                    quint32 requestId;
+                    daemonClient_->sendRequest(Protocol::MessageType::ListKnownDevices, QByteArray{}, &requestId);
+
+                    std::cout << "GUI: Demo ListKnownDevices request sent requestId=" << requestId << "\n";
+                }
+
+                {
                     // TODO: demo only - send scan request on ready
                     const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/89a0622c-75e2-427c-9766-b2fd2a2e69d8"), QStringLiteral("ntfs"));
 
@@ -211,6 +219,27 @@ bool AppController::start() {
 
                 requestRefreshAllWindows();
             });
+
+    connect(daemonClient_, &DaemonClient::knownDevices,
+        this, [this](quint32 requestId, const std::vector<BlockDevice>& blockDevices) {
+            std::cout << "GUI: received known devices requestId=" << requestId
+                          << " size=" << blockDevices.size() << "\n";
+
+            for (const auto& blockDevice : blockDevices) {
+                //indexController_->addDevice(blockDevice.devNode, blockDevice.fsType, blockDevice.label, requestId);
+
+                std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
+                          << " fsType=" << blockDevice.fsType.toStdString()
+                          << " label=" << blockDevice.label.toStdString()
+                          << " uuid=" << blockDevice.uuid.toStdString()
+                          << " partuuid=" << blockDevice.partuuid.toStdString()
+                          << " mounted=" << (blockDevice.mounted ? "true" : "false")
+                          << " primaryMountPoint=" << blockDevice.primaryMountPoint.toStdString()
+                          << "\n";
+            }
+
+            // requestRefreshAllWindows();
+        });
 
     // Primary instance opens its first window on startup.
     openNewWindow();

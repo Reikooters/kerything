@@ -5,6 +5,8 @@
 
 #include "ScannerWorker.h"
 #include "FileRecord.h"
+#include "BlockDeviceHelper.h"
+#include "BlockDevice.h"
 
 #include <iostream>
 #include <QDataStream>
@@ -125,6 +127,10 @@ void ClientConnection::handleFrame(const Protocol::MessageHeader& header, const 
             handleCancelRequest(header.requestId);
             break;
 
+        case Protocol::MessageType::ListKnownDevices:
+            handleListKnownDevices(header.requestId);
+            break;
+
         default:
             sendError(header.requestId, QStringLiteral("unknown request type"));
             break;
@@ -168,6 +174,12 @@ void ClientConnection::handleCancelRequest(quint32 requestId)
     }
 
     it.value()->cancelled.store(true, std::memory_order_relaxed);
+}
+
+void ClientConnection::handleListKnownDevices(quint32 requestId)
+{
+    const auto devices = BlockDeviceHelper::listKnownDevices();
+    sendKnownDevices(requestId, devices);
 }
 
 void ClientConnection::sendReady()
@@ -265,6 +277,32 @@ void ClientConnection::sendScanCancelled(quint32 requestId)
     out << QStringLiteral("cancelled");
 
     sendFrame(Protocol::MessageType::ScanCancelled, requestId, payload);
+}
+
+void ClientConnection::sendKnownDevices(
+    quint32 requestId,
+    const std::vector<BlockDevice>& devices)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODevice::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << static_cast<quint32>(devices.size());
+
+    for (const auto& device : devices) {
+        out << device.deviceId
+            << device.devNode
+            << device.fsType
+            << device.uuid
+            << device.partuuid
+            << device.label
+            << device.mounted
+            << device.mountPoints
+            << device.primaryMountPoint;
+    }
+
+    sendFrame(Protocol::MessageType::KnownDevices, requestId, payload);
 }
 
 void ClientConnection::sendError(quint32 requestId, const QString& errorText)

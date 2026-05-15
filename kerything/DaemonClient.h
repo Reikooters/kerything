@@ -12,6 +12,7 @@
 #include <QQueue>
 #include <QTimer>
 
+#include "BlockDevice.h"
 #include "FileRecord.h"
 
 class AppController;
@@ -43,6 +44,7 @@ Q_SIGNALS:
     void scanCompleted(quint32 requestId);
     void scanCancelled(quint32 requestId);
     void scanFailed(quint32 requestId, const QString& errorText);
+    void knownDevices(quint32 requestId, const std::vector<BlockDevice>& blockDevices);
 
 private Q_SLOTS:
     void tryConnect();
@@ -71,6 +73,7 @@ private:
     void handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleKnownDevices(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
 
     AppController* controller_ = nullptr;

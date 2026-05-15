@@ -302,6 +302,10 @@ void DaemonClient::handleMessage(const Protocol::MessageHeader& header, const QB
             handleScanCancelled(header, payload);
             break;
 
+        case Protocol::MessageType::KnownDevices:
+            handleKnownDevices(header, payload);
+            break;
+
         case Protocol::MessageType::Error:
             handleErrorMessage(header, payload);
             break;
@@ -473,6 +477,49 @@ void DaemonClient::handleScanCancelled(const Protocol::MessageHeader& header, co
 
     pendingRequests_.remove(header.requestId);
     Q_EMIT scanCancelled(header.requestId);
+}
+
+void DaemonClient::handleKnownDevices(const Protocol::MessageHeader& header, const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    quint32 count = 0;
+    in >> count;
+
+    if (in.status() != QDataStream::Ok) {
+        std::cerr << "Malformed KnownDevices payload header\n";
+        return;
+    }
+
+    std::vector<BlockDevice> blockDevices;
+    blockDevices.reserve(count);
+
+    if (count > (payload.size() - sizeof(quint32)) / sizeof(BlockDevice)) {
+        std::cerr << "Invalid KnownDevices payload size\n";
+        return;
+    }
+
+    for (quint32 i = 0; i < count; ++i) {
+        BlockDevice blockDevice{};
+        in >> blockDevice.deviceId
+           >> blockDevice.devNode
+           >> blockDevice.fsType
+           >> blockDevice.uuid
+           >> blockDevice.partuuid
+           >> blockDevice.label
+           >> blockDevice.mounted
+           >> blockDevice.mountPoints
+           >> blockDevice.primaryMountPoint;
+
+        blockDevices.emplace_back(std::move(blockDevice));
+    }
+
+    std::cout << "Received block devices requestId=" << header.requestId
+              << " count=" << blockDevices.size() << "\n";
+
+    Q_EMIT knownDevices(header.requestId, blockDevices);
 }
 
 void DaemonClient::handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload)

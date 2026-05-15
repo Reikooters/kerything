@@ -51,6 +51,7 @@ add_executable(kerything
         kerything/MainWindow.h
         kerything/SingleInstanceServer.cpp
         kerything/SingleInstanceServer.h
+        shared/BlockDevice.h
         shared/FileRecord.h
         shared/Protocol.h
         shared/SocketFramer.cpp
@@ -59,6 +60,8 @@ add_executable(kerything
 
 add_executable(kerythingd
         kerythingd/main.cpp
+        kerythingd/BlockDeviceHelper.cpp
+        kerythingd/BlockDeviceHelper.h
         kerythingd/ClientConnection.cpp
         kerythingd/ClientConnection.h
         kerythingd/ScanJob.h
@@ -73,6 +76,7 @@ add_executable(kerythingd
         kerythingd/scanners/Ext4ScannerEngine.h
         kerythingd/scanners/NtfsScannerEngine.cpp
         kerythingd/scanners/NtfsScannerEngine.h
+        shared/BlockDevice.h
         shared/FileRecord.h
         shared/Protocol.h
         shared/SocketFramer.cpp

@@ -25,7 +25,9 @@ enum class MessageType : quint16 {
     ScanIndexResultStringPoolChunk = 7,
     ScanCompleted = 8,
     ScanCancelled = 9,
-    Error = 10
+    ListKnownDevices = 10,
+    KnownDevices = 11,
+    Error = 99
 };
 
 struct MessageHeader {

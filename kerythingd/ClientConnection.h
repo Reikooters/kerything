@@ -9,6 +9,7 @@
 #include "Protocol.h"
 #include "ScannerWorker.h"
 #include "FileRecord.h"
+#include "BlockDeviceHelper.h"
 
 #include <QObject>
 #include <QPointer>
@@ -31,6 +32,7 @@ public:
     bool sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void sendScanCompleted(quint32 requestId);
     void sendScanCancelled(quint32 requestId);
+    void sendKnownDevices(quint32 requestId, const std::vector<BlockDevice>& devices);
     void sendError(quint32 requestId, const QString& errorText);
 
 Q_SIGNALS:
@@ -44,6 +46,7 @@ private:
     void handleFrame(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanDevice(quint32 requestId, const QByteArray& payload);
     void handleCancelRequest(quint32 requestId);
+    void handleListKnownDevices(quint32 requestId);
 
     bool sendFrame(Protocol::MessageType type, quint32 requestId, const QByteArray& payload) const;
     QByteArray encodeFrame(Protocol::MessageType type, quint32 requestId, const QByteArray& payload) const;

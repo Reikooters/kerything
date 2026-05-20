@@ -14,7 +14,6 @@ public:
     static std::vector<BlockDevice> listKnownDevices();
 
     static std::optional<BlockDevice> findKnownDeviceById(const QString& deviceId);
-    static std::optional<QString> resolveDeviceRefToDevNode(const QString& deviceRef, QString* fsTypeOut = nullptr);
 };
 
 #endif // KERYTHINGD_BLOCKDEVICEHELPER_H

@@ -49,6 +49,8 @@ add_executable(kerything
         kerything/IndexController.h
         kerything/MainWindow.cpp
         kerything/MainWindow.h
+        kerything/Preferences.cpp
+        kerything/Preferences.h
         kerything/SingleInstanceServer.cpp
         kerything/SingleInstanceServer.h
         shared/BlockDevice.h

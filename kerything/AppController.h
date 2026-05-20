@@ -7,9 +7,11 @@
 #include <QObject>
 #include <QPointer>
 #include <QList>
+#include <QHash>
 
 #include "DaemonClient.h"
 #include "IndexController.h"
+#include "Preferences.h"
 
 class QApplication;
 class MainWindow;
@@ -35,11 +37,15 @@ private Q_SLOTS:
 
 private:
     void cleanupWindows();
+    void requestKnownDevices();
+    void scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
     DaemonClient* daemonClient_ = nullptr;
     IndexController* indexController_ = nullptr;
+    Preferences preferences_;
+    QHash<quint32, QString> scanRequestDeviceIds_;
     QList<QPointer<MainWindow>> windows_;
 };
 

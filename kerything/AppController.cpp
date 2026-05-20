@@ -28,6 +28,39 @@ AppController::AppController(QApplication& app, QObject* parent)
             this, &AppController::onPrimaryRequestedCommand);
 }
 
+/**
+ * Starts the main application controller.
+ *
+ * This function initializes and manages the main components of the application, handling interactions
+ * with the primary instance, creating services, and establishing connections for UI and backend updates.
+ *
+ * @return True if the application starts successfully, otherwise false if it's intended to exit due to
+ *         being a secondary instance or other issues.
+ *
+ * Behavior:
+ * - If the current process is not the primary instance, it tries to notify the primary instance. If
+ *   successful, the function exits with false. If the notification fails, the process attempts to
+ *   become the primary instance.
+ * - Initializes the `IndexController` for managing device indexing and file-related operations.
+ * - Establishes connections with `IndexController` to handle device removal and refresh the UI.
+ * - Initializes the `DaemonClient` for handling backend operations and connects signals for:
+ *     - Backend availability/unavailability updates.
+ *     - Backend readiness and known device requests.
+ *     - File scan initiation, progress, and completion events.
+ * - Handles scan lifecycle events:
+ *     - Tracks scan progress and updates the UI with status messages.
+ *     - Logs file record and string pool data chunks received from the backend.
+ *     - On scan completion, performs post-scan operations such as building indexes, updating preferences,
+ *       and marking devices as indexed.
+ *
+ * Notes:
+ * - UI refresh methods (`requestRefreshAllWindows`, `requestWindowStatusMessage`) are invoked to update
+ *   visual components.
+ * - Multiple connections and lambda functions are used to organize responses to backend signals for
+ *   processing and indexing devices, as well as resolving scanning operations.
+ * - Temporary demo code and sample request payloads are commented out but illustrate intended use cases
+ *   for scanning devices.
+ */
 bool AppController::start() {
     // If this process is not primary, try to notify the primary instance and exit.
     if (!instanceServer_->isPrimary()) {
@@ -60,54 +93,7 @@ bool AppController::start() {
             this, [this]() {
                 // Update UI: daemon is ready
                 requestRefreshAllWindows();
-
-                {
-                    // TODO: demo only - list known devices
-                    quint32 requestId;
-                    daemonClient_->sendRequest(Protocol::MessageType::ListKnownDevices, QByteArray{}, &requestId);
-
-                    std::cout << "GUI: Demo ListKnownDevices request sent requestId=" << requestId << "\n";
-                }
-
-                {
-                    // TODO: demo only - send scan request on ready
-                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/89a0622c-75e2-427c-9766-b2fd2a2e69d8"), QStringLiteral("ntfs"));
-
-                    quint32 requestId;
-                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
-
-                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
-                }
-
-                {
-                    // TODO: demo only - send scan request on ready
-                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/070bfe6c-f951-4b3c-9ec1-f6e54bc485a5"), QStringLiteral("ntfs"));
-
-                    quint32 requestId;
-                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
-
-                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
-                }
-
-                {
-                    // TODO: demo only - send scan request on ready
-                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/2d601c05-b2d1-40b4-a5a1-effd77f566b2"), QStringLiteral("ext4"));
-
-                    quint32 requestId;
-                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
-
-                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
-                }
-
-                {
-                    // TODO: demo only - send scan request on ready
-                    const QByteArray payload = Protocol::makeScanDevicePayload(QStringLiteral("/dev/disk/by-partuuid/5d774562-48bd-45c6-858e-f8a5a20d72d5"), QStringLiteral("ext4"));
-
-                    quint32 requestId;
-                    daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId);
-
-                    std::cout << "GUI: Demo ScanDevice request sent requestId=" << requestId << "\n";
-                }
+                requestKnownDevices();
             });
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,
@@ -191,6 +177,12 @@ bool AppController::start() {
                 // Mark ready
                 indexController_->setReadyState(requestId, true);
 
+                // Mark device indexed in preferences so we persist the lastIndexedAt
+                if (scanRequestDeviceIds_.contains(requestId)) {
+                    preferences_.markDeviceIndexed(scanRequestDeviceIds_.value(requestId));
+                    scanRequestDeviceIds_.remove(requestId);
+                }
+
                 // Clean up the requestId as the scan has completed successfully
                 indexController_->removeRequestId(requestId);
 
@@ -200,6 +192,9 @@ bool AppController::start() {
     connect(daemonClient_, &DaemonClient::scanCancelled,
             this, [this](quint32 requestId) {
                 std::cout << "GUI: scan cancelled requestId=" << requestId << "\n";
+
+                // Clean up the requestId from the tracking list as the scan was cancelled.
+                scanRequestDeviceIds_.remove(requestId);
 
                 // Clean up the requestId and any device associated with it,
                 // as the scan was cancelled.
@@ -213,6 +208,9 @@ bool AppController::start() {
                 std::cerr << "GUI: scan failed requestId=" << requestId
                           << " " << errorText.toStdString() << "\n";
 
+                // Clean up the requestId from the tracking list as the scan failed.
+                scanRequestDeviceIds_.remove(requestId);
+
                 // Clean up the requestId and any device associated with it,
                 // as the scan failed.
                 indexController_->removeDeviceByRequestId(requestId);
@@ -225,20 +223,35 @@ bool AppController::start() {
             std::cout << "GUI: received known devices requestId=" << requestId
                           << " size=" << blockDevices.size() << "\n";
 
-            for (const auto& blockDevice : blockDevices) {
-                //indexController_->addDevice(blockDevice.devNode, blockDevice.fsType, blockDevice.label, requestId);
+            preferences_.updateKnownDevices(blockDevices);
 
+            // Temporary first-run behavior until the device picker exists:
+            // enable mounted devices once, then persist that choice.
+            if (!preferences_.initialDeviceSelectionCompleted()) {
+                for (const BlockDevice& blockDevice : blockDevices) {
+                    if (blockDevice.mounted) {
+                        preferences_.setDeviceEnabled(blockDevice, true);
+                    }
+                }
+
+                preferences_.setInitialDeviceSelectionCompleted(true);
+            }
+
+            for (const auto& blockDevice : blockDevices) {
                 std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
                           << " fsType=" << blockDevice.fsType.toStdString()
                           << " label=" << blockDevice.label.toStdString()
                           << " uuid=" << blockDevice.uuid.toStdString()
                           << " partuuid=" << blockDevice.partuuid.toStdString()
+                          << " deviceId=" << blockDevice.deviceId.toStdString()
                           << " mounted=" << (blockDevice.mounted ? "true" : "false")
                           << " primaryMountPoint=" << blockDevice.primaryMountPoint.toStdString()
+                          << " enabled=" << (preferences_.isDeviceEnabled(blockDevice.deviceId) ? "true" : "false")
                           << "\n";
             }
 
-            // requestRefreshAllWindows();
+            scanEnabledKnownDevices(blockDevices);
+            requestRefreshAllWindows();
         });
 
     // Primary instance opens its first window on startup.
@@ -333,5 +346,57 @@ void AppController::cleanupWindows() {
         } else {
             ++it;
         }
+    }
+}
+
+void AppController::requestKnownDevices() {
+    if (!daemonClient_ || !daemonClient_->isReady()) {
+        return;
+    }
+
+    quint32 requestId = 0;
+    if (!daemonClient_->sendRequest(Protocol::MessageType::ListKnownDevices, QByteArray{}, &requestId)) {
+        std::cerr << "GUI: failed to send ListKnownDevices request\n";
+        return;
+    }
+
+    std::cout << "GUI: ListKnownDevices request sent requestId=" << requestId << "\n";
+}
+
+void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices) {
+    if (!daemonClient_ || !daemonClient_->isReady()) {
+        return;
+    }
+
+    for (const BlockDevice& blockDevice : blockDevices) {
+        if (!preferences_.isDeviceEnabled(blockDevice.deviceId)) {
+            continue;
+        }
+
+        const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
+        if (!blockDevice.mounted && (!preference || !preference->scanWhenUnmounted)) {
+            std::cout << "GUI: skipping enabled device because it is unmounted and scanWhenUnmounted=false deviceId="
+                      << blockDevice.deviceId.toStdString()
+                      << "\n";
+            continue;
+        }
+
+        //const QByteArray payload = Protocol::makeScanDevicePayload(blockDevice.deviceId, blockDevice.fsType);
+        const QByteArray payload = Protocol::makeScanDevicePayload(blockDevice.devNode, blockDevice.fsType);
+
+        quint32 requestId = 0;
+        if (!daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId)) {
+            std::cerr << "GUI: failed to send ScanDevice request for deviceId="
+                      << blockDevice.deviceId.toStdString()
+                      << "\n";
+            continue;
+        }
+
+        scanRequestDeviceIds_.insert(requestId, blockDevice.deviceId);
+
+        std::cout << "GUI: ScanDevice request sent requestId=" << requestId
+                  << " deviceId=" << blockDevice.deviceId.toStdString()
+                  << " fsType=" << blockDevice.fsType.toStdString()
+                  << "\n";
     }
 }

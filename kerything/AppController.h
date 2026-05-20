@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QList>
 #include <QHash>
+#include <QSet>
 
 #include "DaemonClient.h"
 #include "IndexController.h"
@@ -40,13 +41,20 @@ private:
     void requestKnownDevices();
     void scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
+    QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
     DaemonClient* daemonClient_ = nullptr;
     IndexController* indexController_ = nullptr;
     Preferences preferences_;
+
+    // requestId -> stable deviceId
     QHash<quint32, QString> scanRequestDeviceIds_;
+
+    // stable deviceIds currently queued/scanning
+    QSet<QString> activeScanDeviceIds_;
+
     QList<QPointer<MainWindow>> windows_;
 };
 

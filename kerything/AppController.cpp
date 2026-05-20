@@ -98,6 +98,14 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,
             this, [this]() {
+                // Any in-flight daemon requests are no longer valid after disconnect.
+                for (const quint32 requestId : scanRequestDeviceIds_.keys()) {
+                    indexController_->removeDeviceByRequestId(requestId);
+                }
+
+                scanRequestDeviceIds_.clear();
+                activeScanDeviceIds_.clear();
+
                 // Update UI: backend not available
                 requestRefreshAllWindows();
             });
@@ -110,7 +118,13 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanStarted,
             this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
-                validateScanDeviceId(requestId, deviceId, "scanStarted");
+                const bool deviceIdMatches = validateScanDeviceId(requestId, deviceId, "scanStarted");
+
+                if (!deviceIdMatches) {
+                    std::cerr << "GUI: continuing scanStarted handling despite deviceId mismatch requestId="
+                              << requestId
+                              << "\n";
+                }
 
                 std::cout << "GUI: scan started requestId=" << requestId
                           << " deviceId=" << deviceId.toStdString()
@@ -194,7 +208,7 @@ bool AppController::start() {
                     preferences_.markDeviceIndexed(deviceId);
                 }
 
-                scanRequestDeviceIds_.remove(requestId);
+                takeTrackedScanDeviceId(requestId, deviceId);
 
                 // Clean up the requestId as the scan has completed successfully
                 indexController_->removeRequestId(requestId);
@@ -204,14 +218,15 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanCancelled,
             this, [this](quint32 requestId, const QString& deviceId) {
-                validateScanDeviceId(requestId, deviceId, "scanCancelled");
+                const bool deviceIdMatches = validateScanDeviceId(requestId, deviceId, "scanCancelled");
 
-                std::cout << "GUI: scan cancelled requestId=" << requestId
-                          << " deviceId=" << deviceId.toStdString()
-                          << "\n";
+                if (!deviceIdMatches) {
+                    std::cerr << "GUI: continuing scanCancelled cleanup despite deviceId mismatch requestId="
+                              << requestId
+                              << "\n";
+                }
 
-                // Clean up the requestId from the tracking list as the scan was cancelled.
-                scanRequestDeviceIds_.remove(requestId);
+                takeTrackedScanDeviceId(requestId, deviceId);
 
                 // Clean up the requestId and any device associated with it,
                 // as the scan was cancelled.
@@ -222,14 +237,12 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanFailed,
             this, [this](quint32 requestId, const QString& errorText) {
-                const QString expectedDeviceId = scanRequestDeviceIds_.value(requestId);
+                const QString deviceId = takeTrackedScanDeviceId(requestId);
 
                 std::cerr << "GUI: scan failed requestId=" << requestId
-                          << " deviceId=" << expectedDeviceId.toStdString()
-                          << " " << errorText.toStdString() << "\n";
-
-                // Clean up the requestId from the tracking list as the scan failed.
-                scanRequestDeviceIds_.remove(requestId);
+                          << " deviceId=" << deviceId.toStdString()
+                          << " " << errorText.toStdString()
+                          << "\n";
 
                 // Clean up the requestId and any device associated with it,
                 // as the scan failed.
@@ -393,6 +406,13 @@ void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& bloc
             continue;
         }
 
+        if (activeScanDeviceIds_.contains(blockDevice.deviceId)) {
+            std::cout << "GUI: skipping scan because device is already queued/scanning deviceId="
+                      << blockDevice.deviceId.toStdString()
+                      << "\n";
+            continue;
+        }
+
         const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
         if (!blockDevice.mounted && (!preference || !preference->scanWhenUnmounted)) {
             std::cout << "GUI: skipping enabled device because it is unmounted and scanWhenUnmounted=false deviceId="
@@ -412,6 +432,7 @@ void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& bloc
         }
 
         scanRequestDeviceIds_.insert(requestId, blockDevice.deviceId);
+        activeScanDeviceIds_.insert(blockDevice.deviceId);
 
         std::cout << "GUI: ScanDevice request sent requestId=" << requestId
                   << " deviceId=" << blockDevice.deviceId.toStdString()
@@ -441,4 +462,18 @@ bool AppController::validateScanDeviceId(quint32 requestId, const QString& actua
     }
 
     return true;
+}
+
+QString AppController::takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId) {
+    QString deviceId = scanRequestDeviceIds_.take(requestId);
+
+    if (deviceId.isEmpty()) {
+        deviceId = fallbackDeviceId;
+    }
+
+    if (!deviceId.isEmpty()) {
+        activeScanDeviceIds_.remove(deviceId);
+    }
+
+    return deviceId;
 }

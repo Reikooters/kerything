@@ -12,41 +12,42 @@ IndexController::IndexController(QObject* parent)
 {
 }
 
-const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 deviceId) const {
+const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 indexId) const {
     std::shared_lock lock(indexMutex_);
 
-    const auto it = indexByDeviceId_.find(deviceId);
-    if (it == indexByDeviceId_.end()) {
+    const auto it = indexByIndexId_.find(indexId);
+    if (it == indexByIndexId_.end()) {
         return nullptr;
     }
 
     return it->second.get();
 }
 
-quint64 IndexController::addDevice(const QString &devicePath, const QString &fsType, const QString &label, quint32 requestId) {
+quint64 IndexController::addDevice(const QString& deviceId, const QString& devNode, const QString& fsType, const QString& label, quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
-    // Check whether devicePath is valid
-    if (devicePath.isEmpty()) {
-        std::cerr << "IndexController: Empty device path provided for requestId=" << requestId << "\n";
+    // Check whether devNode is valid
+    if (devNode.isEmpty()) {
+        std::cerr << "IndexController: Empty devNode provided for requestId=" << requestId << "\n";
         return 0;
     }
 
-    // Check whether a DeviceIndex with the given devicePath already exists.
+    // Check whether a DeviceIndex with the given devNode already exists.
     // If so, update the existing DeviceIndex with the new information and clear
     // the file records and string pool.
-    const auto existingPathIt = deviceIdByDevicePath_.find(devicePath);
-    if (existingPathIt != deviceIdByDevicePath_.end()) {
-        const quint64 existingDeviceId = existingPathIt->second;
+    const auto existingDevNodeIt = indexIdByDevNode_.find(devNode);
+    if (existingDevNodeIt != indexIdByDevNode_.end()) {
+        const quint64 existingIndexId = existingDevNodeIt->second;
 
-        const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-        if (existingDeviceIndexIt != indexByDeviceId_.end()) {
-            deviceIdByRequestId_[requestId] = existingDeviceId;
+        const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+        if (existingDeviceIndexIt != indexByIndexId_.end()) {
+            indexIdByRequestId_[requestId] = existingIndexId;
 
             DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
             deviceIndex.fsType = fsType;
             deviceIndex.label = label;
-            deviceIndex.devicePath = devicePath;
+            deviceIndex.deviceId = deviceId;
+            deviceIndex.devNode = devNode;
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
@@ -54,100 +55,103 @@ quint64 IndexController::addDevice(const QString &devicePath, const QString &fsT
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
 
-            std::cout << "IndexController: Device already exists, so it was reset for path "
-                      << devicePath.toStdString()
-                      << " deviceId=" << existingDeviceId
+            std::cout << "IndexController: Device already exists, so it was reset for devNode="
+                      << devNode.toStdString()
+                      << " indexId=" << existingIndexId
                       << "\n";
             return 0;
         }
 
         // Stale path mapping: remove it and fall through to create a new device
-        deviceIdByDevicePath_.erase(existingPathIt);
+        indexIdByDevNode_.erase(existingDevNodeIt);
     }
 
-    quint64 deviceId = nextDeviceId_++;
+    quint64 indexId = nextIndexId_++;
 
     std::unique_ptr<DeviceIndex> deviceIndex = std::make_unique<DeviceIndex>();
-    deviceIndex->deviceId = deviceId;
+    deviceIndex->indexId = indexId;
     deviceIndex->fsType = fsType;
     deviceIndex->label = label;
-    deviceIndex->devicePath = devicePath;
+    deviceIndex->deviceId = deviceId;
+    deviceIndex->devNode = devNode;
 
-    indexByDeviceId_.emplace(deviceId, std::move(deviceIndex));
-    deviceIdByDevicePath_[devicePath] = deviceId;
-    deviceIdByRequestId_[requestId] = deviceId;
+    indexByIndexId_.emplace(indexId, std::move(deviceIndex));
+    indexIdByDevNode_[devNode] = indexId;
+    indexIdByRequestId_[requestId] = indexId;
 
-    std::cout << "IndexController: Added device " << devicePath.toStdString()
+    std::cout << "IndexController: Added device " << devNode.toStdString()
+              << " deviceId=" << deviceId.toStdString()
+              << " devNode=" << devNode.toStdString()
               << " fsType=" << fsType.toStdString()
-              << " deviceId=" << deviceId
+              << " indexId=" << indexId
               << " requestId=" << requestId << "\n";
 
-    return deviceId;
+    return indexId;
 }
 
-void IndexController::removeDeviceByDeviceId(quint64 deviceId) {
+void IndexController::removeDeviceByIndexId(quint64 indexId) {
     std::unique_lock lock(indexMutex_);
-    removeDeviceByDeviceIdUnlocked(deviceId);
+    removeDeviceByIndexIdUnlocked(indexId);
 }
 
-void IndexController::removeDeviceByDeviceIdUnlocked(quint64 deviceId) {
-    // Look up the owning entry in the deviceId -> DeviceIndex map.
+void IndexController::removeDeviceByIndexIdUnlocked(quint64 indexId) {
+    // Look up the owning entry in the indexId -> DeviceIndex map.
     // We use find() instead of operator[] so we don't accidentally create
-    // a new empty entry if the deviceId does not exist.
-    const auto deviceIt = indexByDeviceId_.find(deviceId);
-    if (deviceIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: removeDeviceByDeviceId: No device for deviceId=" << deviceId << "\n";
+    // a new empty entry if the indexId does not exist.
+    const auto deviceIt = indexByIndexId_.find(indexId);
+    if (deviceIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: removeDeviceByIndexId: No device for indexId=" << indexId << "\n";
         return;
     }
 
     // Capture the device path before removing the DeviceIndex object.
     // We need this to clean up the reverse lookup map as well.
-    const QString devicePath = deviceIt->second->devicePath;
+    const QString devicePath = deviceIt->second->devNode;
 
-    // Remove the devicePath -> deviceId mapping, but only if it still points
+    // Remove the devicePath -> indexId mapping, but only if it still points
     // to the same device we are removing.
-    const auto pathIt = deviceIdByDevicePath_.find(devicePath);
-    if (pathIt != deviceIdByDevicePath_.end() && pathIt->second == deviceId) {
-        deviceIdByDevicePath_.erase(pathIt);
+    const auto pathIt = indexIdByDevNode_.find(devicePath);
+    if (pathIt != indexIdByDevNode_.end() && pathIt->second == indexId) {
+        indexIdByDevNode_.erase(pathIt);
     }
 
-    // Remove any requestId -> deviceId entries that refer to this device.
+    // Remove any requestId -> indexId entries that refer to this device.
     // This keeps the request lookup table from holding stale references after
     // a cancellation or failed scan.
-    for (auto it = deviceIdByRequestId_.begin(); it != deviceIdByRequestId_.end(); ) {
-        if (it->second == deviceId) {
-            it = deviceIdByRequestId_.erase(it);
+    for (auto it = indexIdByRequestId_.begin(); it != indexIdByRequestId_.end(); ) {
+        if (it->second == indexId) {
+            it = indexIdByRequestId_.erase(it);
         } else {
             ++it;
         }
     }
 
     // Finally remove the owned DeviceIndex itself.
-    indexByDeviceId_.erase(deviceIt);
+    indexByIndexId_.erase(deviceIt);
 
-    std::cout << "IndexController: Removed device "
-              << devicePath.toStdString()
-              << " deviceId=" << deviceId << "\n";
+    std::cout << "IndexController: Removed device"
+              << " devNode=" << devicePath.toStdString()
+              << " indexId=" << indexId << "\n";
 
-    Q_EMIT deviceRemoved(deviceId);
+    Q_EMIT deviceRemoved(indexId);
 }
 
 bool IndexController::removeDeviceByRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
     // Resolve the request to the device it belongs to.
-    const auto requestIt = deviceIdByRequestId_.find(requestId);
-    if (requestIt == deviceIdByRequestId_.end()) {
+    const auto requestIt = indexIdByRequestId_.find(requestId);
+    if (requestIt == indexIdByRequestId_.end()) {
         return false;
     }
 
-    const quint64 deviceId = requestIt->second;
+    const quint64 indexId = requestIt->second;
 
     // Remove the request mapping first so we don't leave a stale in-flight request.
-    deviceIdByRequestId_.erase(requestIt);
+    indexIdByRequestId_.erase(requestIt);
 
     // Remove the associated device and all of its reverse mappings.
-    removeDeviceByDeviceIdUnlocked(deviceId);
+    removeDeviceByIndexIdUnlocked(indexId);
 
     return true;
 }
@@ -155,17 +159,17 @@ bool IndexController::removeDeviceByRequestId(quint32 requestId) {
 void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId, const std::vector<FileRecord> &records) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: appendDeviceFileRecords: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: appendDeviceFileRecords: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: appendDeviceFileRecords: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }
@@ -173,7 +177,7 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
 
     std::cout << "IndexController: Appending " << records.size()
-              << " file records to device " << deviceIndex.devicePath.toStdString() << "\n";
+              << " file records to device " << deviceIndex.devNode.toStdString() << "\n";
 
     // Get the count of how many file records were the index before appending
     const std::size_t fileRecordsCountBefore = deviceIndex.fileRecords.size();
@@ -186,23 +190,23 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     deviceIndex.fileRecords.insert(deviceIndex.fileRecords.end(), records.begin(), records.end());
 
     std::cout << "IndexController: The index now contains " << deviceIndex.fileRecords.size()
-              << " file records for device " << deviceIndex.devicePath.toStdString() << "\n";
+              << " file records for device devNode=" << deviceIndex.devNode.toStdString() << "\n";
 }
 
 void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId, QByteArrayView stringPool) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: appendDeviceFileRecords: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: appendDeviceFileRecords: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: appendDeviceFileRecords: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }
@@ -210,7 +214,7 @@ void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId,
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
 
     std::cout << "IndexController: Appending " << stringPool.size()
-              << " string pool characters to device " << deviceIndex.devicePath.toStdString() << "\n";
+              << " string pool characters to device devNode=" << deviceIndex.devNode.toStdString() << "\n";
 
     // Reserve space for the new records
     deviceIndex.stringPool.reserve(deviceIndex.stringPool.size() + static_cast<size_t>(stringPool.size()));
@@ -219,29 +223,29 @@ void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId,
     deviceIndex.stringPool.insert(deviceIndex.stringPool.end(), stringPool.begin(), stringPool.end());
 
     std::cout << "IndexController: The index now contains " << deviceIndex.stringPool.size()
-              << " string pool characters for device " << deviceIndex.devicePath.toStdString() << "\n";
+              << " string pool characters for device devNode=" << deviceIndex.devNode.toStdString() << "\n";
 }
 
 bool IndexController::removeRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
-    return deviceIdByRequestId_.erase(requestId) > 0;
+    return indexIdByRequestId_.erase(requestId) > 0;
 }
 
 void IndexController::setReadyState(quint32 requestId, bool isReady) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: setReadyState: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: setReadyState: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: setReadyState: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }
@@ -274,7 +278,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     std::vector<RecordHandle> results;
 
-    if (indexByDeviceId_.empty()) {
+    if (indexByIndexId_.empty()) {
         return results;
     }
 
@@ -302,7 +306,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     if (keywords.empty()) {
         std::size_t totalSize = 0;
 
-        for (const auto& [deviceId, indexPtr] : indexByDeviceId_) {
+        for (const auto& [indexId, indexPtr] : indexByIndexId_) {
             if (!indexPtr || !indexPtr->isReady) {
                 continue;
             }
@@ -312,21 +316,21 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
         results.reserve(totalSize);
 
-        for (const auto& [deviceId, indexPtr] : indexByDeviceId_) {
+        for (const auto& [indexId, indexPtr] : indexByIndexId_) {
             if (!indexPtr || !indexPtr->isReady) {
                 continue;
             }
 
             const auto& index = *indexPtr;
             for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
-                results.emplace_back(index.deviceId, index.generation, i);
+                results.emplace_back(index.indexId, index.generation, i);
             }
         }
 
         return results;
     }
 
-    for (const auto& [deviceId, indexPtr] : indexByDeviceId_) {
+    for (const auto& [indexId, indexPtr] : indexByIndexId_) {
         if (!indexPtr || !indexPtr->isReady) {
             continue;
         }
@@ -412,7 +416,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 }
             }
 
-            results.emplace_back(indexPtr->deviceId, indexPtr->generation, recordIdx);
+            results.emplace_back(indexPtr->indexId, indexPtr->generation, recordIdx);
         };
 
         if (!trigramsUsed) {
@@ -437,8 +441,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
     }
 
     auto handleLess = [](const RecordHandle& a, const RecordHandle& b) {
-        if (a.deviceId != b.deviceId) {
-            return a.deviceId < b.deviceId;
+        if (a.indexId != b.indexId) {
+            return a.indexId < b.indexId;
         }
         if (a.generation != b.generation) {
             return a.generation < b.generation;
@@ -466,8 +470,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
                 auto& key = keys[i];
                 key.handle = handle;
 
-                const auto it = indexByDeviceId_.find(handle.deviceId);
-                if (it == indexByDeviceId_.end()) {
+                const auto it = indexByIndexId_.find(handle.indexId);
+                if (it == indexByIndexId_.end()) {
                     continue;
                 }
 
@@ -528,8 +532,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
                 auto& key = keys[i];
                 key.handle = handle;
 
-                const auto it = indexByDeviceId_.find(handle.deviceId);
-                if (it == indexByDeviceId_.end()) {
+                const auto it = indexByIndexId_.find(handle.indexId);
+                if (it == indexByIndexId_.end()) {
                     continue;
                 }
 
@@ -578,8 +582,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
                 const auto& handle = results[i];
                 handles[i] = handle;
 
-                const auto it = indexByDeviceId_.find(handle.deviceId);
-                if (it == indexByDeviceId_.end()) {
+                const auto it = indexByIndexId_.find(handle.indexId);
+                if (it == indexByIndexId_.end()) {
                     continue;
                 }
 
@@ -631,17 +635,17 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
 void IndexController::resolveParentPointersByRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: resolveParentPointersByRequestId: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: resolveParentPointersByRequestId: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: resolveParentPointersByRequestId: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }
@@ -653,17 +657,17 @@ void IndexController::resolveParentPointersByRequestId(quint32 requestId) {
 void IndexController::buildLowercaseStringPoolByRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: buildLowercaseStringPoolByRequestId: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: buildLowercaseStringPoolByRequestId: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: buildLowercaseStringPoolByRequestId: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }
@@ -675,17 +679,17 @@ void IndexController::buildLowercaseStringPoolByRequestId(quint32 requestId) {
 void IndexController::sortByNameAscendingParallelByRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: sortByNameAscendingParallelByRequestId: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: sortByNameAscendingParallelByRequestId: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: sortByNameAscendingParallelByRequestId: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }
@@ -697,17 +701,17 @@ void IndexController::sortByNameAscendingParallelByRequestId(quint32 requestId) 
 void IndexController::buildTrigramIndexParallelByRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
-    const auto existingDeviceIdIt = deviceIdByRequestId_.find(requestId);
-    if (existingDeviceIdIt == deviceIdByRequestId_.end()) {
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
         std::cerr << "IndexController: buildTrigramIndexParallelByRequestId: No device index for requestId=" << requestId << "\n";
         return;
     }
 
-    const quint64 existingDeviceId = existingDeviceIdIt->second;
+    const quint64 existingIndexId = existingIndexIdIt->second;
 
-    const auto existingDeviceIndexIt = indexByDeviceId_.find(existingDeviceId);
-    if (existingDeviceIndexIt == indexByDeviceId_.end()) {
-        std::cerr << "IndexController: buildTrigramIndexParallelByRequestId: No device index for deviceId=" << existingDeviceId
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: buildTrigramIndexParallelByRequestId: No device index for indexId=" << existingIndexId
                   << " requestId=" << requestId << "\n";
         return;
     }

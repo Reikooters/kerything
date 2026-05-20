@@ -26,12 +26,12 @@ public:
     ~ClientConnection() override;
 
     void sendReady();
-    void sendScanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
+    void sendScanStarted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
     void sendScanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
     bool sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
     bool sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk);
-    void sendScanCompleted(quint32 requestId);
-    void sendScanCancelled(quint32 requestId);
+    void sendScanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
+    void sendScanCancelled(quint32 requestId, const QString& deviceId);
     void sendKnownDevices(quint32 requestId, const std::vector<BlockDevice>& devices);
     void sendError(quint32 requestId, const QString& errorText);
 

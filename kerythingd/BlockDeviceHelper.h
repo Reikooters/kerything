@@ -4,14 +4,17 @@
 #ifndef KERYTHINGD_BLOCKDEVICEHELPER_H
 #define KERYTHINGD_BLOCKDEVICEHELPER_H
 
-#include "BlockDevice.h"
-
+#include <optional>
 #include <vector>
 
-namespace BlockDeviceHelper {
+#include "BlockDevice.h"
 
-    std::vector<BlockDevice> listKnownDevices();
+class BlockDeviceHelper {
+public:
+    static std::vector<BlockDevice> listKnownDevices();
 
-} // namespace BlockDeviceHelper
+    static std::optional<BlockDevice> findKnownDeviceById(const QString& deviceId);
+    static std::optional<QString> resolveDeviceRefToDevNode(const QString& deviceRef, QString* fsTypeOut = nullptr);
+};
 
 #endif // KERYTHINGD_BLOCKDEVICEHELPER_H

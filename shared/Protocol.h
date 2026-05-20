@@ -100,13 +100,13 @@ inline bool tryParseFrame(QByteArray& buffer, MessageFrame& frame)
     return true;
 }
 
-inline QByteArray makeScanDevicePayload(const QString& devicePath, const QString& fsType)
+inline QByteArray makeScanDevicePayload(const QString& deviceId)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODeviceBase::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
-    out << devicePath << fsType;
+    out << deviceId;
     return payload;
 }
 

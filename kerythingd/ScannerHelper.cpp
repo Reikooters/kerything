@@ -27,7 +27,7 @@ bool isAllowedFsType(const QString& fsType)
     return fsType == QStringLiteral("ntfs") || fsType == QStringLiteral("ext4");
 }
 
-std::expected<QString, QString> validateDevicePath(const QString& inputPath)
+std::expected<QString, QString> validateDevNode(const QString& inputPath)
 {
     if (inputPath.isEmpty()) {
         return std::unexpected(QStringLiteral("empty device path"));
@@ -89,7 +89,7 @@ std::expected<QString, QString> validateDevicePath(const QString& inputPath)
     return resolvedOut;
 }
 
-bool scanDevice(const QString& devicePath,
+bool scanDevice(const QString& devNode,
                 const QString& fsType,
                 const FileRecordChunkCallback& onFileRecordChunk,
                 const StringPoolChunkCallback& onStringPoolChunk,
@@ -104,7 +104,7 @@ bool scanDevice(const QString& devicePath,
         return false;
     }
 
-    const auto validated = validateDevicePath(devicePath);
+    const auto validated = validateDevNode(devNode);
     if (!validated) {
         if (onError) {
             onError(validated.error());

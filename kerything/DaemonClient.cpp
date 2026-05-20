@@ -367,9 +367,10 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
     in.setByteOrder(QDataStream::BigEndian);
     in.setVersion(QDataStream::Qt_6_0);
 
-    QString devicePath;
+    QString deviceId;
+    QString devNode;
     QString fsType;
-    in >> devicePath >> fsType;
+    in >> deviceId >> devNode >> fsType;
 
     if (in.status() != QDataStream::Ok) {
         std::cerr << "Malformed ScanStarted payload\n";
@@ -377,10 +378,12 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
     }
 
     std::cout << "Scan started for requestId=" << header.requestId
-              << " devicePath=" << devicePath.toStdString()
-              << " fsType=" << fsType.toStdString()<< "\n";
+              << " deviceId=" << deviceId.toStdString()
+              << " devNode=" << devNode.toStdString()
+              << " fsType=" << fsType.toStdString()
+              << "\n";
 
-    Q_EMIT scanStarted(header.requestId, devicePath, fsType);
+    Q_EMIT scanStarted(header.requestId, deviceId, devNode, fsType);
 }
 
 void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload)
@@ -461,22 +464,50 @@ void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageH
 
 void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
-    Q_UNUSED(payload);
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
 
-    std::cout << "Scan completed requestId=" << header.requestId << "\n";
+    QString deviceId;
+    QString devNode;
+    QString fsType;
+    in >> deviceId >> devNode >> fsType;
+
+    if (in.status() != QDataStream::Ok) {
+        std::cerr << "Malformed ScanCompleted payload\n";
+        return;
+    }
+
+    std::cout << "Scan completed for requestId=" << header.requestId
+              << " deviceId=" << deviceId.toStdString()
+              << " devNode=" << devNode.toStdString()
+              << " fsType=" << fsType.toStdString()
+              << "\n";
 
     pendingRequests_.remove(header.requestId);
-    Q_EMIT scanCompleted(header.requestId);
+    Q_EMIT scanCompleted(header.requestId, deviceId, devNode, fsType);
 }
 
 void DaemonClient::handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
-    Q_UNUSED(payload);
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
 
-    std::cout << "Scan cancelled requestId=" << header.requestId << "\n";
+    QString deviceId;
+    in >> deviceId;
+
+    if (in.status() != QDataStream::Ok) {
+        std::cerr << "Malformed ScanCompleted payload\n";
+        return;
+    }
+
+    std::cout << "Scan cancelled for requestId=" << header.requestId
+              << " deviceId=" << deviceId.toStdString()
+              << "\n";
 
     pendingRequests_.remove(header.requestId);
-    Q_EMIT scanCancelled(header.requestId);
+    Q_EMIT scanCancelled(header.requestId, deviceId);
 }
 
 void DaemonClient::handleKnownDevices(const Protocol::MessageHeader& header, const QByteArray& payload)

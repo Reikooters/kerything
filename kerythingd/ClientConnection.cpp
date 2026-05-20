@@ -31,8 +31,8 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
             scannerWorker_, &QObject::deleteLater);
 
     connect(scannerWorker_, &ScannerWorker::scanStarted,
-            this, [this](quint32 requestId, const QString& devicePath, const QString& fsType) {
-                sendScanStarted(requestId, devicePath, fsType);
+            this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
+                sendScanStarted(requestId, deviceId, devNode, fsType);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanProgress,
@@ -51,15 +51,15 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
             });
 
     connect(scannerWorker_, &ScannerWorker::scanCompleted,
-            this, [this](quint32 requestId) {
+            this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
                 activeJobs_.remove(requestId);
-                sendScanCompleted(requestId);
+                sendScanCompleted(requestId, deviceId, devNode, fsType);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanCancelled,
-            this, [this](quint32 requestId) {
+            this, [this](quint32 requestId, const QString& deviceId) {
                 activeJobs_.remove(requestId);
-                sendScanCancelled(requestId);
+                sendScanCancelled(requestId, deviceId);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanError,
@@ -143,19 +143,28 @@ void ClientConnection::handleScanDevice(quint32 requestId, const QByteArray& pay
     in.setByteOrder(QDataStream::BigEndian);
     in.setVersion(QDataStream::Qt_6_0);
 
-    QString devicePath;
-    QString fsType;
-    in >> devicePath >> fsType;
+    QString deviceId;
+    in >> deviceId;
 
     if (in.status() != QDataStream::Ok) {
         sendError(requestId, QStringLiteral("malformed ScanDevice payload"));
         return;
     }
 
+    const std::optional<BlockDevice> device = BlockDeviceHelper::findKnownDeviceById(deviceId);
+    if (!device) {
+        sendError(
+            requestId,
+            QStringLiteral("unknown or unsupported deviceId: %1").arg(deviceId)
+        );
+        return;
+    }
+
     auto job = std::make_shared<ScanJob>();
     job->requestId = requestId;
-    job->devicePath = devicePath;
-    job->fsType = fsType;
+    job->deviceId = device->deviceId;
+    job->devNode = device->devNode;
+    job->fsType = device->fsType;
 
     activeJobs_.insert(requestId, job);
 
@@ -193,14 +202,20 @@ void ClientConnection::sendReady()
     sendFrame(Protocol::MessageType::Ready, 0, payload);
 }
 
-void ClientConnection::sendScanStarted(quint32 requestId, const QString& devicePath, const QString& fsType)
+void ClientConnection::sendScanStarted(
+    quint32 requestId,
+    const QString& deviceId,
+    const QString& devNode,
+    const QString& fsType)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
 
-    out << devicePath << fsType;
+    out << deviceId
+        << devNode
+        << fsType;
 
     sendFrame(Protocol::MessageType::ScanStarted, requestId, payload);
 }
@@ -255,26 +270,32 @@ bool ClientConnection::sendScanStringPoolChunk(quint32 requestId, const std::vec
     return sendFrame(Protocol::MessageType::ScanIndexResultStringPoolChunk, requestId, payload);
 }
 
-void ClientConnection::sendScanCompleted(quint32 requestId)
+void ClientConnection::sendScanCompleted(
+    quint32 requestId,
+    const QString& deviceId,
+    const QString& devNode,
+    const QString& fsType)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
 
-    out << QStringLiteral("completed");
+    out << deviceId
+        << devNode
+        << fsType;
 
     sendFrame(Protocol::MessageType::ScanCompleted, requestId, payload);
 }
 
-void ClientConnection::sendScanCancelled(quint32 requestId)
+void ClientConnection::sendScanCancelled(quint32 requestId, const QString& deviceId)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
     out.setVersion(QDataStream::Qt_6_0);
 
-    out << QStringLiteral("cancelled");
+    out << deviceId;
 
     sendFrame(Protocol::MessageType::ScanCancelled, requestId, payload);
 }

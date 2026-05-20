@@ -21,12 +21,12 @@ public Q_SLOTS:
     void startScan(std::shared_ptr<ScanJob> job);
 
 Q_SIGNALS:
-    void scanStarted(quint32 requestId, const QString& devicePath, const QString& fsType);
+    void scanStarted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
     void scanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
     void scanFileRecordChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
     void scanStringPoolChunkReady(quint32 requestId, const std::vector<char>& stringPoolChunk);
-    void scanCompleted(quint32 requestId);
-    void scanCancelled(quint32 requestId);
+    void scanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
+    void scanCancelled(quint32 requestId, const QString& deviceId);
     void scanError(quint32 requestId, const QString& errorText);
 
 private:

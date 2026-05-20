@@ -13,7 +13,8 @@ class ClientConnection;
 
 struct ScanJob {
     quint32 requestId = 0;
-    QString devicePath;
+    QString deviceId;
+    QString devNode;
     QString fsType;
     std::atomic_bool cancelled{false};
 };

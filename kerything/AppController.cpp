@@ -75,8 +75,8 @@ bool AppController::start() {
     indexController_ = new IndexController(this);
 
     connect(indexController_, &IndexController::deviceRemoved,
-        this, [this](quint64 deviceId) {
-            Q_UNUSED(deviceId);
+        this, [this](quint64 indexId) {
+            Q_UNUSED(indexId);
             requestRefreshAllWindows();
         });
 
@@ -109,12 +109,15 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanStarted,
-            this, [this](quint32 requestId, const QString& devicePath, const QString& fsType) {
+            this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
+                validateScanDeviceId(requestId, deviceId, "scanStarted");
+
                 std::cout << "GUI: scan started requestId=" << requestId
-                          << " devicePath=" << devicePath.toStdString()
+                          << " deviceId=" << deviceId.toStdString()
+                          << " devNode=" << devNode.toStdString()
                           << " fsType=" << fsType.toStdString() << "\n";
 
-                indexController_->addDevice(devicePath, fsType, "TODO", requestId);
+                indexController_->addDevice(deviceId, devNode, fsType, "TODO", requestId);
 
                 // requestRefreshAllWindows();
             });
@@ -126,7 +129,10 @@ bool AppController::start() {
                           << " total=" << total << "\n";
 
                 // Calculate percentage progress with rounding
-                const quint64 pct64 = (processed * 100 + total / 2) / total;
+                const quint64 pct64 = total > 0
+                    ? (processed * 100 + total / 2) / total
+                    : 0;
+
                 const quint8 pct = static_cast<quint8>(pct64);
 
                 requestWindowStatusMessage(
@@ -159,8 +165,14 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanCompleted,
-            this, [this](quint32 requestId) {
-                std::cout << "GUI: scan completed successfully requestId=" << requestId << "\n";
+            this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
+                const bool deviceIdMatches = validateScanDeviceId(requestId, deviceId, "scanCompleted");
+
+                std::cout << "GUI: scan completed successfully requestId=" << requestId
+                          << " deviceId=" << deviceId.toStdString()
+                          << " devNode=" << devNode.toStdString()
+                          << " fsType=" << fsType.toStdString()
+                          << "\n";
 
                 // Build lowercase string pool
                 indexController_->buildLowercaseStringPoolByRequestId(requestId);
@@ -178,10 +190,11 @@ bool AppController::start() {
                 indexController_->setReadyState(requestId, true);
 
                 // Mark device indexed in preferences so we persist the lastIndexedAt
-                if (scanRequestDeviceIds_.contains(requestId)) {
-                    preferences_.markDeviceIndexed(scanRequestDeviceIds_.value(requestId));
-                    scanRequestDeviceIds_.remove(requestId);
+                if (deviceIdMatches) {
+                    preferences_.markDeviceIndexed(deviceId);
                 }
+
+                scanRequestDeviceIds_.remove(requestId);
 
                 // Clean up the requestId as the scan has completed successfully
                 indexController_->removeRequestId(requestId);
@@ -190,8 +203,12 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanCancelled,
-            this, [this](quint32 requestId) {
-                std::cout << "GUI: scan cancelled requestId=" << requestId << "\n";
+            this, [this](quint32 requestId, const QString& deviceId) {
+                validateScanDeviceId(requestId, deviceId, "scanCancelled");
+
+                std::cout << "GUI: scan cancelled requestId=" << requestId
+                          << " deviceId=" << deviceId.toStdString()
+                          << "\n";
 
                 // Clean up the requestId from the tracking list as the scan was cancelled.
                 scanRequestDeviceIds_.remove(requestId);
@@ -205,7 +222,10 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanFailed,
             this, [this](quint32 requestId, const QString& errorText) {
+                const QString expectedDeviceId = scanRequestDeviceIds_.value(requestId);
+
                 std::cerr << "GUI: scan failed requestId=" << requestId
+                          << " deviceId=" << expectedDeviceId.toStdString()
                           << " " << errorText.toStdString() << "\n";
 
                 // Clean up the requestId from the tracking list as the scan failed.
@@ -381,8 +401,7 @@ void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& bloc
             continue;
         }
 
-        //const QByteArray payload = Protocol::makeScanDevicePayload(blockDevice.deviceId, blockDevice.fsType);
-        const QByteArray payload = Protocol::makeScanDevicePayload(blockDevice.devNode, blockDevice.fsType);
+        const QByteArray payload = Protocol::makeScanDevicePayload(blockDevice.deviceId);
 
         quint32 requestId = 0;
         if (!daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId)) {
@@ -399,4 +418,27 @@ void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& bloc
                   << " fsType=" << blockDevice.fsType.toStdString()
                   << "\n";
     }
+}
+
+bool AppController::validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const {
+    const QString expectedDeviceId = scanRequestDeviceIds_.value(requestId);
+
+    if (expectedDeviceId.isEmpty()) {
+        std::cerr << "GUI: " << eventName
+                  << " for unknown scan requestId=" << requestId
+                  << " actualDeviceId=" << actualDeviceId.toStdString()
+                  << "\n";
+        return false;
+    }
+
+    if (expectedDeviceId != actualDeviceId) {
+        std::cerr << "GUI: " << eventName
+                  << " deviceId mismatch for requestId=" << requestId
+                  << " expectedDeviceId=" << expectedDeviceId.toStdString()
+                  << " actualDeviceId=" << actualDeviceId.toStdString()
+                  << "\n";
+        return false;
+    }
+
+    return true;
 }

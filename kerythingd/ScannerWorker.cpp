@@ -22,7 +22,7 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     const quint32 requestId = currentJob_->requestId;
     const std::shared_ptr<ScanJob> jobRef = currentJob_;
 
-    Q_EMIT scanStarted(requestId, currentJob_->devicePath, currentJob_->fsType);
+    Q_EMIT scanStarted(requestId, currentJob_->deviceId, currentJob_->devNode, currentJob_->fsType);
 
     // Wrap the Qt signal emission in a small throttler so fast scans do not
     // flood the UI with progress updates.
@@ -38,7 +38,7 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     };
 
     const bool ok = ScannerHelper::scanDevice(
-        jobRef->devicePath,
+        jobRef->devNode,
         jobRef->fsType,
         [this, requestId, jobRef](const std::vector<FileRecord>& fileRecordChunk) -> bool {
             Q_EMIT scanFileRecordChunkReady(requestId, fileRecordChunk);
@@ -62,9 +62,9 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     );
 
     if (jobRef->cancelled.load(std::memory_order_relaxed)) {
-        Q_EMIT scanCancelled(requestId);
+        Q_EMIT scanCancelled(requestId, currentJob_->deviceId);
     } else if (ok) {
-        Q_EMIT scanCompleted(requestId);
+        Q_EMIT scanCompleted(requestId, currentJob_->deviceId, currentJob_->devNode, currentJob_->fsType);
     }
 
     currentJob_.reset();

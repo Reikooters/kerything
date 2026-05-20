@@ -32,7 +32,9 @@ public:
     };
 
     struct DeviceIndex {
-        quint64 deviceId;
+        quint64 indexId;
+        QString deviceId; // stable persistent ID, e.g. partuuid:...
+        QString devNode;  // resolved block node, e.g. /dev/nvme0n1p2
         QString fsType;
         quint64 generation = 0;
         bool isReady = false;
@@ -42,7 +44,6 @@ public:
 
         // display metadata
         QString label;
-        QString devicePath; // e.g. /dev/disk/by-partuuid/<partuuid> or for loopback devices: /dev/disk/by-uuid/<uuid>
 
         std::vector<FileRecord> fileRecords;
         std::vector<char> stringPool;
@@ -327,15 +328,15 @@ public:
     };
 
     struct RecordHandle {
-        quint64 deviceId;
+        quint64 indexId;
         quint64 generation;
         uint32_t recordIdx;
     };
 
-    const DeviceIndex* deviceIndex(quint64 deviceId) const;
+    const DeviceIndex* deviceIndex(quint64 indexId) const;
 
-    quint64 addDevice(const QString& devicePath, const QString& fsType, const QString& label, quint32 requestId);
-    void removeDeviceByDeviceId(quint64 deviceId);
+    quint64 addDevice(const QString& deviceId, const QString& devNode, const QString& fsType, const QString& label, quint32 requestId);
+    void removeDeviceByIndexId(quint64 indexId);
     bool removeDeviceByRequestId(quint32 requestId);
     void appendDeviceFileRecordsByRequestId(quint32 requestId, const std::vector<FileRecord>& records);
     void appendDeviceStringPoolByRequestId(quint32 requestId, QByteArrayView stringPool);
@@ -349,12 +350,12 @@ public:
     void setReadyState(quint32 requestId, bool isReady);
 
     template <typename Fn>
-    auto withDeviceIndexRead(quint64 deviceId, Fn&& fn) const
+    auto withDeviceIndexRead(quint64 indexId, Fn&& fn) const
         -> std::invoke_result_t<Fn, const DeviceIndex*> {
         std::shared_lock lock(indexMutex_);
 
-        const auto it = indexByDeviceId_.find(deviceId);
-        if (it == indexByDeviceId_.end()) {
+        const auto it = indexByIndexId_.find(indexId);
+        if (it == indexByIndexId_.end()) {
             return std::invoke_result_t<Fn, const DeviceIndex*>{};
         }
 
@@ -367,25 +368,25 @@ public:
     static bool contains(std::string_view haystack, std::string_view needle);
 
 Q_SIGNALS:
-    void deviceRemoved(quint64 deviceId);
+    void deviceRemoved(quint64 indexId);
 
 private:
-    void removeDeviceByDeviceIdUnlocked(quint64 deviceId);
+    void removeDeviceByIndexIdUnlocked(quint64 indexId);
 
-    quint64 nextDeviceId_ = 1;
+    quint64 nextIndexId_ = 1;
 
     mutable std::shared_mutex indexMutex_;
 
-    // deviceId -> in-memory index
-    std::unordered_map<quint64, std::unique_ptr<DeviceIndex>> indexByDeviceId_;
+    // indexId -> in-memory index
+    std::unordered_map<quint64, std::unique_ptr<DeviceIndex>> indexByIndexId_;
 
-    // devicePath -> in-memory index
-    std::unordered_map<QString, quint64> deviceIdByDevicePath_;
+    // devNode -> in-memory index
+    std::unordered_map<QString, quint64> indexIdByDevNode_;
 
-    // requestId -> deviceId
+    // requestId -> indexId
     // To go from requestId -> in-memory index, use:
-    // requestId -> deviceId -> in-memory index
-    std::unordered_map<quint64, quint64> deviceIdByRequestId_;
+    // requestId -> indexId -> in-memory index
+    std::unordered_map<quint64, quint64> indexIdByRequestId_;
 };
 
 #endif //KERYTHING_INDEXCONTROLLER_H

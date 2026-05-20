@@ -39,6 +39,7 @@ private:
     void cleanupWindows();
     void requestKnownDevices();
     void scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
+    [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;

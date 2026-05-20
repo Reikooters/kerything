@@ -31,7 +31,7 @@ void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newR
 //         return nullptr;
 //     }
 //
-//     const IndexController::DeviceIndex* deviceIndex = controller_->indexController()->deviceIndex(handle.deviceId);
+//     const IndexController::DeviceIndex* deviceIndex = controller_->indexController()->deviceIndex(handle.indexId);
 //     if (!deviceIndex) {
 //         return nullptr;
 //     }
@@ -48,7 +48,7 @@ const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexCon
         return nullptr;
     }
 
-    return controller_->indexController()->withDeviceIndexRead(handle.deviceId, [&](const IndexController::DeviceIndex* deviceIndex) -> const IndexController::DeviceIndex* {
+    return controller_->indexController()->withDeviceIndexRead(handle.indexId, [&](const IndexController::DeviceIndex* deviceIndex) -> const IndexController::DeviceIndex* {
         if (!deviceIndex) {
             return nullptr;
         }

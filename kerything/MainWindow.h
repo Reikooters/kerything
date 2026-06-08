@@ -92,12 +92,12 @@ private Q_SLOTS:
     /**
      * @brief Opens the selected file or folder using system defaults.
      */
-    // void openFile(const QModelIndex &index);
+    void openFile(const QModelIndex &index);
 
     /**
      * @brief Opens all currently selected files in the table.
      */
-    // void openSelectedFiles();
+    void openSelectedFiles();
 
     /**
      * @brief Opens the folder containing the currently selected file.

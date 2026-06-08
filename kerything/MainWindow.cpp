@@ -5,12 +5,15 @@
 #include "SearchResultTableView.h"
 
 #include <iostream>
+#include <QDesktopServices>
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStatusBar>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -125,31 +128,29 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto updateActionStates = [this]() {
         const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
         int count = selectedRows.count();
-        //bool isMounted = !m_mountPath.isEmpty();
-        bool isMounted = false;
 
         // Open: Enabled if mounted and something is selected
         QAction* openAction = findChild<QAction*>("openAction");
         if (openAction) {
-            openAction->setEnabled(isMounted && count > 0);
+            openAction->setEnabled(count > 0);
             openAction->setText(count == 1 ? "Open" : "Open " + QString::number(count) + " Files");
         }
 
         // Open Location & Terminal: Only for single selection
         QAction* openLocAction = findChild<QAction*>("openLocationAction");
         if (openLocAction) {
-            openLocAction->setEnabled(isMounted && count == 1);
+            openLocAction->setEnabled(count == 1);
         }
 
         QAction* openTerminalAction = findChild<QAction*>("openTerminalAction");
         if (openTerminalAction) {
-            openTerminalAction->setEnabled(isMounted && count == 1);
+            openTerminalAction->setEnabled(count == 1);
         }
 
         // Copy Actions: Enabled if something is selected
         QAction* copyFilesAction = findChild<QAction*>("copyFilesAction");
         if (copyFilesAction) {
-            copyFilesAction->setEnabled(isMounted && count > 0);
+            copyFilesAction->setEnabled(count > 0);
             copyFilesAction->setText(count == 1 ? "Copy File" : "Copy " + QString::number(count) + " Files");
         }
 
@@ -219,9 +220,12 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Enter: Open
     auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
-    openAct->setShortcut(QKeySequence(Qt::Key_Return));
+    openAct->setShortcuts({
+        QKeySequence(Qt::Key_Return),
+        QKeySequence(Qt::Key_Enter)
+    });
     openAct->setObjectName("openAction");
-    // connect(openAct, &QAction::triggered, this, &MainWindow::openSelectedFiles);
+    connect(openAct, &QAction::triggered, this, &MainWindow::openSelectedFiles);
     addAction(openAct);
 
     // Ctrl+Enter: Open File Location
@@ -260,8 +264,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     addAction(terminalAct);
     // ---------------------
 
+    updateActionStates();
+
     // Handle double-click on item in table view to open file
-    // connect(tableView, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
+    connect(tableView_, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
 
     // Start with a full list, sorted by name ascending
     tableView_->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
@@ -318,5 +324,80 @@ void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)
                 statusLabel_->clear();
             }
         });
+    }
+}
+
+void MainWindow::openFile(const QModelIndex &index) {
+    if (!index.isValid()) {
+        return;
+    }
+
+    tableView_->setCurrentIndex(index);
+
+    if (tableView_->selectionModel()) {
+        tableView_->selectionModel()->select(
+            index,
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows
+        );
+    }
+
+    openSelectedFiles();
+}
+
+void MainWindow::openSelectedFiles() {
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QList<QUrl> urls;
+    bool skippedUnmounted = false;
+
+    for (const QModelIndex& index : selectedRows) {
+        if (!index.isValid()) {
+            continue;
+        }
+
+        const std::optional<QUrl> url = model_->localUrlForRow(index.row());
+
+        if (!url) {
+            skippedUnmounted = true;
+            continue;
+        }
+
+        urls.append(*url);
+    }
+
+    if (urls.isEmpty()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Drive Not Mounted"),
+            QStringLiteral(
+                "The selected result is from a device that is not currently mounted.\n\n"
+                "Mount the device to open files from it."
+            )
+        );
+        return;
+    }
+
+    if (skippedUnmounted) {
+        statusBar()->showMessage(
+            QStringLiteral("Some selected items were skipped because their devices are not mounted."),
+            5000
+        );
+    }
+
+    for (const QUrl& url : urls) {
+        if (!QDesktopServices::openUrl(url)) {
+            statusBar()->showMessage(
+                QStringLiteral("Could not open: %1").arg(url.toLocalFile()),
+                5000
+            );
+        }
     }
 }

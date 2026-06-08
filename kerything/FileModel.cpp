@@ -278,6 +278,40 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     }
 }
 
+std::optional<QUrl> FileModel::localUrlForRow(const int row) const {
+    if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
+        return std::nullopt;
+    }
+
+    const auto& handle = searchResults_[row];
+    const auto* deviceIndex = resolveDeviceIndex(handle);
+
+    if (!deviceIndex || handle.recordIdx >= deviceIndex->fileRecords.size()) {
+        return std::nullopt;
+    }
+
+    if (!hasMountedPath(*deviceIndex, handle)) {
+        return std::nullopt;
+    }
+
+    const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
+
+    if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+        return std::nullopt;
+    }
+
+    const QString fileName = QString::fromUtf8(
+        &deviceIndex->stringPool[rec.nameOffset],
+        rec.nameLen
+    );
+
+    const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+    const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
+    const QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
+
+    return QUrl::fromLocalFile(fullPath);
+}
+
 uint32_t FileModel::getRecordIndex(int row) const {
     if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
         return 0;

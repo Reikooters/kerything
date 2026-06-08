@@ -47,6 +47,11 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 
     /**
+     * @brief Resolves a model row to a local file URL if the result is currently mounted.
+     */
+    [[nodiscard]] std::optional<QUrl> localUrlForRow(int row) const;
+
+    /**
      * @brief Returns the raw database index for a given model row.
      * Useful for looking up full file details when an item is clicked/opened.
      */

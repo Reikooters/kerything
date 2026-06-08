@@ -7,6 +7,7 @@
 #include <QApplication>
 
 #include "DaemonClient.h"
+#include "DevicePickerDialog.h"
 #include "MainWindow.h"
 #include "SingleInstanceServer.h"
 #include "FileRecord.h"
@@ -257,23 +258,13 @@ bool AppController::start() {
                           << " size=" << blockDevices.size() << "\n";
 
             preferences_.updateKnownDevices(blockDevices);
-
-            // Temporary first-run behavior until the device picker exists:
-            // enable mounted devices once, then persist that choice.
-            if (!preferences_.initialDeviceSelectionCompleted()) {
-                for (const BlockDevice& blockDevice : blockDevices) {
-                    if (blockDevice.mounted) {
-                        preferences_.setDeviceEnabled(blockDevice, true);
-                    }
-                }
-
-                preferences_.setInitialDeviceSelectionCompleted(true);
-            }
+            maybeShowFirstRunDevicePicker(blockDevices);
 
             for (const auto& blockDevice : blockDevices) {
                 std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
                           << " fsType=" << blockDevice.fsType.toStdString()
                           << " label=" << blockDevice.label.toStdString()
+                          << " diskModel=" << blockDevice.diskModel.toStdString()
                           << " uuid=" << blockDevice.uuid.toStdString()
                           << " partuuid=" << blockDevice.partuuid.toStdString()
                           << " deviceId=" << blockDevice.deviceId.toStdString()
@@ -394,6 +385,41 @@ void AppController::requestKnownDevices() {
     }
 
     std::cout << "GUI: ListKnownDevices request sent requestId=" << requestId << "\n";
+}
+
+void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices) {
+    if (preferences_.initialDeviceSelectionCompleted()) {
+        return;
+    }
+
+    if (blockDevices.empty()) {
+        std::cout << "GUI: no supported devices found during first-run selection\n";
+        // preferences_.setInitialDeviceSelectionCompleted(true);
+        return;
+    }
+
+    DevicePickerDialog dialog(blockDevices, windows_.isEmpty() ? nullptr : windows_.first().data());
+    const int result = dialog.exec();
+
+    if (result != QDialog::Accepted) {
+        std::cout << "GUI: first-run device selection skipped by user\n";
+        // preferences_.setInitialDeviceSelectionCompleted(true);
+        return;
+    }
+
+    const QStringList selectedDeviceIds = dialog.selectedDeviceIds();
+
+    for (const BlockDevice& blockDevice : blockDevices) {
+        const bool enabled = selectedDeviceIds.contains(blockDevice.deviceId);
+        preferences_.setDeviceEnabled(blockDevice, enabled);
+
+        std::cout << "GUI: first-run device selection deviceId="
+                  << blockDevice.deviceId.toStdString()
+                  << " enabled=" << (enabled ? "true" : "false")
+                  << "\n";
+    }
+
+    preferences_.setInitialDeviceSelectionCompleted(true);
 }
 
 void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices) {

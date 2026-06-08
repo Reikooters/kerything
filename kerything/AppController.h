@@ -40,6 +40,7 @@ private:
     void cleanupWindows();
     void requestKnownDevices();
     void scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
+    void maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
     QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
 

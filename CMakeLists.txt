@@ -22,9 +22,15 @@ find_package(Qt6 REQUIRED COMPONENTS
         Network
 )
 
-# Find KDE Frameworks components
-find_package(ECM REQUIRED NO_MODULE)
-set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
+option(KERYTHING_WITH_KIO "Use KDE KIO for opening files" ON)
+
+if(KERYTHING_WITH_KIO)
+    # Find KDE Frameworks components
+    find_package(ECM REQUIRED NO_MODULE)
+    set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
+
+    find_package(KF6 REQUIRED COMPONENTS KIO)
+endif()
 
 # Find PkgConfig
 find_package(PkgConfig REQUIRED)
@@ -89,6 +95,10 @@ add_executable(kerythingd
         shared/SocketFramer.h
 )
 
+if(KERYTHING_WITH_KIO)
+    target_compile_definitions(kerything PRIVATE KERYTHING_WITH_KIO)
+endif()
+
 target_compile_definitions(kerything PRIVATE QT_NO_KEYWORDS)
 
 target_compile_definitions(kerythingd PRIVATE QT_NO_KEYWORDS)
@@ -99,6 +109,14 @@ target_link_libraries(kerything
         Qt6::Widgets
         Qt6::Network
 )
+
+if(KERYTHING_WITH_KIO)
+    target_link_libraries(kerything
+            PRIVATE
+            KF6::KIOGui
+            KF6::Service
+    )
+endif()
 
 target_link_libraries(kerythingd
         PRIVATE
@@ -115,8 +133,10 @@ target_include_directories(kerythingd
         ${EXT2FS_INCLUDE_DIRS}
 )
 
-include(KDEInstallDirs)
-include(ECMInstallIcons)
+if(KERYTHING_WITH_KIO)
+    include(KDEInstallDirs)
+    include(ECMInstallIcons)
+endif()
 
 # Install the binaries
 install(TARGETS kerything DESTINATION ${KDE_INSTALL_BINDIR})

@@ -8,6 +8,7 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QDir>
+#include <QColor>
 #include "FileModel.h"
 
 #include "AppController.h"
@@ -16,6 +17,41 @@
 #include "IndexController.h"
 
 namespace {
+    constexpr uint32_t NoMountPoint = 0xFFFFFFFF;
+
+    bool hasMountedPath(
+        const IndexController::DeviceIndex& deviceIndex,
+        const IndexController::RecordHandle& handle
+    ) {
+        return handle.mountPointIdx != NoMountPoint &&
+               handle.mountPointIdx < static_cast<uint32_t>(deviceIndex.mountPoints.size());
+    }
+
+    QString displayVolumeName(const IndexController::DeviceIndex& deviceIndex) {
+        const QString label = deviceIndex.label.trimmed();
+        if (!label.isEmpty() && label != QStringLiteral("TODO")) {
+            return label;
+        }
+
+        const QString deviceId = deviceIndex.deviceId.trimmed();
+        if (!deviceId.isEmpty()) {
+            static constexpr qsizetype MaxDeviceIdDisplayLength = 24;
+
+            if (deviceId.size() <= MaxDeviceIdDisplayLength) {
+                return deviceId;
+            }
+
+            return deviceId.left(MaxDeviceIdDisplayLength - 1) + QStringLiteral("…");
+        }
+
+        const QString devNode = deviceIndex.devNode.trimmed();
+        if (!devNode.isEmpty()) {
+            return devNode;
+        }
+
+        return QStringLiteral("Unmounted volume");
+    }
+
     QString mountedPathForHandle(
         const IndexController::DeviceIndex& deviceIndex,
         const IndexController::RecordHandle& handle,
@@ -23,13 +59,49 @@ namespace {
     ) {
         const QString relativePath = QString::fromStdString(filesystemPath);
 
-        if (handle.mountPointIdx == 0xFFFFFFFF ||
-            handle.mountPointIdx >= static_cast<uint32_t>(deviceIndex.mountPoints.size())) {
-            return QDir::cleanPath(relativePath);
-            }
+        if (!hasMountedPath(deviceIndex, handle)) {
+            return QDir::cleanPath(
+                displayVolumeName(deviceIndex) + QStringLiteral(":") + relativePath
+            );
+        }
 
         const QString mountPoint = deviceIndex.mountPoints.at(static_cast<int>(handle.mountPointIdx));
         return QDir::cleanPath(mountPoint + QStringLiteral("/") + relativePath);
+    }
+
+    QString resultToolTip(
+        const IndexController::DeviceIndex& deviceIndex,
+        const IndexController::RecordHandle& handle,
+        const std::string& filesystemPath
+    ) {
+        const QString relativePath = QDir::cleanPath(QString::fromStdString(filesystemPath));
+        const QString displayPath = mountedPathForHandle(deviceIndex, handle, filesystemPath);
+
+        if (hasMountedPath(deviceIndex, handle)) {
+            return QStringLiteral(
+                "Path:\n%1\n\n"
+                "Device:\n%2\n\n"
+                "Device node:\n%3"
+            ).arg(
+                displayPath,
+                deviceIndex.deviceId,
+                deviceIndex.devNode
+            );
+        }
+
+        return QStringLiteral(
+            "This result is from an unmounted device.\n"
+            "Drag and drop is disabled until the device is mounted.\n\n"
+            "Indexed path:\n%1\n\n"
+            "Display path:\n%2\n\n"
+            "Device:\n%3\n\n"
+            "Last known device node:\n%4"
+        ).arg(
+            relativePath,
+            displayPath,
+            deviceIndex.deviceId,
+            deviceIndex.devNode
+        );
     }
 }
 
@@ -119,8 +191,17 @@ QVariant FileModel::headerData(int section, Qt::Orientation orientation, int rol
 }
 
 QVariant FileModel::data(const QModelIndex &index, int role) const {
-    if (!index.isValid()
-        || (!(role == Qt::DecorationRole && index.column() == 0) && role != Qt::DisplayRole)) {
+    if (!index.isValid()) {
+        return {};
+    }
+
+    const bool supportedRole =
+        role == Qt::DisplayRole ||
+        role == Qt::ToolTipRole ||
+        role == Qt::ForegroundRole ||
+        role == Qt::DecorationRole;
+
+    if (!supportedRole) {
         return {};
     }
 
@@ -136,10 +217,30 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         return {};
     }
 
-    // DecorationRole provides the icon shown next to the filename
-    // This is used to differentiate Files vs Folders
+    const bool mounted = hasMountedPath(*deviceIndex, handle);
+
+    if (role == Qt::ForegroundRole && !mounted) {
+        return QColor(Qt::gray);
+    }
+
+    if (role == Qt::ToolTipRole) {
+        const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+        return resultToolTip(*deviceIndex, handle, parentPath);
+    }
+
+    // DecorationRole provides the icon shown next to the filename/path.
+    // This is used to differentiate Files vs Folders and mark unmounted results.
     if (role == Qt::DecorationRole) {
-        // index.column() is always 0 in this case, as we checked earlier.
+        if (index.column() == 1 && !mounted) {
+            return QIcon::fromTheme(
+                QStringLiteral("dialog-warning"),
+                QIcon::fromTheme(QStringLiteral("emblem-warning"))
+            );
+        }
+
+        if (index.column() != 0) {
+            return {};
+        }
 
         // Using standard KDE/Freedesktop theme names for icons
         if ((rec.flags & FileRecord_IsDir) != 0) {
@@ -156,7 +257,7 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     switch (index.column()) {
         case 0: // Name: Extracted directly from the string pool
             return QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
-        case 1: { // Path: Resolved from the directory map and current mount point
+        case 1: { // Path: Resolved from the directory map and current mount/virtual volume
             const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
             return mountedPathForHandle(*deviceIndex, handle, parentPath);
         }
@@ -188,12 +289,20 @@ uint32_t FileModel::getRecordIndex(int row) const {
 Qt::ItemFlags FileModel::flags(const QModelIndex &index) const {
     Qt::ItemFlags defaultFlags = QAbstractTableModel::flags(index);
 
-    if (index.isValid()) {
-        // Qt::ItemIsDragEnabled is required for QAbstractItemView to initiate a drag
-        return Qt::ItemIsDragEnabled | defaultFlags;
+    if (!index.isValid()) {
+        return defaultFlags;
     }
 
-    return defaultFlags;
+    const auto& handle = searchResults_[index.row()];
+    const auto* deviceIndex = resolveDeviceIndex(handle);
+
+    if (!deviceIndex || !hasMountedPath(*deviceIndex, handle)) {
+        return defaultFlags;
+    }
+
+    // Qt::ItemIsDragEnabled is required for QAbstractItemView to initiate a drag.
+    // Only mounted results can be dragged because only those have real local paths.
+    return Qt::ItemIsDragEnabled | defaultFlags;
 }
 
 QStringList FileModel::mimeTypes() const {
@@ -220,7 +329,11 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
             continue;
         }
 
-        const auto &rec = deviceIndex->fileRecords[handle.recordIdx];
+        if (!hasMountedPath(*deviceIndex, handle)) {
+            continue;
+        }
+
+        const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
 
         if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
             continue;

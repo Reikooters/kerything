@@ -15,6 +15,24 @@
 
 #include "IndexController.h"
 
+namespace {
+    QString mountedPathForHandle(
+        const IndexController::DeviceIndex& deviceIndex,
+        const IndexController::RecordHandle& handle,
+        const std::string& filesystemPath
+    ) {
+        const QString relativePath = QString::fromStdString(filesystemPath);
+
+        if (handle.mountPointIdx == 0xFFFFFFFF ||
+            handle.mountPointIdx >= static_cast<uint32_t>(deviceIndex.mountPoints.size())) {
+            return QDir::cleanPath(relativePath);
+            }
+
+        const QString mountPoint = deviceIndex.mountPoints.at(static_cast<int>(handle.mountPointIdx));
+        return QDir::cleanPath(mountPoint + QStringLiteral("/") + relativePath);
+    }
+}
+
 FileModel::FileModel(AppController* controller, QObject *parent)
     : QAbstractTableModel(parent),
       controller_(controller) {}
@@ -138,8 +156,10 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     switch (index.column()) {
         case 0: // Name: Extracted directly from the string pool
             return QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
-        case 1: // Path: Resolved from the directory map
-            return QString::fromStdString(deviceIndex->getFullPath(rec.parentRecordIdx));
+        case 1: { // Path: Resolved from the directory map and current mount point
+            const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+            return mountedPathForHandle(*deviceIndex, handle, parentPath);
+        }
         case 2: // Size: Formatted according to the user's locale
             if ((rec.flags & FileRecord_IsDir) != 0) {
                 return QString("<DIR>");
@@ -210,11 +230,11 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
         QString fileName = QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
 
         // Resolve parent directory path
-        QString internalPath = QString::fromStdString(deviceIndex->getFullPath(rec.parentRecordIdx));
+        const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+        const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
 
         // Construct the absolute Linux path and wrap it in a QUrl
-        // QString fullPath = QDir::cleanPath(mountPath_ + "/" + internalPath + "/" + fileName);
-        QString fullPath = QDir::cleanPath(internalPath + "/" + fileName);
+        QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
         urls.append(QUrl::fromLocalFile(fullPath));
     }
 

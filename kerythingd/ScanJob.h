@@ -16,6 +16,8 @@ struct ScanJob {
     QString deviceId;
     QString devNode;
     QString fsType;
+    QStringList mountPoints;
+    QString primaryMountPoint;
     std::atomic_bool cancelled{false};
 };
 

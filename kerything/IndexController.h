@@ -7,6 +7,7 @@
 #include <execution>
 #include <iostream>
 #include <QObject>
+#include <QStringList>
 #include <shared_mutex>
 
 #include "FileRecord.h"
@@ -38,6 +39,11 @@ public:
         QString fsType;
         quint64 generation = 0;
         bool isReady = false;
+
+        // Current mount points for this filesystem. A single indexed device may
+        // be mounted at multiple locations.
+        QStringList mountPoints;
+        QString primaryMountPoint;
 
         // unix seconds; 0 means unknown
         qint64 lastIndexedTime = 0;
@@ -331,11 +337,23 @@ public:
         quint64 indexId;
         quint64 generation;
         uint32_t recordIdx;
+
+        // Index into DeviceIndex::mountPoints.
+        // 0xFFFFFFFF means no current mount point is available.
+        uint32_t mountPointIdx = 0xFFFFFFFF;
     };
 
     const DeviceIndex* deviceIndex(quint64 indexId) const;
 
-    quint64 addDevice(const QString& deviceId, const QString& devNode, const QString& fsType, const QString& label, quint32 requestId);
+    quint64 addDevice(
+        const QString& deviceId,
+        const QString& devNode,
+        const QString& fsType,
+        const QString& label,
+        const QStringList& mountPoints,
+        const QString& primaryMountPoint,
+        quint32 requestId
+    );
     void removeDeviceByIndexId(quint64 indexId);
     bool removeDeviceByRequestId(quint32 requestId);
     void appendDeviceFileRecordsByRequestId(quint32 requestId, const std::vector<FileRecord>& records);

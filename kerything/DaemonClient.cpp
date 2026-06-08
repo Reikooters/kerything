@@ -370,7 +370,14 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
     QString deviceId;
     QString devNode;
     QString fsType;
-    in >> deviceId >> devNode >> fsType;
+    QStringList mountPoints;
+    QString primaryMountPoint;
+
+    in >> deviceId
+       >> devNode
+       >> fsType
+       >> mountPoints
+       >> primaryMountPoint;
 
     if (in.status() != QDataStream::Ok) {
         std::cerr << "Malformed ScanStarted payload\n";
@@ -381,9 +388,17 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
               << " deviceId=" << deviceId.toStdString()
               << " devNode=" << devNode.toStdString()
               << " fsType=" << fsType.toStdString()
+              << " primaryMountPoint=" << primaryMountPoint.toStdString()
               << "\n";
 
-    Q_EMIT scanStarted(header.requestId, deviceId, devNode, fsType);
+    Q_EMIT scanStarted(
+        header.requestId,
+        deviceId,
+        devNode,
+        fsType,
+        mountPoints,
+        primaryMountPoint
+    );
 }
 
 void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload)

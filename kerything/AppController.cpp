@@ -118,7 +118,14 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanStarted,
-            this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
+            this, [this](
+                quint32 requestId,
+                const QString& deviceId,
+                const QString& devNode,
+                const QString& fsType,
+                const QStringList& mountPoints,
+                const QString& primaryMountPoint
+            ) {
                 const bool deviceIdMatches = validateScanDeviceId(requestId, deviceId, "scanStarted");
 
                 if (!deviceIdMatches) {
@@ -130,9 +137,19 @@ bool AppController::start() {
                 std::cout << "GUI: scan started requestId=" << requestId
                           << " deviceId=" << deviceId.toStdString()
                           << " devNode=" << devNode.toStdString()
-                          << " fsType=" << fsType.toStdString() << "\n";
+                          << " fsType=" << fsType.toStdString()
+                          << " primaryMountPoint=" << primaryMountPoint.toStdString()
+                          << "\n";
 
-                indexController_->addDevice(deviceId, devNode, fsType, "TODO", requestId);
+                indexController_->addDevice(
+                    deviceId,
+                    devNode,
+                    fsType,
+                    "TODO",
+                    mountPoints,
+                    primaryMountPoint,
+                    requestId
+                );
 
                 // requestRefreshAllWindows();
             });

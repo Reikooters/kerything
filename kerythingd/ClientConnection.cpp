@@ -31,8 +31,22 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
             scannerWorker_, &QObject::deleteLater);
 
     connect(scannerWorker_, &ScannerWorker::scanStarted,
-            this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
-                sendScanStarted(requestId, deviceId, devNode, fsType);
+            this, [this](
+                quint32 requestId,
+                const QString& deviceId,
+                const QString& devNode,
+                const QString& fsType,
+                const QStringList& mountPoints,
+                const QString& primaryMountPoint
+            ) {
+                sendScanStarted(
+                    requestId,
+                    deviceId,
+                    devNode,
+                    fsType,
+                    mountPoints,
+                    primaryMountPoint
+                );
             });
 
     connect(scannerWorker_, &ScannerWorker::scanProgress,
@@ -165,6 +179,8 @@ void ClientConnection::handleScanDevice(quint32 requestId, const QByteArray& pay
     job->deviceId = device->deviceId;
     job->devNode = device->devNode;
     job->fsType = device->fsType;
+    job->mountPoints = device->mountPoints;
+    job->primaryMountPoint = device->primaryMountPoint;
 
     activeJobs_.insert(requestId, job);
 
@@ -203,10 +219,12 @@ void ClientConnection::sendReady()
 }
 
 void ClientConnection::sendScanStarted(
-    quint32 requestId,
-    const QString& deviceId,
-    const QString& devNode,
-    const QString& fsType)
+        quint32 requestId,
+        const QString& deviceId,
+        const QString& devNode,
+        const QString& fsType,
+        const QStringList& mountPoints,
+        const QString& primaryMountPoint)
 {
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
@@ -215,7 +233,9 @@ void ClientConnection::sendScanStarted(
 
     out << deviceId
         << devNode
-        << fsType;
+        << fsType
+        << mountPoints
+        << primaryMountPoint;
 
     sendFrame(Protocol::MessageType::ScanStarted, requestId, payload);
 }

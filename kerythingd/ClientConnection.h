@@ -26,7 +26,14 @@ public:
     ~ClientConnection() override;
 
     void sendReady();
-    void sendScanStarted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
+    void sendScanStarted(
+        quint32 requestId,
+        const QString& deviceId,
+        const QString& devNode,
+        const QString& fsType,
+        const QStringList& mountPoints,
+        const QString& primaryMountPoint
+    );
     void sendScanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
     bool sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
     bool sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk);

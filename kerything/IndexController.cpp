@@ -23,7 +23,15 @@ const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 indexId
     return it->second.get();
 }
 
-quint64 IndexController::addDevice(const QString& deviceId, const QString& devNode, const QString& fsType, const QString& label, quint32 requestId) {
+quint64 IndexController::addDevice(
+    const QString& deviceId,
+    const QString& devNode,
+    const QString& fsType,
+    const QString& label,
+    const QStringList& mountPoints,
+    const QString& primaryMountPoint,
+    quint32 requestId
+) {
     std::unique_lock lock(indexMutex_);
 
     // Check whether devNode is valid
@@ -48,6 +56,8 @@ quint64 IndexController::addDevice(const QString& deviceId, const QString& devNo
             deviceIndex.label = label;
             deviceIndex.deviceId = deviceId;
             deviceIndex.devNode = devNode;
+            deviceIndex.mountPoints = mountPoints;
+            deviceIndex.primaryMountPoint = primaryMountPoint;
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
@@ -74,6 +84,8 @@ quint64 IndexController::addDevice(const QString& deviceId, const QString& devNo
     deviceIndex->label = label;
     deviceIndex->deviceId = deviceId;
     deviceIndex->devNode = devNode;
+    deviceIndex->mountPoints = mountPoints;
+    deviceIndex->primaryMountPoint = primaryMountPoint;
 
     indexByIndexId_.emplace(indexId, std::move(deviceIndex));
     indexIdByDevNode_[devNode] = indexId;
@@ -278,6 +290,22 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     std::vector<RecordHandle> results;
 
+    auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
+        if (index.mountPoints.isEmpty()) {
+            results.emplace_back(index.indexId, index.generation, recordIdx, 0xFFFFFFFF);
+            return;
+        }
+
+        for (int mountPointIdx = 0; mountPointIdx < index.mountPoints.size(); ++mountPointIdx) {
+            results.emplace_back(
+                index.indexId,
+                index.generation,
+                recordIdx,
+                static_cast<uint32_t>(mountPointIdx)
+            );
+        }
+    };
+
     if (indexByIndexId_.empty()) {
         return results;
     }
@@ -311,7 +339,11 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 continue;
             }
 
-            totalSize += indexPtr->fileRecords.size();
+            const std::size_t mountMultiplier = indexPtr->mountPoints.isEmpty()
+                ? 1
+                : static_cast<std::size_t>(indexPtr->mountPoints.size());
+
+            totalSize += indexPtr->fileRecords.size() * mountMultiplier;
         }
 
         results.reserve(totalSize);
@@ -323,7 +355,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
             const auto& index = *indexPtr;
             for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
-                results.emplace_back(index.indexId, index.generation, i);
+                appendResult(index, i);
             }
         }
 
@@ -339,6 +371,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         std::vector<uint32_t> candidates;
         bool firstKeyword = true;
         bool trigramsUsed = false; // Track if we actually used the index
+        bool skipDevice = false;
 
         for (const auto& kw : keywords) {
             if (kw.length() < 3) {
@@ -359,8 +392,9 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                                               [](const auto& a, const auto& b) { return a.trigram < b.trigram; });
 
                 if (range.first == range.second) {
-                    // No matches for this trigram
-                    return results;
+                    // No matches for this trigram on this device.
+                    skipDevice = true;
+                    break;
                 }
 
                 // 3. Intersect candidates (Candidate Filtering)
@@ -398,9 +432,18 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 }
 
                 if (candidates.empty()) {
-                    return results;
+                    skipDevice = true;
+                    break;
                 }
             }
+
+            if (skipDevice) {
+                break;
+            }
+        }
+
+        if (skipDevice) {
+            continue;
         }
 
         // 4. Refinement Phase
@@ -416,7 +459,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 }
             }
 
-            results.emplace_back(indexPtr->indexId, indexPtr->generation, recordIdx);
+            appendResult(*indexPtr, recordIdx);
         };
 
         if (!trigramsUsed) {
@@ -447,7 +490,10 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         if (a.generation != b.generation) {
             return a.generation < b.generation;
         }
-        return a.recordIdx < b.recordIdx;
+        if (a.recordIdx != b.recordIdx) {
+            return a.recordIdx < b.recordIdx;
+        }
+        return a.mountPointIdx < b.mountPointIdx;
     };
 
     std::vector<size_t> resultsOrder(results.size());
@@ -543,7 +589,16 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
                     continue;
                 }
 
-                key.pathKey = device->getFullPath(handle.recordIdx);
+                const auto& record = device->fileRecords[handle.recordIdx];
+                key.pathKey = device->getFullPath(record.parentRecordIdx);
+
+                if (handle.mountPointIdx != 0xFFFFFFFF &&
+                    handle.mountPointIdx < static_cast<uint32_t>(device->mountPoints.size())) {
+                    const QString mountPoint = device->mountPoints.at(static_cast<int>(handle.mountPointIdx));
+                    key.pathKey = (mountPoint + QStringLiteral("/") + QString::fromStdString(key.pathKey))
+                        .toStdString();
+                }
+
                 key.valid = true;
             }
         }

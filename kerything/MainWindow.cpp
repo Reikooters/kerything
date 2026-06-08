@@ -2,6 +2,7 @@
 // Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 #include "MainWindow.h"
+#include "SearchResultTableView.h"
 
 #include <iostream>
 #include <QHeaderView>
@@ -10,7 +11,6 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QStatusBar>
-#include <QTableView>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -72,7 +72,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     layout->addWidget(searchLine_);
 
-    tableView_ = new QTableView(centralWidget);
+    tableView_ = new SearchResultTableView(centralWidget);
     model_ = new FileModel(controller_, this);
     tableView_->setModel(model_);
 
@@ -261,7 +261,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // ---------------------
 
     // Handle double-click on item in table view to open file
-    // connect(tableView, &QTableView::doubleClicked, this, &MainWindow::openFile);
+    // connect(tableView, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
 
     // Start with a full list, sorted by name ascending
     tableView_->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);

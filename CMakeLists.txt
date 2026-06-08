@@ -53,6 +53,8 @@ add_executable(kerything
         kerything/MainWindow.h
         kerything/Preferences.cpp
         kerything/Preferences.h
+        kerything/SearchResultTableView.cpp
+        kerything/SearchResultTableView.h
         kerything/SingleInstanceServer.cpp
         kerything/SingleInstanceServer.h
         shared/BlockDevice.h

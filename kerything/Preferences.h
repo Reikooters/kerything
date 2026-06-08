@@ -25,7 +25,7 @@ struct IndexedDevicePreference {
     QString lastKnownPrimaryMountPoint;
     QStringList lastKnownMountPoints;
 
-    bool scanWhenUnmounted = false;
+    bool scanWhenUnmounted = true;
     bool showOfflineResults = true;
 
     QDateTime lastSeenAt;

@@ -318,6 +318,7 @@ void ClientConnection::sendKnownDevices(
             << device.uuid
             << device.partuuid
             << device.label
+            << device.diskModel
             << device.mounted
             << device.mountPoints
             << device.primaryMountPoint;

@@ -16,6 +16,7 @@ struct BlockDevice {
     QString uuid;
     QString partuuid;
     QString label;
+    QString diskModel;
     bool mounted = false;
     QStringList mountPoints;
     QString primaryMountPoint;

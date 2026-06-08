@@ -165,6 +165,65 @@ static std::vector<MountInfoEntry> readMountInfo() {
     return out;
 }
 
+QString trimmedQStringFromFile(const std::filesystem::path& path)
+{
+    std::ifstream in(path);
+    if (!in) {
+        return {};
+    }
+
+    std::string value;
+    std::getline(in, value);
+
+    return QString::fromStdString(value).trimmed();
+}
+
+QString diskNameForDevNode(const std::string& devNode)
+{
+    namespace fs = std::filesystem;
+
+    const fs::path blockName = fs::path(devNode).filename();
+    if (blockName.empty()) {
+        return {};
+    }
+
+    std::error_code ec;
+    fs::path sysBlockPath = fs::canonical(fs::path("/sys/class/block") / blockName, ec);
+    if (ec) {
+        return {};
+    }
+
+    /*
+     * For partitions, /sys/class/block/<partition>/partition exists and the
+     * parent directory is the whole disk.
+     *
+     * Examples:
+     *   /sys/class/block/sda1     -> parent disk sda
+     *   /sys/class/block/nvme0n1p1 -> parent disk nvme0n1
+     *
+     * For whole disks, use the node itself.
+     */
+    if (fs::exists(sysBlockPath / "partition")) {
+        sysBlockPath = sysBlockPath.parent_path();
+    }
+
+    return QString::fromStdString(sysBlockPath.filename().string());
+}
+
+QString diskModelForDevNode(const std::string& devNode)
+{
+    const QString diskName = diskNameForDevNode(devNode);
+    if (diskName.isEmpty()) {
+        return {};
+    }
+
+    return trimmedQStringFromFile(
+        std::filesystem::path("/sys/class/block") /
+        diskName.toStdString() /
+        "device/model"
+    );
+}
+
 std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
 {
     namespace fs = std::filesystem;
@@ -295,6 +354,7 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
         dev.uuid = probedUuid ? probedUuid->toLower() : cand.uuid.toLower();
         dev.partuuid = cand.partuuid.toLower();
         dev.label = label.value_or(QString());
+        dev.diskModel = diskModelForDevNode(devNode);
         dev.mounted = !mountPoints.isEmpty();
         dev.mountPoints = mountPoints;
         dev.primaryMountPoint = pickPrimaryMountPoint(mountPoints);

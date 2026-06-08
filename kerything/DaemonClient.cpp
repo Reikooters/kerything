@@ -540,6 +540,7 @@ void DaemonClient::handleKnownDevices(const Protocol::MessageHeader& header, con
            >> blockDevice.uuid
            >> blockDevice.partuuid
            >> blockDevice.label
+           >> blockDevice.diskModel
            >> blockDevice.mounted
            >> blockDevice.mountPoints
            >> blockDevice.primaryMountPoint;

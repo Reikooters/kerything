@@ -232,16 +232,30 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(downToTable, &QShortcut::activated, focusTable);
     connect(upToTable, &QShortcut::activated, focusTable);
 
-    // Escape key in search line clears the search
+    auto clearSearchOnly = [this]() {
+        searchLine_->clear();
+    };
+
+    auto clearSearchAndFocus = [this]() {
+        searchLine_->clear();
+        searchLine_->setFocus();
+    };
+
+    // Escape in the search line clears the search.
     auto *clearSearch = new QShortcut(QKeySequence(Qt::Key_Escape), searchLine_);
     clearSearch->setContext(Qt::WidgetShortcut);
-    connect(clearSearch, &QShortcut::activated, searchLine_, &QLineEdit::clear);
+    connect(clearSearch, &QShortcut::activated, this, clearSearchOnly);
+
+    // Escape in the results list clears the search and returns focus to the search line.
+    auto *clearSearchFromTable = new QShortcut(QKeySequence(Qt::Key_Escape), tableView_);
+    clearSearchFromTable->setContext(Qt::WidgetShortcut);
+    connect(clearSearchFromTable, &QShortcut::activated, this, clearSearchAndFocus);
     // ---------------------
 
     // --- Global Window Actions (Shortcuts + Menu items) ---
-    // Ctrl+L and Alt+D: Focus Search
+    // Ctrl+F, Ctrl+L and Alt+D: Focus Search
     auto *focusSearchAct = new QAction(this);
-    focusSearchAct->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
+    focusSearchAct->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_F), QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
     connect(focusSearchAct, &QAction::triggered, searchLine_, [this]() {
         searchLine_->setFocus();
         searchLine_->selectAll();

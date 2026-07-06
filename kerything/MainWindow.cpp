@@ -5,17 +5,36 @@
 #include "SearchResultTableView.h"
 
 #include <iostream>
+#include <QApplication>
+#include <QClipboard>
+#include <QContextMenuEvent>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStatusBar>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#ifdef KERYTHING_WITH_KIO
+#include <QMimeDatabase>
+#include <QMimeType>
+
+#include <KAboutApplicationDialog>
+#include <KAboutData>
+#include <KApplicationTrader>
+#include <KIO/ApplicationLauncherJob>
+#include <KIO/JobUiDelegateFactory>
+#include <KService>
+#include <KTerminalLauncherJob>
+#endif
 
 #include "AppController.h"
 
@@ -41,6 +60,18 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // --- Burger Menu Setup ---
     auto *menu = new QMenu(this);
 
+    auto *newWindowAct = new QAction(QIcon::fromTheme("window-new"), "New Window", this);
+    newWindowAct->setShortcut(QKeySequence::New);
+    connect(newWindowAct, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->openNewWindow();
+        }
+    });
+    menu->addAction(newWindowAct);
+    addAction(newWindowAct); // Register with window for shortcuts
+
+    menu->addSeparator();
+
     auto *changePartitionAct = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
     //connect(changePartitionAct, &QAction::triggered, this, &MainWindow::changePartition);
     changePartitionAct->setShortcut(QKeySequence::Open);
@@ -56,12 +87,12 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     menu->addSeparator();
 
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
-    //connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
+    connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
     menu->addAction(aboutAct);
 
     auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit", this);
     quitAct->setShortcut(QKeySequence::Quit);
-    //connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+    connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
     menu->addAction(quitAct);
     addAction(quitAct); // Register with window for shortcuts
 
@@ -177,7 +208,6 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Status Bar
     statusLabel_ = new QLabel(this);
     statusBar()->addPermanentWidget(statusLabel_);
-    showTemporaryStatus(QStringLiteral("hello"), 5000);
 
     setCentralWidget(centralWidget);
     resize(1200, 800);
@@ -232,35 +262,35 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto *openLocAct = new QAction(QIcon::fromTheme("folder-open"), "Open File Location", this);
     openLocAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
     openLocAct->setObjectName("openLocationAction");
-    // connect(openLocAct, &QAction::triggered, this, &MainWindow::openSelectedLocation);
+    connect(openLocAct, &QAction::triggered, this, &MainWindow::openSelectedLocation);
     addAction(openLocAct);
 
     // Ctrl+C: Copy Files
     auto *copyFilesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy", this);
     copyFilesAct->setShortcut(QKeySequence::Copy);
     copyFilesAct->setObjectName("copyFilesAction");
-    // connect(copyFilesAct, &QAction::triggered, this, &MainWindow::copyFiles);
+    connect(copyFilesAct, &QAction::triggered, this, &MainWindow::copyFiles);
     addAction(copyFilesAct);
 
     // Ctrl+Shift+C: Copy File Names
     auto *copyFileNamesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy File Name", this);
     copyFileNamesAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
     copyFileNamesAct->setObjectName("copyFileNamesAction");
-    // connect(copyFileNamesAct, &QAction::triggered, this, &MainWindow::copyFileNames);
+    connect(copyFileNamesAct, &QAction::triggered, this, &MainWindow::copyFileNames);
     addAction(copyFileNamesAct);
 
     // Ctrl+Alt+C: Copy Full Paths
     auto *copyPathsAct = new QAction(QIcon::fromTheme("edit-copy-path"), "Copy Full Path", this);
     copyPathsAct->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_C));
     copyPathsAct->setObjectName("copyPathsAction");
-    // connect(copyPathsAct, &QAction::triggered, this, &MainWindow::copyPaths);
+    connect(copyPathsAct, &QAction::triggered, this, &MainWindow::copyPaths);
     addAction(copyPathsAct);
 
     // Alt+Shift+F4: Open Terminal
     auto *terminalAct = new QAction(QIcon::fromTheme("utilities-terminal"), "Open Terminal Here", this);
     terminalAct->setShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_F4));
     terminalAct->setObjectName("openTerminalAction");
-    // connect(terminalAct, &QAction::triggered, this, &MainWindow::openTerminal);
+     connect(terminalAct, &QAction::triggered, this, &MainWindow::openTerminal);
     addAction(terminalAct);
     // ---------------------
 
@@ -325,6 +355,88 @@ void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)
             }
         });
     }
+}
+
+void MainWindow::showAbout()
+{
+#ifdef KERYTHING_WITH_KIO
+    KAboutData aboutData(
+        QStringLiteral("kerything"),
+        QStringLiteral("Kerything"),
+        QApplication::applicationVersion(),
+        QStringLiteral("Fast file search for Linux block devices, inspired by the Windows utility \"Everything\" by Voidtools."),
+        KAboutLicense::GPL_V3,
+        QStringLiteral("Copyright © 2026 Reikooters")
+    );
+
+    aboutData.setHomepage(QStringLiteral("https://github.com/Reikooters/kerything"));
+    aboutData.setBugAddress("https://github.com/Reikooters/kerything/issues");
+    aboutData.addAuthor(
+        QStringLiteral("Reikooters"),
+        QStringLiteral("Developer"),
+        QString(),
+        QStringLiteral("https://github.com/Reikooters")
+    );
+
+    auto* dialog = new KAboutApplicationDialog(aboutData, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->show();
+#else
+    QMessageBox::about(
+        this,
+        QStringLiteral("About Kerything"),
+        QStringLiteral(
+            "<h3>Kerything</h3>"
+            "<p>Fast file search for Linux block devices, inspired by the Windows utility \"Everything\" by Voidtools.</p>"
+            "<p>Version %1</p>"
+            "<p>Copyright &copy; 2026 Reikooters</p>"
+            "<p><a href=\"https://github.com/Reikooters/kerything\">"
+            "github.com/Reikooters/kerything"
+            "</a></p>"
+            "<p>Licensed under the GNU General Public License v3.0 or later.</p>"
+        ).arg(QApplication::applicationVersion())
+    );
+#endif
+}
+
+void MainWindow::contextMenuEvent(QContextMenuEvent *event)
+{
+    if (!tableView_ || !tableView_->selectionModel()) {
+        return;
+    }
+
+    const QPoint viewportPos = tableView_->viewport()->mapFrom(this, event->pos());
+    const QModelIndex clickIndex = tableView_->indexAt(viewportPos);
+
+    if (!clickIndex.isValid()) {
+        return;
+    }
+
+    if (!tableView_->selectionModel()->isSelected(clickIndex)) {
+        tableView_->setCurrentIndex(clickIndex);
+        tableView_->selectionModel()->select(
+            clickIndex,
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows
+        );
+    }
+
+    QMenu menu(this);
+
+    menu.addAction(findChild<QAction*>(QStringLiteral("openAction")));
+    menu.addAction(findChild<QAction*>(QStringLiteral("openLocationAction")));
+
+    QAction* terminalAction = findChild<QAction*>(QStringLiteral("openTerminalAction"));
+    if (terminalAction) {
+        menu.addAction(terminalAction);
+    }
+
+    menu.addSeparator();
+
+    menu.addAction(findChild<QAction*>(QStringLiteral("copyFilesAction")));
+    menu.addAction(findChild<QAction*>(QStringLiteral("copyFileNamesAction")));
+    menu.addAction(findChild<QAction*>(QStringLiteral("copyPathsAction")));
+
+    menu.exec(event->globalPos());
 }
 
 void MainWindow::openFile(const QModelIndex &index) {
@@ -392,6 +504,31 @@ void MainWindow::openSelectedFiles() {
         );
     }
 
+#ifdef KERYTHING_WITH_KIO
+    QMimeDatabase mimeDatabase;
+    QMap<QString, QList<QUrl>> urlsByMimeType;
+
+    for (const QUrl& url : urls) {
+        const QMimeType mimeType = mimeDatabase.mimeTypeForUrl(url);
+        urlsByMimeType[mimeType.name()].append(url);
+    }
+
+    for (auto it = urlsByMimeType.cbegin(); it != urlsByMimeType.cend(); ++it) {
+        const QString& mimeType = it.key();
+        const QList<QUrl>& mimeUrls = it.value();
+
+        KService::Ptr service = KApplicationTrader::preferredService(mimeType);
+
+        auto* job = service
+            ? new KIO::ApplicationLauncherJob(service)
+            : new KIO::ApplicationLauncherJob();
+
+        job->setUrls(mimeUrls);
+        job->setAutoDelete(true);
+        job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));
+        job->start();
+    }
+#else
     for (const QUrl& url : urls) {
         if (!QDesktopServices::openUrl(url)) {
             statusBar()->showMessage(
@@ -400,4 +537,202 @@ void MainWindow::openSelectedFiles() {
             );
         }
     }
+#endif
+}
+
+void MainWindow::openSelectedLocation()
+{
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    const std::optional<QUrl> url = model_->localUrlForRow(selectedRows.first().row());
+
+    if (!url) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Drive Not Mounted"),
+            QStringLiteral(
+                "The selected result is from a device that is not currently mounted.\n\n"
+                "Mount the device to open its containing folder."
+            )
+        );
+        return;
+    }
+
+    const QFileInfo fileInfo(url->toLocalFile());
+    const QString dirPath = fileInfo.isDir()
+        ? fileInfo.absoluteFilePath()
+        : fileInfo.absolutePath();
+
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath))) {
+        statusBar()->showMessage(
+            QStringLiteral("Could not open location: %1").arg(dirPath),
+            5000
+        );
+    }
+}
+
+void MainWindow::copyFileNames()
+{
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QStringList fileNames;
+    fileNames.reserve(selectedRows.size());
+
+    for (const QModelIndex& index : selectedRows) {
+        const QString fileName = model_->data(model_->index(index.row(), 0), Qt::DisplayRole).toString();
+
+        if (!fileName.isEmpty()) {
+            fileNames.append(fileName);
+        }
+    }
+
+    if (!fileNames.isEmpty()) {
+        QApplication::clipboard()->setText(fileNames.join(QLatin1Char('\n')));
+    }
+}
+
+void MainWindow::copyPaths()
+{
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QStringList paths;
+    paths.reserve(selectedRows.size());
+
+    for (const QModelIndex& index : selectedRows) {
+        const std::optional<QUrl> url = model_->localUrlForRow(index.row());
+
+        if (url) {
+            paths.append(QDir::cleanPath(url->toLocalFile()));
+            continue;
+        }
+
+        const QString displayPath = model_->data(model_->index(index.row(), 1), Qt::DisplayRole).toString();
+        const QString fileName = model_->data(model_->index(index.row(), 0), Qt::DisplayRole).toString();
+
+        if (!displayPath.isEmpty() && !fileName.isEmpty()) {
+            paths.append(QDir::cleanPath(displayPath + QStringLiteral("/") + fileName));
+        }
+    }
+
+    if (!paths.isEmpty()) {
+        QApplication::clipboard()->setText(paths.join(QLatin1Char('\n')));
+    }
+}
+
+void MainWindow::copyFiles()
+{
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QList<QUrl> urls;
+    urls.reserve(selectedRows.size());
+
+    for (const QModelIndex& index : selectedRows) {
+        const std::optional<QUrl> url = model_->localUrlForRow(index.row());
+
+        if (url) {
+            urls.append(*url);
+        }
+    }
+
+    if (urls.isEmpty()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Drive Not Mounted"),
+            QStringLiteral(
+                "None of the selected results are on currently mounted devices.\n\n"
+                "Mount the device to copy files."
+            )
+        );
+        return;
+    }
+
+    auto* mimeData = new QMimeData();
+    mimeData->setUrls(urls);
+    QApplication::clipboard()->setMimeData(mimeData);
+
+    if (urls.size() != selectedRows.size()) {
+        statusBar()->showMessage(
+            QStringLiteral("Copied mounted files only; unmounted results were skipped."),
+            5000
+        );
+    }
+}
+
+void MainWindow::openTerminal()
+{
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    const std::optional<QUrl> url = model_->localUrlForRow(selectedRows.first().row());
+
+    if (!url) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Drive Not Mounted"),
+            QStringLiteral(
+                "The selected result is from a device that is not currently mounted.\n\n"
+                "Mount the device to open a terminal there."
+            )
+        );
+        return;
+    }
+
+    const QFileInfo fileInfo(url->toLocalFile());
+    const QString dirPath = fileInfo.isDir()
+        ? fileInfo.absoluteFilePath()
+        : fileInfo.absolutePath();
+
+#ifdef KERYTHING_WITH_KIO
+    auto* job = new KTerminalLauncherJob(QString());
+    job->setWorkingDirectory(dirPath);
+    job->setAutoDelete(true);
+    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));
+    job->start();
+#else
+    if (!QProcess::startDetached(QStringLiteral("xdg-terminal-exec"), QStringList{}, dirPath)) {
+        statusBar()->showMessage(
+            QStringLiteral("Could not open terminal in: %1").arg(dirPath),
+            5000
+        );
+    }
+#endif
 }

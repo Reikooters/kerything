@@ -29,7 +29,12 @@ if(KERYTHING_WITH_KIO)
     find_package(ECM REQUIRED NO_MODULE)
     set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 
-    find_package(KF6 REQUIRED COMPONENTS KIO)
+    find_package(KF6 REQUIRED COMPONENTS
+            CoreAddons
+            I18n
+            KIO
+            XmlGui
+    )
 endif()
 
 # Find PkgConfig
@@ -113,8 +118,10 @@ target_link_libraries(kerything
 if(KERYTHING_WITH_KIO)
     target_link_libraries(kerything
             PRIVATE
+            KF6::CoreAddons
             KF6::KIOGui
             KF6::Service
+            KF6::XmlGui
     )
 endif()
 

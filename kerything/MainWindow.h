@@ -42,7 +42,7 @@ protected:
     /**
      * @brief Handles right-click events to show the file context menu.
      */
-    // void contextMenuEvent(QContextMenuEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
     /**
      * @brief Filters events for specific objects in the application.
@@ -87,7 +87,7 @@ private Q_SLOTS:
     /**
      * @brief Shows the About dialog using KAboutData.
      */
-    // void showAbout();
+    void showAbout();
 
     /**
      * @brief Opens the selected file or folder using system defaults.
@@ -102,27 +102,27 @@ private Q_SLOTS:
     /**
      * @brief Opens the folder containing the currently selected file.
      */
-    // void openSelectedLocation();
+    void openSelectedLocation();
 
     /**
      * @brief Copies the names of the selected items to the clipboard.
      */
-    // void copyFileNames();
+    void copyFileNames();
 
     /**
      * @brief Copies the full paths of selected items to the clipboard.
      */
-    // void copyPaths();
+    void copyPaths();
 
     /**
      * @brief Copies the selected files themselves to the clipboard (for pasting in Dolphin).
      */
-    // void copyFiles();
+    void copyFiles();
 
     /**
      * @brief Opens a terminal in the folder of the selected item.
      */
-    // void openTerminal();
+    void openTerminal();
 
 private:
 

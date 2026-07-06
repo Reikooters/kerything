@@ -6,6 +6,8 @@
 #include <string>
 #include <QIcon>
 #include <QMimeData>
+#include <QMimeDatabase>
+#include <QMimeType>
 #include <QUrl>
 #include <QDir>
 #include <QColor>
@@ -101,6 +103,37 @@ namespace {
             displayPath,
             deviceIndex.deviceId,
             deviceIndex.devNode
+        );
+    }
+
+    QIcon iconForFileName(const QString& fileName)
+    {
+        static QMimeDatabase mimeDatabase;
+
+        const QMimeType mimeType = mimeDatabase.mimeTypeForFile(
+            fileName,
+            QMimeDatabase::MatchExtension
+        );
+
+        const QString iconName = mimeType.iconName();
+        if (!iconName.isEmpty()) {
+            const QIcon icon = QIcon::fromTheme(iconName);
+            if (!icon.isNull()) {
+                return icon;
+            }
+        }
+
+        const QString genericIconName = mimeType.genericIconName();
+        if (!genericIconName.isEmpty()) {
+            const QIcon icon = QIcon::fromTheme(genericIconName);
+            if (!icon.isNull()) {
+                return icon;
+            }
+        }
+
+        return QIcon::fromTheme(
+            QStringLiteral("text-x-generic"),
+            QIcon::fromTheme(QStringLiteral("document-new"))
         );
     }
 }
@@ -242,16 +275,26 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
             return {};
         }
 
+        const QString fileName = QString::fromUtf8(
+            &deviceIndex->stringPool[rec.nameOffset],
+            rec.nameLen
+        );
+
         // Using standard KDE/Freedesktop theme names for icons
         if ((rec.flags & FileRecord_IsDir) != 0) {
             return (rec.flags & FileRecord_IsSymlink) != 0
                 ? QIcon::fromTheme("inode-directory-symlink", QIcon::fromTheme("folder-remote"))
-                : QIcon::fromTheme("inode-directory");
+                : QIcon::fromTheme("inode-directory", QIcon::fromTheme("folder"));
         }
 
-        return (rec.flags & FileRecord_IsSymlink) != 0
-            ? QIcon::fromTheme("emblem-symbolic-link")
-            : QIcon::fromTheme("document-new");
+        if ((rec.flags & FileRecord_IsSymlink) != 0) {
+            const QIcon icon = QIcon::fromTheme(QStringLiteral("emblem-symbolic-link"));
+            if (!icon.isNull()) {
+                return icon;
+            }
+        }
+
+        return iconForFileName(fileName);
     }
 
     switch (index.column()) {

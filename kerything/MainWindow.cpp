@@ -24,7 +24,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-#ifdef KERYTHING_WITH_KIO
+#ifdef KERYTHING_WITH_KF6
 #include <QMimeDatabase>
 #include <QMimeType>
 
@@ -401,7 +401,7 @@ void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)
 
 void MainWindow::showAbout()
 {
-#ifdef KERYTHING_WITH_KIO
+#ifdef KERYTHING_WITH_KF6
     KAboutData aboutData(
         QStringLiteral("kerything"),
         QStringLiteral("Kerything"),
@@ -564,7 +564,7 @@ void MainWindow::openSelectedFiles() {
         );
     }
 
-#ifdef KERYTHING_WITH_KIO
+#ifdef KERYTHING_WITH_KF6
     QMimeDatabase mimeDatabase;
     QMap<QString, QList<QUrl>> urlsByMimeType;
 
@@ -626,7 +626,7 @@ void MainWindow::openSelectedLocation()
         return;
     }
 
-#ifdef KERYTHING_WITH_KIO
+#ifdef KERYTHING_WITH_KF6
     if (KIO::highlightInFileManager({*url})) {
         return;
     }
@@ -825,7 +825,7 @@ void MainWindow::openTerminal()
         ? fileInfo.absoluteFilePath()
         : fileInfo.absolutePath();
 
-#ifdef KERYTHING_WITH_KIO
+#ifdef KERYTHING_WITH_KF6
     auto* job = new KTerminalLauncherJob(QString());
     job->setWorkingDirectory(dirPath);
     job->setAutoDelete(true);

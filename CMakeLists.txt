@@ -22,9 +22,9 @@ find_package(Qt6 REQUIRED COMPONENTS
         Network
 )
 
-option(KERYTHING_WITH_KIO "Use KDE KIO for opening files" ON)
+option(KERYTHING_WITH_KF6 "Use KDE Frameworks 6, including KDE KIO for opening files" ON)
 
-if(KERYTHING_WITH_KIO)
+if(KERYTHING_WITH_KF6)
     # Find KDE Frameworks components
     find_package(ECM REQUIRED NO_MODULE)
     set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
@@ -100,8 +100,8 @@ add_executable(kerythingd
         shared/SocketFramer.h
 )
 
-if(KERYTHING_WITH_KIO)
-    target_compile_definitions(kerything PRIVATE KERYTHING_WITH_KIO)
+if(KERYTHING_WITH_KF6)
+    target_compile_definitions(kerything PRIVATE KERYTHING_WITH_KF6)
 endif()
 
 target_compile_definitions(kerything PRIVATE QT_NO_KEYWORDS)
@@ -115,7 +115,7 @@ target_link_libraries(kerything
         Qt6::Network
 )
 
-if(KERYTHING_WITH_KIO)
+if(KERYTHING_WITH_KF6)
     target_link_libraries(kerything
             PRIVATE
             KF6::CoreAddons
@@ -140,7 +140,7 @@ target_include_directories(kerythingd
         ${EXT2FS_INCLUDE_DIRS}
 )
 
-if(KERYTHING_WITH_KIO)
+if(KERYTHING_WITH_KF6)
     include(KDEInstallDirs)
     include(ECMInstallIcons)
 endif()

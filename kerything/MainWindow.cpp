@@ -150,6 +150,16 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
             copyPathsAction->setEnabled(count > 0);
             copyPathsAction->setText(count <= 1 ? "Copy Full Path" : "Copy " + QString::number(count) + " Full Paths");
         }
+
+        QAction* copyParentPathsAction = findChild<QAction*>(QStringLiteral("copyParentPathsAction"));
+        if (copyParentPathsAction) {
+            copyParentPathsAction->setEnabled(count > 0);
+            copyParentPathsAction->setText(
+                count <= 1
+                    ? QStringLiteral("Copy Parent Path")
+                    : QStringLiteral("Copy %1 Parent Paths").arg(count)
+            );
+        }
     };
 
     // Trigger update whenever selection changes
@@ -248,7 +258,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     addAction(focusSearchAct);
 
     // Enter: Open
-    auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
+    auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open File", this);
     openAct->setShortcuts({
         QKeySequence(Qt::Key_Return),
         QKeySequence(Qt::Key_Enter)
@@ -265,7 +275,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     addAction(openLocAct);
 
     // Ctrl+C: Copy Files
-    auto *copyFilesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy", this);
+    auto *copyFilesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy File", this);
     copyFilesAct->setShortcut(QKeySequence::Copy);
     copyFilesAct->setObjectName("copyFilesAction");
     connect(copyFilesAct, &QAction::triggered, this, &MainWindow::copyFiles);
@@ -284,6 +294,12 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     copyPathsAct->setObjectName("copyPathsAction");
     connect(copyPathsAct, &QAction::triggered, this, &MainWindow::copyPaths);
     addAction(copyPathsAct);
+
+    // Copy Parent Paths
+    auto *copyParentPathsAct = new QAction(QIcon::fromTheme("edit-copy-path"), "Copy Parent Path", this);
+    copyParentPathsAct->setObjectName("copyParentPathsAction");
+    connect(copyParentPathsAct, &QAction::triggered, this, &MainWindow::copyParentPaths);
+    addAction(copyParentPathsAct);
 
     // Alt+Shift+F4: Open Terminal
     auto *terminalAct = new QAction(QIcon::fromTheme("utilities-terminal"), "Open Terminal Here", this);
@@ -308,6 +324,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyFilesAct);
     editMenu->addAction(copyFileNamesAct);
     editMenu->addAction(copyPathsAct);
+    editMenu->addAction(copyParentPathsAct);
 
     // Help Menu
     auto* helpMenu = menuBar()->addMenu("Help");
@@ -455,6 +472,7 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
     menu.addAction(findChild<QAction*>(QStringLiteral("copyFilesAction")));
     menu.addAction(findChild<QAction*>(QStringLiteral("copyFileNamesAction")));
     menu.addAction(findChild<QAction*>(QStringLiteral("copyPathsAction")));
+    menu.addAction(findChild<QAction*>(QStringLiteral("copyParentPathsAction")));
 
     menu.exec(event->globalPos());
 }
@@ -660,6 +678,46 @@ void MainWindow::copyPaths()
 
     if (!paths.isEmpty()) {
         QApplication::clipboard()->setText(paths.join(QLatin1Char('\n')));
+    }
+}
+
+void MainWindow::copyParentPaths()
+{
+    if (!tableView_->selectionModel()) {
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    QStringList parentPaths;
+    parentPaths.reserve(selectedRows.size());
+
+    for (const QModelIndex& index : selectedRows) {
+        const std::optional<QUrl> url = model_->localUrlForRow(index.row());
+
+        if (url) {
+            const QFileInfo fileInfo(url->toLocalFile());
+            parentPaths.append(QDir::cleanPath(
+                fileInfo.isDir()
+                    ? fileInfo.absoluteFilePath()
+                    : fileInfo.absolutePath()
+            ));
+            continue;
+        }
+
+        const QString displayPath = model_->data(model_->index(index.row(), 1), Qt::DisplayRole).toString();
+
+        if (!displayPath.isEmpty()) {
+            parentPaths.append(QDir::cleanPath(displayPath));
+        }
+    }
+
+    if (!parentPaths.isEmpty()) {
+        QApplication::clipboard()->setText(parentPaths.join(QLatin1Char('\n')));
     }
 }
 

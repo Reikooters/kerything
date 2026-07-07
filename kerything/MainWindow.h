@@ -115,6 +115,11 @@ private Q_SLOTS:
     void copyPaths();
 
     /**
+     * @brief Copies the parent paths of selected items to the clipboard.
+     */
+    void copyParentPaths();
+
+    /**
      * @brief Copies the selected files themselves to the clipboard (for pasting in Dolphin).
      */
     void copyFiles();

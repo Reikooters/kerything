@@ -39,6 +39,10 @@
 
 #include "AppController.h"
 
+namespace {
+    constexpr int OpenManyFilesConfirmationThreshold = 10;
+}
+
 MainWindow::MainWindow(AppController* controller, QWidget* parent)
     : QMainWindow(parent),
       controller_(controller) {
@@ -503,6 +507,23 @@ void MainWindow::openSelectedFiles() {
 
     if (selectedRows.isEmpty()) {
         return;
+    }
+
+    if (selectedRows.size() > OpenManyFilesConfirmationThreshold) {
+        const QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            QStringLiteral("Open %1 Files?").arg(selectedRows.size()),
+            QStringLiteral(
+                "You are about to open %1 files.\n\n"
+                "This may open many application windows or tabs."
+            ).arg(selectedRows.size()),
+            QMessageBox::Cancel | QMessageBox::Open,
+            QMessageBox::Cancel
+        );
+
+        if (result != QMessageBox::Open) {
+            return;
+        }
     }
 
     QList<QUrl> urls;

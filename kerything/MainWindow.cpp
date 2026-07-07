@@ -118,7 +118,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         QAction* openAction = findChild<QAction*>("openAction");
         if (openAction) {
             openAction->setEnabled(count > 0);
-            openAction->setText(count <= 1 ? "Open" : "Open " + QString::number(count) + " Files");
+            openAction->setText(count <= 1 ? "Open File" : "Open " + QString::number(count) + " Files");
         }
 
         // Open Location & Terminal: Only for single selection
@@ -142,13 +142,13 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         QAction* copyFileNamesAction = findChild<QAction*>("copyFileNamesAction");
         if (copyFileNamesAction) {
             copyFileNamesAction->setEnabled(count > 0);
-            copyFileNamesAction->setText(count <= 1 ? "Copy File Name" : "Copy File Names");
+            copyFileNamesAction->setText(count <= 1 ? "Copy File Name" : "Copy " + QString::number(count) + " File Names");
         }
 
         QAction* copyPathsAction = findChild<QAction*>("copyPathsAction");
         if (copyPathsAction) {
             copyPathsAction->setEnabled(count > 0);
-            copyPathsAction->setText(count <= 1 ? "Copy Full Path" : "Copy Full Paths");
+            copyPathsAction->setText(count <= 1 ? "Copy Full Path" : "Copy " + QString::number(count) + " Full Paths");
         }
     };
 

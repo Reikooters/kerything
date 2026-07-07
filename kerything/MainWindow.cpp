@@ -33,6 +33,7 @@
 #include <KApplicationTrader>
 #include <KIO/ApplicationLauncherJob>
 #include <KIO/JobUiDelegateFactory>
+#include <KIO/OpenFileManagerWindowJob>
 #include <KService>
 #include <KTerminalLauncherJob>
 #endif
@@ -624,6 +625,12 @@ void MainWindow::openSelectedLocation()
         );
         return;
     }
+
+#ifdef KERYTHING_WITH_KIO
+    if (KIO::highlightInFileManager({*url})) {
+        return;
+    }
+#endif
 
     const QFileInfo fileInfo(url->toLocalFile());
     const QString dirPath = fileInfo.isDir()

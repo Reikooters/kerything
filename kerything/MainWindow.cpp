@@ -123,7 +123,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         QAction* openAction = findChild<QAction*>("openAction");
         if (openAction) {
             openAction->setEnabled(count > 0);
-            openAction->setText(count <= 1 ? "Open File" : "Open " + QString::number(count) + " Files");
+            openAction->setText(count <= 1 ? "Open" : "Open " + QString::number(count) + " Files");
         }
 
         // Open Location & Terminal: Only for single selection
@@ -263,7 +263,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     addAction(focusSearchAct);
 
     // Enter: Open
-    auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open File", this);
+    auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
     openAct->setShortcuts({
         QKeySequence(Qt::Key_Return),
         QKeySequence(Qt::Key_Enter)
@@ -272,12 +272,12 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(openAct, &QAction::triggered, this, &MainWindow::openSelectedFiles);
     addAction(openAct);
 
-    // Ctrl+Enter: Open File Location
-    auto *openLocAct = new QAction(QIcon::fromTheme("folder-open"), "Open File Location", this);
-    openLocAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
-    openLocAct->setObjectName("openLocationAction");
-    connect(openLocAct, &QAction::triggered, this, &MainWindow::openSelectedLocation);
-    addAction(openLocAct);
+    // Ctrl+Enter: Show in File Manager
+    auto *showInFileManagerAct = new QAction(QIcon::fromTheme("folder-open"), "Show in File Manager", this);
+    showInFileManagerAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
+    showInFileManagerAct->setObjectName("openLocationAction");
+    connect(showInFileManagerAct, &QAction::triggered, this, &MainWindow::openSelectedLocation);
+    addAction(showInFileManagerAct);
 
     // Ctrl+C: Copy Files
     auto *copyFilesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy File", this);
@@ -319,7 +319,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     fileMenu->addAction(closeWindowAct);
     fileMenu->addSeparator();
     fileMenu->addAction(openAct);
-    fileMenu->addAction(openLocAct);
+    fileMenu->addAction(showInFileManagerAct);
     fileMenu->addAction(terminalAct);
     fileMenu->addSeparator();
     fileMenu->addAction(quitAct);

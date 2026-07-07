@@ -14,6 +14,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPushButton>
@@ -56,53 +57,6 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Add magnifying glass icon to the search bar
     searchLine_->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
-
-    // --- Burger Menu Setup ---
-    auto *menu = new QMenu(this);
-
-    auto *newWindowAct = new QAction(QIcon::fromTheme("window-new"), "New Window", this);
-    newWindowAct->setShortcut(QKeySequence::New);
-    connect(newWindowAct, &QAction::triggered, this, [this]() {
-        if (controller_) {
-            controller_->openNewWindow();
-        }
-    });
-    menu->addAction(newWindowAct);
-    addAction(newWindowAct); // Register with window for shortcuts
-
-    menu->addSeparator();
-
-    auto *changePartitionAct = new QAction(QIcon::fromTheme("drive-harddisk"), "Change Partition", this);
-    //connect(changePartitionAct, &QAction::triggered, this, &MainWindow::changePartition);
-    changePartitionAct->setShortcut(QKeySequence::Open);
-    menu->addAction(changePartitionAct);
-    addAction(changePartitionAct); // Register with window for shortcuts
-
-    auto *rescanPartitionAct = new QAction(QIcon::fromTheme("view-refresh"), "Rescan Partition", this);
-    //connect(rescanPartitionAct, &QAction::triggered, this, &MainWindow::rescanPartition);
-    rescanPartitionAct->setShortcut(QKeySequence::Refresh);
-    menu->addAction(rescanPartitionAct);
-    addAction(rescanPartitionAct); // Register with window for shortcuts
-
-    menu->addSeparator();
-
-    auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
-    connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
-    menu->addAction(aboutAct);
-
-    auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit", this);
-    quitAct->setShortcut(QKeySequence::Quit);
-    connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
-    menu->addAction(quitAct);
-    addAction(quitAct); // Register with window for shortcuts
-
-    // Add the menu to a button inside the search line
-    auto *menuAction = searchLine_->addAction(QIcon::fromTheme("application-menu"), QLineEdit::TrailingPosition);
-    connect(menuAction, &QAction::triggered, [this, menu, menuAction]() {
-        // Show the menu just below the icon
-        menu->exec(QCursor::pos());
-    });
-    // ---------------------
 
     layout->addWidget(searchLine_);
 
@@ -164,7 +118,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         QAction* openAction = findChild<QAction*>("openAction");
         if (openAction) {
             openAction->setEnabled(count > 0);
-            openAction->setText(count == 1 ? "Open" : "Open " + QString::number(count) + " Files");
+            openAction->setText(count <= 1 ? "Open" : "Open " + QString::number(count) + " Files");
         }
 
         // Open Location & Terminal: Only for single selection
@@ -182,19 +136,19 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         QAction* copyFilesAction = findChild<QAction*>("copyFilesAction");
         if (copyFilesAction) {
             copyFilesAction->setEnabled(count > 0);
-            copyFilesAction->setText(count == 1 ? "Copy File" : "Copy " + QString::number(count) + " Files");
+            copyFilesAction->setText(count <= 1 ? "Copy File" : "Copy " + QString::number(count) + " Files");
         }
 
         QAction* copyFileNamesAction = findChild<QAction*>("copyFileNamesAction");
         if (copyFileNamesAction) {
             copyFileNamesAction->setEnabled(count > 0);
-            copyFileNamesAction->setText(count == 1 ? "Copy File Name" : "Copy File Names");
+            copyFileNamesAction->setText(count <= 1 ? "Copy File Name" : "Copy File Names");
         }
 
         QAction* copyPathsAction = findChild<QAction*>("copyPathsAction");
         if (copyPathsAction) {
             copyPathsAction->setEnabled(count > 0);
-            copyPathsAction->setText(count == 1 ? "Copy Full Path" : "Copy Full Paths");
+            copyPathsAction->setText(count <= 1 ? "Copy Full Path" : "Copy Full Paths");
         }
     };
 
@@ -253,9 +207,40 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // ---------------------
 
     // --- Global Window Actions (Shortcuts + Menu items) ---
+
+    // New Window
+    auto *newWindowAct = new QAction(QIcon::fromTheme("window-new"), "New Window", this);
+    newWindowAct->setShortcut(QKeySequence::New);
+    connect(newWindowAct, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->openNewWindow();
+        }
+    });
+    addAction(newWindowAct);
+
+    // Close Window
+    auto *closeWindowAct = new QAction(QIcon::fromTheme("window-close"), "Close Window", this);
+    closeWindowAct->setShortcut(QKeySequence::Close);
+    connect(closeWindowAct, &QAction::triggered, this, &QWidget::close);
+    addAction(closeWindowAct);
+
+    // Quit Kerything
+    auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit Kerything", this);
+    quitAct->setShortcut(QKeySequence::Quit);
+    connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+    addAction(quitAct);
+
+    // About Kerything
+    auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
+    connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
+
     // Ctrl+F, Ctrl+L and Alt+D: Focus Search
     auto *focusSearchAct = new QAction(this);
-    focusSearchAct->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_F), QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
+    focusSearchAct->setShortcuts({
+        QKeySequence::Find,
+        QKeySequence(Qt::CTRL | Qt::Key_L),
+        QKeySequence(Qt::ALT | Qt::Key_D)
+    });
     connect(focusSearchAct, &QAction::triggered, searchLine_, [this]() {
         searchLine_->setFocus();
         searchLine_->selectAll();
@@ -304,8 +289,29 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto *terminalAct = new QAction(QIcon::fromTheme("utilities-terminal"), "Open Terminal Here", this);
     terminalAct->setShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_F4));
     terminalAct->setObjectName("openTerminalAction");
-     connect(terminalAct, &QAction::triggered, this, &MainWindow::openTerminal);
+    connect(terminalAct, &QAction::triggered, this, &MainWindow::openTerminal);
     addAction(terminalAct);
+
+    // File Menu
+    auto* fileMenu = menuBar()->addMenu("File");
+    fileMenu->addAction(newWindowAct);
+    fileMenu->addAction(closeWindowAct);
+    fileMenu->addSeparator();
+    fileMenu->addAction(openAct);
+    fileMenu->addAction(openLocAct);
+    fileMenu->addAction(terminalAct);
+    fileMenu->addSeparator();
+    fileMenu->addAction(quitAct);
+
+    // Edit Menu
+    auto* editMenu = menuBar()->addMenu("Edit");
+    editMenu->addAction(copyFilesAct);
+    editMenu->addAction(copyFileNamesAct);
+    editMenu->addAction(copyPathsAct);
+
+    // Help Menu
+    auto* helpMenu = menuBar()->addMenu("Help");
+    helpMenu->addAction(aboutAct);
     // ---------------------
 
     updateActionStates();

@@ -633,9 +633,7 @@ void MainWindow::openSelectedLocation()
 #endif
 
     const QFileInfo fileInfo(url->toLocalFile());
-    const QString dirPath = fileInfo.isDir()
-        ? fileInfo.absoluteFilePath()
-        : fileInfo.absolutePath();
+    const QString dirPath = fileInfo.absolutePath();
 
     if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath))) {
         statusBar()->showMessage(

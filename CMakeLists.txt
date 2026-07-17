@@ -57,6 +57,8 @@ add_executable(kerything
         kerything/main.cpp
         kerything/AppController.cpp
         kerything/AppController.h
+        kerything/BlockDeviceDisplayUtils.cpp
+        kerything/BlockDeviceDisplayUtils.h
         kerything/DaemonClient.cpp
         kerything/DaemonClient.h
         kerything/DevicePickerDialog.cpp

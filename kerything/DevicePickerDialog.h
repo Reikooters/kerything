@@ -40,10 +40,7 @@ private:
         ColumnCount
     };
 
-    static QString displayNameForBlockDevice(const BlockDevice& blockDevice);
-    static QString displayOrDash(const QString& value);
     static bool shouldSelectByDefault(const BlockDevice& blockDevice);
-    static bool deviceLessThan(const BlockDevice& lhs, const BlockDevice& rhs);
 
     [[nodiscard]] Qt::CheckState initialCheckStateForBlockDevice(const BlockDevice& blockDevice) const;
 

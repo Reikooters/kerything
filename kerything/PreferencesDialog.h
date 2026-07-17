@@ -48,10 +48,6 @@ private:
         DeviceColumnCount
     };
 
-    static QString displayOrDash(const QString& value);
-    static QString displayNameForBlockDevice(const BlockDevice& blockDevice);
-    static bool deviceLessThan(const BlockDevice& lhs, const BlockDevice& rhs);
-
     QWidget* createDevicesPage();
     QWidget* createIndexingPage();
     QWidget* createAdvancedPage();

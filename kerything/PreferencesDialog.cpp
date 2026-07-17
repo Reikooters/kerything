@@ -23,6 +23,8 @@
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
 
+#include "BlockDeviceDisplayUtils.h"
+
 namespace {
     constexpr int DeviceIdRole = Qt::UserRole + 1;
     constexpr int InitialEnabledRole = Qt::UserRole + 2;
@@ -190,82 +192,6 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
     }
 
     updateApplyButtonEnabled();
-}
-
-QString PreferencesDialog::displayOrDash(const QString& value)
-{
-    const QString trimmed = value.trimmed();
-    return trimmed.isEmpty() ? QStringLiteral("—") : trimmed;
-}
-
-QString PreferencesDialog::displayNameForBlockDevice(const BlockDevice& blockDevice)
-{
-    const QString label = blockDevice.label.trimmed();
-    if (!label.isEmpty()) {
-        return label;
-    }
-
-    const QString mountPoint = blockDevice.primaryMountPoint.trimmed();
-    if (!mountPoint.isEmpty()) {
-        if (mountPoint == QStringLiteral("/")) {
-            return QStringLiteral("Root filesystem");
-        }
-
-        const QStringList parts = mountPoint.split(QStringLiteral("/"), Qt::SkipEmptyParts);
-        if (!parts.isEmpty()) {
-            return parts.last();
-        }
-
-        return mountPoint;
-    }
-
-    const QString fsType = blockDevice.fsType.trimmed();
-    if (!fsType.isEmpty()) {
-        return fsType.toUpper() + QStringLiteral(" volume");
-    }
-
-    const QString devNode = blockDevice.devNode.trimmed();
-    if (!devNode.isEmpty()) {
-        return devNode;
-    }
-
-    return QStringLiteral("Unknown volume");
-}
-
-bool PreferencesDialog::deviceLessThan(const BlockDevice& lhs, const BlockDevice& rhs)
-{
-    if (lhs.mounted != rhs.mounted) {
-        return lhs.mounted > rhs.mounted;
-    }
-
-    const QString lhsMountPoint = lhs.primaryMountPoint.trimmed();
-    const QString rhsMountPoint = rhs.primaryMountPoint.trimmed();
-
-    if (lhsMountPoint != rhsMountPoint) {
-        if (lhsMountPoint == QStringLiteral("/")) {
-            return true;
-        }
-
-        if (rhsMountPoint == QStringLiteral("/")) {
-            return false;
-        }
-
-        if (lhsMountPoint.isEmpty() != rhsMountPoint.isEmpty()) {
-            return !lhsMountPoint.isEmpty();
-        }
-
-        return QString::localeAwareCompare(lhsMountPoint, rhsMountPoint) < 0;
-    }
-
-    const QString lhsName = displayNameForBlockDevice(lhs);
-    const QString rhsName = displayNameForBlockDevice(rhs);
-
-    const int nameCompare = QString::localeAwareCompare(lhsName, rhsName);
-    if (nameCompare != 0) {
-        return nameCompare < 0;
-    }
-
-    return QString::localeAwareCompare(lhs.devNode, rhs.devNode) < 0;
 }
 
 void PreferencesDialog::populateNavigation()
@@ -520,7 +446,11 @@ void PreferencesDialog::populateDeviceTable()
     const QSignalBlocker blocker(deviceTable_);
 
     std::vector<BlockDevice> sortedDevices = knownDevices_;
-    std::sort(sortedDevices.begin(), sortedDevices.end(), deviceLessThan);
+    std::sort(
+        sortedDevices.begin(),
+        sortedDevices.end(),
+        BlockDeviceDisplayUtils::deviceLessThan
+    );
 
     deviceTable_->clearContents();
     deviceTable_->setRowCount(static_cast<int>(sortedDevices.size()));
@@ -544,14 +474,14 @@ void PreferencesDialog::populateDeviceTable()
         enabledItem->setData(ShowOfflineResultsRole, preference.showOfflineResults);
         deviceTable_->setItem(row, DeviceEnabledColumn, enabledItem);
 
-        auto* nameItem = new QTableWidgetItem(displayNameForBlockDevice(blockDevice));
+        auto* nameItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayNameForBlockDevice(blockDevice));
         nameItem->setToolTip(blockDevice.deviceId);
         deviceTable_->setItem(row, DeviceNameColumn, nameItem);
 
         auto* statusItem = new QTableWidgetItem(blockDevice.mounted ? QStringLiteral("Mounted") : QStringLiteral("Not mounted"));
         deviceTable_->setItem(row, DeviceStatusColumn, statusItem);
 
-        auto* fsTypeItem = new QTableWidgetItem(displayOrDash(blockDevice.fsType));
+        auto* fsTypeItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayOrDash(blockDevice.fsType));
         deviceTable_->setItem(row, DeviceFsTypeColumn, fsTypeItem);
 
         const QString mountPointText = blockDevice.primaryMountPoint.trimmed().isEmpty()
@@ -566,11 +496,11 @@ void PreferencesDialog::populateDeviceTable()
         );
         deviceTable_->setItem(row, DeviceMountPointColumn, mountPointItem);
 
-        auto* devNodeItem = new QTableWidgetItem(displayOrDash(blockDevice.devNode));
+        auto* devNodeItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayOrDash(blockDevice.devNode));
         devNodeItem->setToolTip(blockDevice.deviceId);
         deviceTable_->setItem(row, DeviceNodeColumn, devNodeItem);
 
-        auto* modelItem = new QTableWidgetItem(displayOrDash(blockDevice.diskModel));
+        auto* modelItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayOrDash(blockDevice.diskModel));
         deviceTable_->setItem(row, DeviceModelColumn, modelItem);
 
         if (!blockDevice.mounted) {
@@ -722,7 +652,7 @@ void PreferencesDialog::applyChanges()
 
         preference.deviceId = blockDevice.deviceId;
         preference.enabled = enabled;
-        preference.displayName = displayNameForBlockDevice(blockDevice);
+        preference.displayName = BlockDeviceDisplayUtils::displayNameForBlockDevice(blockDevice);
         preference.fsType = blockDevice.fsType;
         preference.uuid = blockDevice.uuid;
         preference.partuuid = blockDevice.partuuid;

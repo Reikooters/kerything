@@ -41,7 +41,7 @@
 #include "AppController.h"
 
 namespace {
-    constexpr int OpenManyFilesConfirmationThreshold = 10;
+    constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
 }
 
 MainWindow::MainWindow(AppController* controller, QWidget* parent)
@@ -117,31 +117,65 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // --- Action State Management ---
     auto updateActionStates = [this]() {
         const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
-        int count = selectedRows.count();
+        const qsizetype count = selectedRows.count();
+        const qsizetype mountedCount = model_ ? model_->mountedRowCount(selectedRows) : 0;
+        const bool hasMountedSelection = mountedCount > 0;
 
-        // Open: Enabled if mounted and something is selected
+        // Open: enabled if at least one selected item is currently mounted.
         QAction* openAction = findChild<QAction*>("openAction");
         if (openAction) {
-            openAction->setEnabled(count > 0);
-            openAction->setText(count <= 1 ? "Open" : "Open " + QString::number(count) + " Files");
+            openAction->setEnabled(hasMountedSelection);
+            openAction->setText(actionTextForOpenableCount(
+                QStringLiteral("Open"),
+                QStringLiteral("Open 1 File"),
+                QStringLiteral("Open %1 Files"),
+                count,
+                mountedCount
+            ));
+            openAction->setStatusTip(
+                hasMountedSelection
+                    ? QString()
+                    : QStringLiteral("Device is not mounted. Mount the device to open this item.")
+            );
         }
 
-        // Open Location & Terminal: Only for single selection
+        // Open Location & Terminal: only for single mounted selection.
         QAction* openLocAction = findChild<QAction*>("openLocationAction");
         if (openLocAction) {
-            openLocAction->setEnabled(count == 1);
+            openLocAction->setEnabled(count == 1 && hasMountedSelection);
+            openLocAction->setStatusTip(
+                count == 1 && !hasMountedSelection
+                    ? QStringLiteral("Device is not mounted. Mount the device to open its containing folder.")
+                    : QString()
+            );
         }
 
         QAction* openTerminalAction = findChild<QAction*>("openTerminalAction");
         if (openTerminalAction) {
-            openTerminalAction->setEnabled(count == 1);
+            openTerminalAction->setEnabled(count == 1 && hasMountedSelection);
+            openTerminalAction->setStatusTip(
+                count == 1 && !hasMountedSelection
+                    ? QStringLiteral("Device is not mounted. Mount the device to open a terminal there.")
+                    : QString()
+            );
         }
 
         // Copy Actions: Enabled if something is selected
         QAction* copyFilesAction = findChild<QAction*>("copyFilesAction");
         if (copyFilesAction) {
-            copyFilesAction->setEnabled(count > 0);
-            copyFilesAction->setText(count <= 1 ? "Copy File" : "Copy " + QString::number(count) + " Files");
+            copyFilesAction->setEnabled(hasMountedSelection);
+            copyFilesAction->setText(actionTextForOpenableCount(
+                QStringLiteral("Copy File"),
+                QStringLiteral("Copy 1 File"),
+                QStringLiteral("Copy %1 Files"),
+                count,
+                mountedCount
+            ));
+            copyFilesAction->setStatusTip(
+                hasMountedSelection
+                    ? QString()
+                    : QStringLiteral("Device is not mounted. Mount the device to copy files.")
+            );
         }
 
         QAction* copyFileNamesAction = findChild<QAction*>("copyFileNamesAction");
@@ -413,6 +447,66 @@ void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)
     }
 }
 
+void MainWindow::showUnavailableSelectionStatus(const qsizetype selectedCount, const qsizetype mountedCount, const QString& actionText)
+{
+    Q_UNUSED(mountedCount);
+
+    const QString itemText = selectedCount == 1
+        ? QStringLiteral("item is")
+        : QStringLiteral("items are");
+
+    showTemporaryStatus(
+        QStringLiteral("Cannot %1: selected %2 %3 on unmounted devices.")
+            .arg(actionText)
+            .arg(selectedCount)
+            .arg(itemText),
+        5000
+    );
+}
+
+void MainWindow::showSkippedUnmountedStatus(const qsizetype attemptedCount, const qsizetype completedCount, const QString& actionText)
+{
+    const qsizetype skippedCount = attemptedCount - completedCount;
+
+    if (skippedCount <= 0) {
+        return;
+    }
+
+    const QString skippedText = skippedCount == 1
+        ? QStringLiteral("1 item")
+        : QStringLiteral("%1 items").arg(skippedCount);
+
+    showTemporaryStatus(
+        QStringLiteral("%1 %2. Skipped %3 from unmounted devices.")
+            .arg(actionText)
+            .arg(completedCount)
+            .arg(skippedText),
+        5000
+    );
+}
+
+QString MainWindow::actionTextForOpenableCount(
+    const QString& singularText,
+    const QString& singularCountedText,
+    const QString& pluralCountedText,
+    qsizetype selectedCount,
+    qsizetype openableCount
+) {
+    if (openableCount <= 0) {
+        return singularText;
+    }
+
+    if (selectedCount == 1 && openableCount == 1) {
+        return singularText;
+    }
+
+    if (openableCount == 1) {
+        return singularCountedText;
+    }
+
+    return pluralCountedText.arg(openableCount);
+}
+
 void MainWindow::showAbout()
 {
 #ifdef KERYTHING_WITH_KF6
@@ -486,6 +580,19 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
         menu.addAction(terminalAction);
     }
 
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+    const qsizetype mountedCount = model_ ? model_->mountedRowCount(selectedRows) : 0;
+
+    if (!selectedRows.isEmpty() && mountedCount == 0) {
+        menu.addSeparator();
+
+        auto* unavailableAction = menu.addAction(
+            QIcon::fromTheme(QStringLiteral("dialog-warning")),
+            QStringLiteral("Device not mounted")
+        );
+        unavailableAction->setEnabled(false);
+    }
+
     menu.addSeparator();
 
     menu.addAction(findChild<QAction*>(QStringLiteral("copyFilesAction")));
@@ -524,14 +631,25 @@ void MainWindow::openSelectedFiles() {
         return;
     }
 
-    if (selectedRows.size() > OpenManyFilesConfirmationThreshold) {
+    const qsizetype mountedCount = model_->mountedRowCount(selectedRows);
+
+    if (mountedCount == 0) {
+        showUnavailableSelectionStatus(
+            selectedRows.size(),
+            mountedCount,
+            QStringLiteral("open")
+        );
+        return;
+    }
+
+    if (mountedCount > OpenManyFilesConfirmationThreshold) {
         const QMessageBox::StandardButton result = QMessageBox::question(
             this,
-            QStringLiteral("Open %1 Files?").arg(selectedRows.size()),
+            QStringLiteral("Open %1 Files?").arg(mountedCount),
             QStringLiteral(
                 "You are about to open %1 files.\n\n"
                 "This may open many application windows or tabs."
-            ).arg(selectedRows.size()),
+            ).arg(mountedCount),
             QMessageBox::Cancel | QMessageBox::Open,
             QMessageBox::Cancel
         );
@@ -542,7 +660,6 @@ void MainWindow::openSelectedFiles() {
     }
 
     QList<QUrl> urls;
-    bool skippedUnmounted = false;
 
     for (const QModelIndex& index : selectedRows) {
         if (!index.isValid()) {
@@ -552,30 +669,10 @@ void MainWindow::openSelectedFiles() {
         const std::optional<QUrl> url = model_->localUrlForRow(index.row());
 
         if (!url) {
-            skippedUnmounted = true;
             continue;
         }
 
         urls.append(*url);
-    }
-
-    if (urls.isEmpty()) {
-        QMessageBox::information(
-            this,
-            QStringLiteral("Drive Not Mounted"),
-            QStringLiteral(
-                "The selected result is from a device that is not currently mounted.\n\n"
-                "Mount the device to open files from it."
-            )
-        );
-        return;
-    }
-
-    if (skippedUnmounted) {
-        statusBar()->showMessage(
-            QStringLiteral("Some selected items were skipped because their devices are not mounted."),
-            5000
-        );
     }
 
 #ifdef KERYTHING_WITH_KF6
@@ -612,6 +709,12 @@ void MainWindow::openSelectedFiles() {
         }
     }
 #endif
+
+    showSkippedUnmountedStatus(
+        selectedRows.size(),
+        urls.size(),
+        QStringLiteral("Opened")
+    );
 }
 
 void MainWindow::openSelectedLocation()
@@ -629,13 +732,10 @@ void MainWindow::openSelectedLocation()
     const std::optional<QUrl> url = model_->localUrlForRow(selectedRows.first().row());
 
     if (!url) {
-        QMessageBox::information(
-            this,
-            QStringLiteral("Drive Not Mounted"),
-            QStringLiteral(
-                "The selected result is from a device that is not currently mounted.\n\n"
-                "Mount the device to open its containing folder."
-            )
+        showUnavailableSelectionStatus(
+            selectedRows.size(),
+            0,
+            QStringLiteral("show location")
         );
         return;
     }
@@ -796,13 +896,10 @@ void MainWindow::copyFiles()
     }
 
     if (urls.isEmpty()) {
-        QMessageBox::information(
-            this,
-            QStringLiteral("Drive Not Mounted"),
-            QStringLiteral(
-                "None of the selected results are on currently mounted devices.\n\n"
-                "Mount the device to copy files."
-            )
+        showUnavailableSelectionStatus(
+            selectedRows.size(),
+            0,
+            QStringLiteral("copy files")
         );
         return;
     }
@@ -811,12 +908,11 @@ void MainWindow::copyFiles()
     mimeData->setUrls(urls);
     QApplication::clipboard()->setMimeData(mimeData);
 
-    if (urls.size() != selectedRows.size()) {
-        statusBar()->showMessage(
-            QStringLiteral("Copied mounted files only; unmounted results were skipped."),
-            5000
-        );
-    }
+    showSkippedUnmountedStatus(
+        selectedRows.size(),
+        urls.size(),
+        QStringLiteral("Copied")
+    );
 }
 
 void MainWindow::openTerminal()
@@ -834,13 +930,10 @@ void MainWindow::openTerminal()
     const std::optional<QUrl> url = model_->localUrlForRow(selectedRows.first().row());
 
     if (!url) {
-        QMessageBox::information(
-            this,
-            QStringLiteral("Drive Not Mounted"),
-            QStringLiteral(
-                "The selected result is from a device that is not currently mounted.\n\n"
-                "Mount the device to open a terminal there."
-            )
+        showUnavailableSelectionStatus(
+            selectedRows.size(),
+            0,
+            QStringLiteral("open terminal")
         );
         return;
     }

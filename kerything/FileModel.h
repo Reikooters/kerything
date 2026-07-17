@@ -52,6 +52,16 @@ public:
     [[nodiscard]] std::optional<QUrl> localUrlForRow(int row) const;
 
     /**
+     * @brief Returns true if the row currently resolves to a mounted local path.
+     */
+    [[nodiscard]] bool isMountedRow(int row) const;
+
+    /**
+     * @brief Counts how many of the given rows currently resolve to mounted local paths.
+     */
+    [[nodiscard]] qsizetype mountedRowCount(const QModelIndexList& rows) const;
+
+    /**
      * @brief Returns the raw database index for a given model row.
      * Useful for looking up full file details when an item is clicked/opened.
      */

@@ -130,6 +130,15 @@ private Q_SLOTS:
     void openTerminal();
 
 private:
+    void showUnavailableSelectionStatus(qsizetype selectedCount, qsizetype mountedCount, const QString& actionText);
+    void showSkippedUnmountedStatus(qsizetype attemptedCount, qsizetype completedCount, const QString& actionText);
+    QString actionTextForOpenableCount(
+        const QString& singularText,
+        const QString& singularCountedText,
+        const QString& pluralCountedText,
+        qsizetype selectedCount,
+        qsizetype openableCount
+    );
 
     AppController* controller_ = nullptr;
     // QString fsType_;

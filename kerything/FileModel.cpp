@@ -452,6 +452,35 @@ std::optional<QUrl> FileModel::localUrlForRow(const int row) const {
     return QUrl::fromLocalFile(fullPath);
 }
 
+bool FileModel::isMountedRow(const int row) const
+{
+    if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
+        return false;
+    }
+
+    const auto& handle = searchResults_[row];
+    const auto* deviceIndex = resolveDeviceIndex(handle);
+
+    if (!deviceIndex || handle.recordIdx >= deviceIndex->fileRecords.size()) {
+        return false;
+    }
+
+    return hasMountedPath(*deviceIndex, handle);
+}
+
+qsizetype FileModel::mountedRowCount(const QModelIndexList& rows) const
+{
+    qsizetype count = 0;
+
+    for (const QModelIndex& index : rows) {
+        if (index.isValid() && isMountedRow(index.row())) {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
 uint32_t FileModel::getRecordIndex(int row) const {
     if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
         return 0;

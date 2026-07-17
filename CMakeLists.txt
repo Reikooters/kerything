@@ -132,6 +132,7 @@ if(KERYTHING_WITH_KF6)
             PRIVATE
             KF6::CoreAddons
             KF6::KIOGui
+            KF6::KIOWidgets
             KF6::Service
             KF6::XmlGui
     )

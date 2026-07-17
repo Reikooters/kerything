@@ -31,6 +31,9 @@
 #include <KAboutApplicationDialog>
 #include <KAboutData>
 #include <KApplicationTrader>
+#include <KFileItem>
+#include <KFileItemActions>
+#include <KFileItemListProperties>
 #include <KIO/ApplicationLauncherJob>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/OpenFileManagerWindowJob>
@@ -555,13 +558,18 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
         return;
     }
 
+    // Map the position correctly to the viewport
+    // This ensures the row index is perfectly aligned with the mouse
     const QPoint viewportPos = tableView_->viewport()->mapFrom(this, event->pos());
     const QModelIndex clickIndex = tableView_->indexAt(viewportPos);
 
+    // If user clicks empty space, don't show the full file menu
     if (!clickIndex.isValid()) {
         return;
     }
 
+    // If the user right-clicks an item that ISN'T selected,
+    // select it and clear the old selection (standard file manager behavior).
     if (!tableView_->selectionModel()->isSelected(clickIndex)) {
         tableView_->setCurrentIndex(clickIndex);
         tableView_->selectionModel()->select(
@@ -569,6 +577,37 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
             QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows
         );
     }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+    const qsizetype mountedCount = model_ ? model_->mountedRowCount(selectedRows) : 0;
+
+#ifdef KERYTHING_WITH_KF6
+    KFileItemList kdeItems;
+
+    if (model_) {
+        for (const QModelIndex& index : selectedRows) {
+            if (!index.isValid()) {
+                continue;
+            }
+
+            const std::optional<QUrl> url = model_->localUrlForRow(index.row());
+            if (!url) {
+                continue;
+            }
+
+            KFileItem item(*url);
+            item.determineMimeType();
+            kdeItems.append(item);
+        }
+    }
+
+    KFileItemActions kdeFileActions;
+    const bool hasKdeItems = !kdeItems.isEmpty();
+
+    if (hasKdeItems) {
+        kdeFileActions.setItemListProperties(KFileItemListProperties(kdeItems));
+    }
+#endif
 
     QMenu menu(this);
 
@@ -580,8 +619,11 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
         menu.addAction(terminalAction);
     }
 
-    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
-    const qsizetype mountedCount = model_ ? model_->mountedRowCount(selectedRows) : 0;
+#ifdef KERYTHING_WITH_KF6
+    if (hasKdeItems) {
+        kdeFileActions.insertOpenWithActionsTo(nullptr, &menu, QStringList());
+    }
+#endif
 
     if (!selectedRows.isEmpty() && mountedCount == 0) {
         menu.addSeparator();
@@ -599,6 +641,21 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
     menu.addAction(findChild<QAction*>(QStringLiteral("copyFileNamesAction")));
     menu.addAction(findChild<QAction*>(QStringLiteral("copyPathsAction")));
     menu.addAction(findChild<QAction*>(QStringLiteral("copyParentPathsAction")));
+
+#ifdef KERYTHING_WITH_KF6
+    if (hasKdeItems) {
+        menu.addSeparator();
+        kdeFileActions.addActionsTo(&menu);
+    } else if (!selectedRows.isEmpty() && mountedCount == 0) {
+        menu.addSeparator();
+
+        auto* kdeUnavailableAction = menu.addAction(
+            QIcon::fromTheme(QStringLiteral("dialog-warning")),
+            QStringLiteral("KDE file actions unavailable for unmounted results")
+        );
+        kdeUnavailableAction->setEnabled(false);
+    }
+#endif
 
     menu.exec(event->globalPos());
 }

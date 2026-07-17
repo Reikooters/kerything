@@ -114,11 +114,13 @@ void DeviceChangeMonitor::onUdevActivated()
         const char* action = udev_device_get_action(device);
         const char* devnode = udev_device_get_devnode(device);
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "udev block event action="
                   << (action ? action : "")
                   << " devnode="
                   << (devnode ? devnode : "")
                   << "\n";
+#endif
 
         udev_device_unref(device);
         Q_EMIT devicesMayHaveChanged();
@@ -132,7 +134,9 @@ void DeviceChangeMonitor::onMountActivated()
      * the daemon already rebuilds the authoritative snapshot afterwards.
      */
     while (mnt_monitor_next_change(mountMonitor_, nullptr, nullptr) == 0) {
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "mount table changed\n";
+#endif
         Q_EMIT devicesMayHaveChanged();
     }
 }

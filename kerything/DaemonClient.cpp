@@ -144,7 +144,10 @@ void DaemonClient::onConnected()
     }
 
     setConnectedState(true);
+
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Connected to daemon transport\n";
+#endif
 }
 
 void DaemonClient::onDisconnected()
@@ -333,11 +336,13 @@ void DaemonClient::handleReadyMessage(const Protocol::MessageHeader&, const QByt
         return;
     }
 
-    std::cout << "Received READY response: Version="
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "Received READY response: ProtocolVersion="
               << protocolVersion
               << ", ReadyState="
               << daemonReady
               << "\n";
+#endif
 
     if (protocolVersion != Protocol::Version) {
         std::cerr << "Protocol version mismatch: expected "
@@ -354,9 +359,13 @@ void DaemonClient::handleReadyMessage(const Protocol::MessageHeader&, const QByt
 
     if (daemonReady) {
         setReadyState(true);
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "Daemon is ready\n";
+#endif
     } else {
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "Daemon is connected but not ready yet\n";
+#endif
         setReadyState(false);
     }
 }
@@ -386,6 +395,7 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
         return;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Scan started for requestId=" << header.requestId
               << " deviceId=" << deviceId.toStdString()
               << " devNode=" << devNode.toStdString()
@@ -393,6 +403,7 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
               << " label=" << label.toStdString()
               << " primaryMountPoint=" << primaryMountPoint.toStdString()
               << "\n";
+#endif
 
     Q_EMIT scanStarted(
         header.requestId,
@@ -420,9 +431,11 @@ void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, con
         return;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Scan progress requestId=" << header.requestId
               << " processed=" << filesProcessed
               << " total=" << filesTotal << "\n";
+#endif
 
     Q_EMIT scanProgress(header.requestId, filesProcessed, filesTotal);
 }
@@ -467,16 +480,20 @@ void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageH
         chunk.push_back(rec);
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Received file record chunk requestId=" << header.requestId
               << " count=" << chunk.size() << "\n";
+#endif
 
     Q_EMIT scanFileRecordChunkReceived(header.requestId, chunk);
 }
 
 void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Received string pool chunk requestId=" << header.requestId
               << " length=" << payload.size() << "\n";
+#endif
 
     Q_EMIT scanStringPoolChunkReceived(header.requestId, QByteArrayView(payload));
 }
@@ -497,11 +514,13 @@ void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, co
         return;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Scan completed for requestId=" << header.requestId
               << " deviceId=" << deviceId.toStdString()
               << " devNode=" << devNode.toStdString()
               << " fsType=" << fsType.toStdString()
               << "\n";
+#endif
 
     pendingRequests_.remove(header.requestId);
     Q_EMIT scanCompleted(header.requestId, deviceId, devNode, fsType);
@@ -521,9 +540,11 @@ void DaemonClient::handleScanCancelled(const Protocol::MessageHeader& header, co
         return;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Scan cancelled for requestId=" << header.requestId
               << " deviceId=" << deviceId.toStdString()
               << "\n";
+#endif
 
     pendingRequests_.remove(header.requestId);
     Q_EMIT scanCancelled(header.requestId, deviceId);
@@ -539,8 +560,10 @@ void DaemonClient::handleKnownDevices(const Protocol::MessageHeader& header, con
         return;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Received block devices requestId=" << header.requestId
               << " count=" << blockDevices->size() << "\n";
+#endif
 
     Q_EMIT knownDevices(header.requestId, *blockDevices);
 }

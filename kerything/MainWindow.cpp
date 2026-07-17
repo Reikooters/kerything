@@ -39,6 +39,8 @@
 #include <KIO/OpenFileManagerWindowJob>
 #include <KService>
 #include <KTerminalLauncherJob>
+#else
+#include <QProcess>
 #endif
 
 #include "AppController.h"
@@ -559,7 +561,7 @@ void MainWindow::showAbout()
             "<p>Version %1</p>"
             "<p>Copyright &copy; 2026 Reikooters</p>"
             "<p><a href=\"https://github.com/Reikooters/kerything\">"
-            "github.com/Reikooters/kerything"
+            "https://github.com/Reikooters/kerything"
             "</a></p>"
             "<p>Licensed under the GNU General Public License v3.0 or later.</p>"
         ).arg(QApplication::applicationVersion())

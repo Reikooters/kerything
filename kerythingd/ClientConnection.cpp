@@ -132,7 +132,9 @@ void ClientConnection::handleFrame(const Protocol::MessageHeader& header, const 
 {
     const auto type = static_cast<Protocol::MessageType>(header.type);
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Received message: type: " << header.type << ", requestId: " << header.requestId << ", payloadSize: " << header.payloadSize << "\n";
+#endif
 
     switch (type) {
         case Protocol::MessageType::ScanDevice:

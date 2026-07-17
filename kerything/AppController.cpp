@@ -132,6 +132,7 @@ bool AppController::start() {
             ) {
                 const bool deviceIdMatches = validateScanDeviceId(requestId, deviceId, "scanStarted");
 
+#ifdef KERYTHING_ENABLE_LOGGING
                 if (!deviceIdMatches) {
                     std::cerr << "GUI: continuing scanStarted handling despite deviceId mismatch requestId="
                               << requestId
@@ -145,6 +146,7 @@ bool AppController::start() {
                           << " label=" << label.toStdString()
                           << " primaryMountPoint=" << primaryMountPoint.toStdString()
                           << "\n";
+#endif
 
                 indexController_->addDevice(
                     deviceId,
@@ -170,9 +172,11 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanProgress,
             this, [this](quint32 requestId, quint64 processed, quint64 total) {
+#ifdef KERYTHING_ENABLE_LOGGING
                 std::cout << "GUI: scan progress requestId=" << requestId
                           << " processed=" << processed
                           << " total=" << total << "\n";
+#endif
 
                 const QString deviceId = scanRequestDeviceIds_.value(requestId);
                 QString deviceText = QStringLiteral("device");
@@ -230,8 +234,10 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanFileRecordChunkReceived,
             this, [this](quint32 requestId, const std::vector<FileRecord>& chunk) {
+#ifdef KERYTHING_ENABLE_LOGGING
                 std::cout << "GUI: received scan file record chunk requestId=" << requestId
                           << " size=" << chunk.size() << "\n";
+#endif
 
                 indexController_->appendDeviceFileRecordsByRequestId(requestId, chunk);
 
@@ -240,8 +246,10 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::scanStringPoolChunkReceived,
             this, [this](quint32 requestId, QByteArrayView chunk) {
+#ifdef KERYTHING_ENABLE_LOGGING
                 std::cout << "GUI: received scan file record chunk requestId=" << requestId
                           << " size=" << chunk.size() << "\n";
+#endif
 
                 indexController_->appendDeviceStringPoolByRequestId(requestId, chunk);
 
@@ -252,11 +260,13 @@ bool AppController::start() {
             this, [this](quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType) {
                 const bool deviceIdMatches = validateScanDeviceId(requestId, deviceId, "scanCompleted");
 
+#ifdef KERYTHING_ENABLE_LOGGING
                 std::cout << "GUI: scan completed successfully requestId=" << requestId
                           << " deviceId=" << deviceId.toStdString()
                           << " devNode=" << devNode.toStdString()
                           << " fsType=" << fsType.toStdString()
                           << "\n";
+#endif
 
                 // Build lowercase string pool
                 indexController_->buildLowercaseStringPoolByRequestId(requestId);
@@ -329,8 +339,10 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::knownDevices,
         this, [this](quint32 requestId, const std::vector<BlockDevice>& blockDevices) {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cout << "GUI: received known devices requestId=" << requestId
                           << " size=" << blockDevices.size() << "\n";
+#endif
 
             handleKnownDevicesUpdated(requestId, blockDevices);
         });
@@ -506,7 +518,9 @@ bool AppController::requestKnownDevices(quint32* requestIdOut) {
         *requestIdOut = requestId;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "GUI: ListKnownDevices request sent requestId=" << requestId << "\n";
+#endif
     return true;
 }
 
@@ -526,6 +540,7 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
     updateIndexedDeviceRuntimeStates(blockDevices);
     updateOpenPreferencesDialog();
 
+#ifdef KERYTHING_ENABLE_LOGGING
     for (const auto& blockDevice : blockDevices) {
         std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
                   << " fsType=" << blockDevice.fsType.toStdString()
@@ -539,6 +554,7 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
                   << " enabled=" << (preferences_.isDeviceEnabled(blockDevice.deviceId) ? "true" : "false")
                   << "\n";
     }
+#endif
 
     if (manualRefresh) {
         const qsizetype scansStarted = scanEnabledKnownDevices(blockDevices);
@@ -579,7 +595,9 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
     }
 
     if (blockDevices.empty()) {
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: no supported devices found during first-run selection\n";
+#endif
         // preferences_.setInitialDeviceSelectionCompleted(true);
         return;
     }
@@ -592,7 +610,9 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
     const int result = dialog.exec();
 
     if (result != QDialog::Accepted) {
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: first-run device selection skipped by user\n";
+#endif
         // preferences_.setInitialDeviceSelectionCompleted(true);
         return;
     }
@@ -603,10 +623,12 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
         const bool enabled = selectedDeviceIds.contains(blockDevice.deviceId);
         preferences_.setDeviceEnabled(blockDevice, enabled);
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: first-run device selection deviceId="
                   << blockDevice.deviceId.toStdString()
                   << " enabled=" << (enabled ? "true" : "false")
                   << "\n";
+#endif
     }
 
     preferences_.setInitialDeviceSelectionCompleted(true);
@@ -625,17 +647,21 @@ qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>&
         }
 
         if (activeScanDeviceIds_.contains(blockDevice.deviceId)) {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cout << "GUI: skipping scan because device is already queued/scanning deviceId="
                       << blockDevice.deviceId.toStdString()
                       << "\n";
+#endif
             continue;
         }
 
         const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
         if (!blockDevice.mounted && (!preference || !preference->scanWhenUnmounted)) {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cout << "GUI: skipping enabled device because it is unmounted and scanWhenUnmounted=false deviceId="
                       << blockDevice.deviceId.toStdString()
                       << "\n";
+#endif
             continue;
         }
 
@@ -653,10 +679,12 @@ qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>&
         activeScanDeviceIds_.insert(blockDevice.deviceId);
         ++scansStarted;
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: ScanDevice request sent requestId=" << requestId
                   << " deviceId=" << blockDevice.deviceId.toStdString()
                   << " fsType=" << blockDevice.fsType.toStdString()
                   << "\n";
+#endif
     }
 
     return scansStarted;
@@ -705,9 +733,11 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
     for (const QString& disabledDeviceId : disabledDeviceIds) {
         cancelActiveScansForDevice(disabledDeviceId, true);
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: disabled indexed device deviceId="
                   << disabledDeviceId.toStdString()
                   << "\n";
+#endif
     }
 
     for (const QString& deviceId : unmountedScanDisabledDeviceIds) {
@@ -717,9 +747,11 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
             updateIndexedDeviceRuntimeState(*blockDevice);
         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: cancelled unmounted scan because scanWhenUnmounted was disabled deviceId="
                   << deviceId.toStdString()
                   << "\n";
+#endif
     }
 
     std::vector<BlockDevice> devicesToScan;
@@ -831,11 +863,13 @@ std::vector<BlockDevice> AppController::devicesNeedingScanAfterKnownDeviceUpdate
         if (becameMounted || appearedMounted) {
             out.push_back(newDevice);
 
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cout << "GUI: scheduling scan for device transition deviceId="
                       << newDevice.deviceId.toStdString()
                       << " becameMounted=" << (becameMounted ? "true" : "false")
                       << " appearedMounted=" << (appearedMounted ? "true" : "false")
                       << "\n";
+#endif
         }
     }
 

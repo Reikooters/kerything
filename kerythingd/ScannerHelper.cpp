@@ -118,11 +118,7 @@ bool scanDevice(const QString& devNode,
         return NtfsScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
     }
     if (fsType == "ext4") {
-        {
-            ScopedTimer totalTimer("total ext4 scan");
-
-            return Ext4ScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
-        }
+        return Ext4ScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
     }
     else {
         return false;

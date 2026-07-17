@@ -209,9 +209,11 @@ void Server::refreshKnownDevices()
 
     lastKnownDevices_ = devices;
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Known devices changed; broadcasting count="
               << devices.size()
               << "\n";
+#endif
 
     broadcastKnownDevices(devices);
 }

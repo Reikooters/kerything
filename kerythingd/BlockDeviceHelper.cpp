@@ -323,11 +323,13 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
         if (fsType != QStringLiteral("ext4") &&
             fsType != QStringLiteral("ntfs") &&
             fsType != QStringLiteral("ntfs3")) {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cout << "Skipping unsupported block device devNode="
                       << devNode
                       << " fsType="
                       << fsType.toStdString()
                       << "\n";
+#endif
             continue;
         }
 

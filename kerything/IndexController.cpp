@@ -69,10 +69,12 @@ quint64 IndexController::addDevice(
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
 
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cout << "IndexController: Device already exists, so it was reset for devNode="
                       << devNode.toStdString()
                       << " indexId=" << existingIndexId
                       << "\n";
+#endif
             return 0;
         }
 
@@ -96,12 +98,14 @@ quint64 IndexController::addDevice(
     indexIdByDevNode_[devNode] = indexId;
     indexIdByRequestId_[requestId] = indexId;
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: Added device " << devNode.toStdString()
               << " deviceId=" << deviceId.toStdString()
               << " devNode=" << devNode.toStdString()
               << " fsType=" << fsType.toStdString()
               << " indexId=" << indexId
               << " requestId=" << requestId << "\n";
+#endif
 
     return indexId;
 }
@@ -182,9 +186,11 @@ bool IndexController::removeDeviceByIndexIdUnlocked(quint64 indexId) {
     // Finally remove the owned DeviceIndex itself.
     indexByIndexId_.erase(deviceIt);
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: Removed device"
               << " devNode=" << devicePath.toStdString()
               << " indexId=" << indexId << "\n";
+#endif
 
     return true;
 }
@@ -238,8 +244,10 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
 
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: Appending " << records.size()
               << " file records to device " << deviceIndex.devNode.toStdString() << "\n";
+#endif
 
     // Get the count of how many file records were the index before appending
     const std::size_t fileRecordsCountBefore = deviceIndex.fileRecords.size();
@@ -251,8 +259,10 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     // Parent pointers are resolved once after the full scan has completed.
     deviceIndex.fileRecords.insert(deviceIndex.fileRecords.end(), records.begin(), records.end());
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: The index now contains " << deviceIndex.fileRecords.size()
               << " file records for device devNode=" << deviceIndex.devNode.toStdString() << "\n";
+#endif
 }
 
 void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId, QByteArrayView stringPool) {
@@ -275,8 +285,10 @@ void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId,
 
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: Appending " << stringPool.size()
               << " string pool characters to device devNode=" << deviceIndex.devNode.toStdString() << "\n";
+#endif
 
     // Reserve space for the new records
     deviceIndex.stringPool.reserve(deviceIndex.stringPool.size() + static_cast<size_t>(stringPool.size()));
@@ -284,8 +296,10 @@ void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId,
     // Insert the new string pool data into the device index
     deviceIndex.stringPool.insert(deviceIndex.stringPool.end(), stringPool.begin(), stringPool.end());
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: The index now contains " << deviceIndex.stringPool.size()
               << " string pool characters for device devNode=" << deviceIndex.devNode.toStdString() << "\n";
+#endif
 }
 
 bool IndexController::removeRequestId(quint32 requestId) {
@@ -320,12 +334,14 @@ bool IndexController::updateDeviceRuntimeStateByDeviceId(
             deviceIndex->primaryMountPoint = primaryMountPoint;
         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "IndexController: Updated runtime state"
                   << " deviceId=" << deviceId.toStdString()
                   << " mounted=" << (mounted ? "true" : "false")
                   << " showOfflineResults=" << (showOfflineResults ? "true" : "false")
                   << " searchable=" << (deviceIndex->isSearchable() ? "true" : "false")
                   << "\n";
+#endif
 
         return true;
     }

@@ -111,7 +111,9 @@ public:
          * manipulate the directory structure.
          */
         void resolveParentPointers() {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Resolving parent pointers..." << std::endl;
+#endif
 
             rebuildFsIndexMaps();
 
@@ -152,7 +154,9 @@ public:
                 return;
             }
 
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Pre-sorting records by name ascending (case-insensitive) in parallel..." << std::endl;
+#endif
 
             auto compareCaseInsensitive = [&](const FileRecord& a, const FileRecord& b) {
                 std::string_view s1(&lowercaseStringPool[a.nameOffset], a.nameLen);
@@ -206,7 +210,9 @@ public:
         }
 
         void buildTrigramIndexParallel() {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Building Flat Trigram Index in parallel..." << std::endl;
+#endif
 
             // 1. Calculate how many trigrams we'll have in total to avoid reallocations
             // (Roughly: sum of all filename lengths - 2)
@@ -257,11 +263,15 @@ public:
             });
 
             // 3. Sort the entire index in parallel
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Sorting " << flatIndex.size() << " trigrams..." << std::endl;
+#endif
             std::sort(std::execution::par, flatIndex.begin(), flatIndex.end());
 
             // 4. Remove exact duplicates (same trigram in same file)
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Removing duplicate trigrams..." << std::endl;
+#endif
             auto last = std::unique(std::execution::par, flatIndex.begin(), flatIndex.end(), [](const auto& a, const auto& b) {
                 return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
             });

@@ -3,8 +3,10 @@
 
 #include "AppController.h"
 
+#include <algorithm>
 #include <iostream>
 #include <QApplication>
+#include <QLocale>
 
 #include "DaemonClient.h"
 #include "DevicePickerDialog.h"
@@ -171,20 +173,58 @@ bool AppController::start() {
                           << " processed=" << processed
                           << " total=" << total << "\n";
 
-                // Calculate percentage progress with rounding
-                const quint64 pct64 = total > 0
-                    ? (processed * 100 + total / 2) / total
-                    : 0;
+                const QString deviceId = scanRequestDeviceIds_.value(requestId);
+                QString deviceText = QStringLiteral("device");
 
-                const quint8 pct = static_cast<quint8>(pct64);
+                if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
+                    const QString primaryMountPoint = blockDevice->primaryMountPoint.trimmed();
+                    const QString label = blockDevice->label.trimmed();
+                    const QString devNode = blockDevice->devNode.trimmed();
 
-                requestWindowStatusMessage(
-                    QStringLiteral("RequestId: %1, Processed: %2/%3 (%4%)")
-                        .arg(requestId)
-                        .arg(processed)
-                        .arg(total)
-                        .arg(pct)
-                , processed < total ? 0 : 3000);
+                    if (blockDevice->mounted && !primaryMountPoint.isEmpty()) {
+                        deviceText = primaryMountPoint;
+                    }
+                    else if (!label.isEmpty()) {
+                        deviceText = label;
+                    }
+                    else if (!devNode.isEmpty()) {
+                        deviceText = devNode;
+                    }
+                    else if (!deviceId.isEmpty()) {
+                        deviceText = deviceId;
+                    }
+                }
+                else if (!deviceId.isEmpty()) {
+                    deviceText = deviceId;
+                }
+
+                const QLocale locale;
+
+                QString message;
+                int timeoutMs = 0;
+
+                if (total > 0) {
+                    const quint64 clampedProcessed = std::min(processed, total);
+
+                    // Calculate percentage progress with rounding.
+                    const quint64 pct64 = (clampedProcessed * 100 + total / 2) / total;
+                    const quint8 pct = static_cast<quint8>(std::min<quint64>(pct64, 100));
+
+                    message = QStringLiteral("Indexing %1: %2 of %3 files scanned (%4%)")
+                        .arg(deviceText)
+                        .arg(locale.toString(static_cast<qulonglong>(clampedProcessed)))
+                        .arg(locale.toString(static_cast<qulonglong>(total)))
+                        .arg(pct);
+
+                    timeoutMs = clampedProcessed < total ? 0 : 3000;
+                }
+                else {
+                    message = QStringLiteral("Indexing %1: %2 files scanned")
+                        .arg(deviceText)
+                        .arg(locale.toString(static_cast<qulonglong>(processed)));
+                }
+
+                requestWindowStatusMessage(message, timeoutMs);
             });
 
     connect(daemonClient_, &DaemonClient::scanFileRecordChunkReceived,

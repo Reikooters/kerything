@@ -4,6 +4,7 @@
 #include <execution>
 #include <algorithm>
 #include <string>
+#include <QBuffer>
 #include <QIcon>
 #include <QMimeData>
 #include <QMimeDatabase>
@@ -139,6 +140,41 @@ namespace {
         );
     }
 
+    QString warningIconDataUri()
+    {
+        static const QString dataUri = []() {
+            const QIcon icon = QIcon::fromTheme(
+                QStringLiteral("dialog-warning"),
+                QIcon::fromTheme(QStringLiteral("emblem-warning"))
+            );
+
+            if (icon.isNull()) {
+                return QString();
+            }
+
+            const QPixmap pixmap = icon.pixmap(16, 16);
+            if (pixmap.isNull()) {
+                return QString();
+            }
+
+            QByteArray bytes;
+            QBuffer buffer(&bytes);
+
+            if (!buffer.open(QIODevice::WriteOnly)) {
+                return QString();
+            }
+
+            if (!pixmap.save(&buffer, "PNG")) {
+                return QString();
+            }
+
+            return QStringLiteral("data:image/png;base64,%1")
+                .arg(QString::fromLatin1(bytes.toBase64()));
+        }();
+
+        return dataUri;
+    }
+
     QString resultToolTip(
         const IndexController::DeviceIndex& deviceIndex,
         const IndexController::RecordHandle& handle,
@@ -176,14 +212,22 @@ namespace {
             rows += tooltipRow(QStringLiteral("Last known node"), deviceIndex.devNode);
         }
 
+        const QString warningIcon = warningIconDataUri();
+        const QString warningIconHtml = warningIcon.isEmpty()
+            ? QStringLiteral("⚠️ ")
+            : QStringLiteral(
+                "<img src=\"%1\" width=\"16\" height=\"16\" "
+                "style=\"vertical-align: middle; margin-right: 0.35em;\">"
+            ).arg(warningIcon);
+
         const QString warning = mounted
             ? QString()
             : QStringLiteral(
                 "<div style='margin-top: 0.6em;'>"
-                "<b>This result is from an unmounted device.</b><br>"
+                "%1<b>This result is from an unmounted device.</b><br>"
                 "Mount the device to open this item or perform file actions."
                 "</div>"
-            );
+            ).arg(warningIconHtml);
 
         return QStringLiteral(
             "<qt>"

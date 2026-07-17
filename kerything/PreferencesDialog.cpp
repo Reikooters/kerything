@@ -15,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -255,9 +256,9 @@ void PreferencesDialog::populateNavigation()
 
     // pages_->addWidget(createIndexingPage());
     // navigation_->addItem(QStringLiteral("Indexing"));
-    //
-    // pages_->addWidget(createAdvancedPage());
-    // navigation_->addItem(QStringLiteral("Advanced"));
+
+    pages_->addWidget(createAdvancedPage());
+    navigation_->addItem(QStringLiteral("Advanced"));
 
     connect(navigation_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
 }
@@ -356,14 +357,14 @@ QWidget* PreferencesDialog::createDevicesPage()
         QString deviceMountPoint = deviceTable_->item(row, DeviceMountPointColumn)->text().toHtmlEscaped();
 
         if (deviceMountPoint != QStringLiteral("—")) {
-            selectedDeviceLabel_->setText(QStringLiteral("Options for <b>%1</b> | %2 | %3").arg(
+            selectedDeviceLabel_->setText(QStringLiteral("Options for <b>%1</b><br>%2 | %3").arg(
                 deviceName,
                 deviceId.toHtmlEscaped(),
                 deviceMountPoint
             ));
         }
         else {
-            selectedDeviceLabel_->setText(QStringLiteral("Options for <b>%1</b> | %2").arg(
+            selectedDeviceLabel_->setText(QStringLiteral("Options for <b>%1</b><br>%2").arg(
                 deviceName,
                 deviceId.toHtmlEscaped()
             ));
@@ -438,14 +439,59 @@ QWidget* PreferencesDialog::createAdvancedPage()
     auto* label = new QLabel(
         QStringLiteral(
             "<h2>Advanced</h2>"
-            "<p>Advanced maintenance actions can go here later, such as clearing indexes, resetting first-run setup, or diagnostics.</p>"
+            "<p>Advanced maintenance actions for Kerything.</p>"
         ),
         page
     );
     label->setWordWrap(true);
 
     layout->addWidget(label);
+
+    auto* firstRunGroup = new QGroupBox(QStringLiteral("First-run setup"), page);
+    auto* firstRunLayout = new QVBoxLayout(firstRunGroup);
+
+    auto* firstRunDescription = new QLabel(
+        QStringLiteral(
+            "Resetting first-run setup will make Kerything show the initial device selection "
+            "setup again the next time it starts. Your saved device preferences are not deleted."
+        ),
+        firstRunGroup
+    );
+    firstRunDescription->setWordWrap(true);
+
+    auto* resetFirstRunButton = new QPushButton(QStringLiteral("Reset first-run setup"), firstRunGroup);
+
+    firstRunLayout->addWidget(firstRunDescription);
+    firstRunLayout->addWidget(resetFirstRunButton, 0, Qt::AlignLeft);
+
+    layout->addWidget(firstRunGroup);
     layout->addStretch();
+
+    connect(resetFirstRunButton, &QPushButton::clicked, this, [this]() {
+        const QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            QStringLiteral("Reset first-run setup?"),
+            QStringLiteral(
+                "Kerything will show the initial device selection setup again the next time it starts.\n\n"
+                "This will not delete your saved device preferences.\n\n"
+                "Do you want to continue?"
+            ),
+            QMessageBox::Reset | QMessageBox::Cancel,
+            QMessageBox::Cancel
+        );
+
+        if (result != QMessageBox::Reset) {
+            return;
+        }
+
+        preferences_.setInitialDeviceSelectionCompleted(false);
+
+        QMessageBox::information(
+            this,
+            QStringLiteral("First-run setup reset"),
+            QStringLiteral("First-run setup has been reset and will appear again the next time Kerything starts.")
+        );
+    });
 
     return page;
 }

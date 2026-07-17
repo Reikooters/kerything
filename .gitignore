@@ -25,6 +25,7 @@ cmake-build-*/
 # makepkg
 build/
 kerything-*.pkg.tar.zst
+pkg/
 
 # MeGit
 .project

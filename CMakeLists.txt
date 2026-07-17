@@ -4,6 +4,17 @@
 cmake_minimum_required(VERSION 4.2)
 project(kerything)
 
+include(GNUInstallDirs)
+include(CheckIPOSupported)
+
+check_ipo_supported(RESULT KERYTHING_IPO_SUPPORTED OUTPUT KERYTHING_IPO_ERROR)
+
+if(KERYTHING_IPO_SUPPORTED)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+else()
+    message(STATUS "IPO/LTO not supported: ${KERYTHING_IPO_ERROR}")
+endif()
+
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -23,6 +34,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 )
 
 option(KERYTHING_WITH_KF6 "Use KDE Frameworks 6, including KDE KIO for opening files" ON)
+option(KERYTHING_ENABLE_LOGGING "Enable verbose runtime logging" OFF)
 
 if(KERYTHING_WITH_KF6)
     # Find KDE Frameworks components
@@ -118,9 +130,24 @@ if(KERYTHING_WITH_KF6)
     target_compile_definitions(kerything PRIVATE KERYTHING_WITH_KF6)
 endif()
 
+if(KERYTHING_ENABLE_LOGGING)
+    target_compile_definitions(kerything PRIVATE KERYTHING_ENABLE_LOGGING)
+    target_compile_definitions(kerythingd PRIVATE KERYTHING_ENABLE_LOGGING)
+endif()
+
 target_compile_definitions(kerything PRIVATE QT_NO_KEYWORDS)
 
 target_compile_definitions(kerythingd PRIVATE QT_NO_KEYWORDS)
+
+target_compile_options(kerything
+        PRIVATE
+        $<$<CONFIG:Release>:-O2>
+)
+
+target_compile_options(kerythingd
+        PRIVATE
+        $<$<CONFIG:Release>:-O2>
+)
 
 target_link_libraries(kerything
         PRIVATE
@@ -175,26 +202,41 @@ target_link_options(kerythingd
         ${MOUNT_LDFLAGS_OTHER}
 )
 
-if(KERYTHING_WITH_KF6)
-    include(KDEInstallDirs)
-    include(ECMInstallIcons)
-endif()
-
 # Install the binaries
-install(TARGETS kerything DESTINATION ${KDE_INSTALL_BINDIR})
+install(TARGETS kerything kerythingd
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
 
-# Install the icon
-# KDE looks for icons in specific size folders (hicolor theme)
-ecm_install_icons(ICONS kerything/icons/256-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
-ecm_install_icons(ICONS kerything/icons/48-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
-ecm_install_icons(ICONS kerything/icons/32-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
-ecm_install_icons(ICONS kerything/icons/16-apps-kerything.png DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
+# Install the icons into the freedesktop hicolor icon theme.
+install(FILES kerything/icons/256-apps-kerything.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps
+        RENAME kerything.png
+)
+
+install(FILES kerything/icons/48-apps-kerything.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/48x48/apps
+        RENAME kerything.png
+)
+
+install(FILES kerything/icons/32-apps-kerything.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/32x32/apps
+        RENAME kerything.png
+)
+
+install(FILES kerything/icons/16-apps-kerything.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/16x16/apps
+        RENAME kerything.png
+)
 
 # Install the .desktop file
-install(PROGRAMS net.reikooters.kerything.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+install(FILES net.reikooters.kerything.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
 
 # Install the license file
-install(FILES LICENSE DESTINATION share/licenses/kerything)
+install(FILES LICENSE
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/kerything
+)
 
 # Add an uninstall target
 if(NOT TARGET uninstall)

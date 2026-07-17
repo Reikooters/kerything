@@ -238,6 +238,25 @@ bool PreferencesDialog::deviceLessThan(const BlockDevice& lhs, const BlockDevice
         return lhs.mounted > rhs.mounted;
     }
 
+    const QString lhsMountPoint = lhs.primaryMountPoint.trimmed();
+    const QString rhsMountPoint = rhs.primaryMountPoint.trimmed();
+
+    if (lhsMountPoint != rhsMountPoint) {
+        if (lhsMountPoint == QStringLiteral("/")) {
+            return true;
+        }
+
+        if (rhsMountPoint == QStringLiteral("/")) {
+            return false;
+        }
+
+        if (lhsMountPoint.isEmpty() != rhsMountPoint.isEmpty()) {
+            return !lhsMountPoint.isEmpty();
+        }
+
+        return QString::localeAwareCompare(lhsMountPoint, rhsMountPoint) < 0;
+    }
+
     const QString lhsName = displayNameForBlockDevice(lhs);
     const QString rhsName = displayNameForBlockDevice(rhs);
 

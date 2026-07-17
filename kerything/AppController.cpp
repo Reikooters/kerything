@@ -108,6 +108,7 @@ bool AppController::start() {
 
                 scanRequestDeviceIds_.clear();
                 activeScanDeviceIds_.clear();
+                manualRefreshKnownDeviceRequestIds_.clear();
 
                 // Update UI: backend not available
                 requestRefreshAllWindows();
@@ -164,7 +165,7 @@ bool AppController::start() {
                     primaryMountPoint
                 );
 
-                // requestRefreshAllWindows();
+                requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::scanProgress,
@@ -387,6 +388,33 @@ void AppController::showPreferencesDialog()
     dialog->activateWindow();
 }
 
+void AppController::refreshIndexes()
+{
+    if (!daemonClient_ || !daemonClient_->isReady()) {
+        requestWindowStatusMessage(
+            QStringLiteral("Cannot refresh indexes: daemon is not ready."),
+            5000
+        );
+        return;
+    }
+
+    quint32 requestId = 0;
+    if (!requestKnownDevices(&requestId)) {
+        requestWindowStatusMessage(
+            QStringLiteral("Cannot refresh indexes: failed to request device list."),
+            5000
+        );
+        return;
+    }
+
+    manualRefreshKnownDeviceRequestIds_.insert(requestId);
+
+    requestWindowStatusMessage(
+        QStringLiteral("Refreshing device list before indexing…"),
+        3000
+    );
+}
+
 void AppController::requestWindowStatusMessage(const QString& message, const int timeoutMs) {
     // Remove dead entries first so iteration is safe and clean.
     cleanupWindows();
@@ -463,22 +491,28 @@ void AppController::updateOpenPreferencesDialog()
     }
 }
 
-void AppController::requestKnownDevices() {
+bool AppController::requestKnownDevices(quint32* requestIdOut) {
     if (!daemonClient_ || !daemonClient_->isReady()) {
-        return;
+        return false;
     }
 
     quint32 requestId = 0;
     if (!daemonClient_->sendRequest(Protocol::MessageType::ListKnownDevices, QByteArray{}, &requestId)) {
         std::cerr << "GUI: failed to send ListKnownDevices request\n";
-        return;
+        return false;
+    }
+
+    if (requestIdOut) {
+        *requestIdOut = requestId;
     }
 
     std::cout << "GUI: ListKnownDevices request sent requestId=" << requestId << "\n";
+    return true;
 }
 
 void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vector<BlockDevice>& blockDevices)
 {
+    const bool manualRefresh = manualRefreshKnownDeviceRequestIds_.remove(requestId) > 0;
     const bool firstSnapshot = !hasReceivedKnownDevices_;
     const std::vector<BlockDevice> previousKnownDevices = knownDevices_;
 
@@ -506,7 +540,23 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
                   << "\n";
     }
 
-    if (firstSnapshot) {
+    if (manualRefresh) {
+        const qsizetype scansStarted = scanEnabledKnownDevices(blockDevices);
+
+        if (scansStarted == 0) {
+            requestWindowStatusMessage(
+                QStringLiteral("No indexes needed refreshing."),
+                5000
+            );
+        } else {
+            requestWindowStatusMessage(
+                scansStarted == 1
+                    ? QStringLiteral("Refreshing index for 1 device…")
+                    : QStringLiteral("Refreshing indexes for %1 devices…").arg(scansStarted),
+                3000
+            );
+        }
+    } else if (firstSnapshot) {
         /*
          * Initial startup behavior: scan enabled devices that are currently eligible.
          */
@@ -562,10 +612,12 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
     preferences_.setInitialDeviceSelectionCompleted(true);
 }
 
-void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices) {
+qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices) {
     if (!daemonClient_ || !daemonClient_->isReady()) {
-        return;
+        return 0;
     }
+
+    qsizetype scansStarted = 0;
 
     for (const BlockDevice& blockDevice : blockDevices) {
         if (!preferences_.isDeviceEnabled(blockDevice.deviceId)) {
@@ -599,12 +651,15 @@ void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& bloc
 
         scanRequestDeviceIds_.insert(requestId, blockDevice.deviceId);
         activeScanDeviceIds_.insert(blockDevice.deviceId);
+        ++scansStarted;
 
         std::cout << "GUI: ScanDevice request sent requestId=" << requestId
                   << " deviceId=" << blockDevice.deviceId.toStdString()
                   << " fsType=" << blockDevice.fsType.toStdString()
                   << "\n";
     }
+
+    return scansStarted;
 }
 
 void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceChange>& changes) {

@@ -292,6 +292,17 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(configureAct);
 
+    // Refresh Indexes
+    auto* refreshIndexesAct = new QAction(QIcon::fromTheme(QStringLiteral("view-refresh")), QStringLiteral("Refresh Indexes"), this);
+    refreshIndexesAct->setShortcut(QKeySequence(Qt::Key_F5));
+    refreshIndexesAct->setStatusTip(QStringLiteral("Refresh indexes for all enabled devices"));
+    connect(refreshIndexesAct, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->refreshIndexes();
+        }
+    });
+    addAction(refreshIndexesAct);
+
     // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
@@ -377,6 +388,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyFileNamesAct);
     editMenu->addAction(copyPathsAct);
     editMenu->addAction(copyParentPathsAct);
+
+    // Index Menu
+    auto* indexMenu = menuBar()->addMenu(QStringLiteral("Index"));
+    indexMenu->addAction(refreshIndexesAct);
 
     // Settings Menu
     auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));

@@ -364,6 +364,10 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         return {};
     }
 
+    if (index.row() < 0 || index.row() >= static_cast<int>(searchResults_.size())) {
+        return {};
+    }
+
     const bool supportedRole =
         role == Qt::DisplayRole ||
         role == Qt::ToolTipRole ||

@@ -29,6 +29,7 @@ public:
     bool start();
     void openNewWindow();
     void showPreferencesDialog();
+    void refreshIndexes();
     void requestRefreshAllWindows();
     void requestWindowStatusMessage(const QString& message, int timeoutMs);
     [[nodiscard]] bool isDaemonConnected() const noexcept;
@@ -42,13 +43,13 @@ private Q_SLOTS:
 private:
     void cleanupWindows();
     void updateOpenPreferencesDialog();
-    void requestKnownDevices();
+    bool requestKnownDevices(quint32* requestIdOut = nullptr);
     void handleKnownDevicesUpdated(quint32 requestId, const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] std::vector<BlockDevice> devicesNeedingScanAfterKnownDeviceUpdate(
         const std::vector<BlockDevice>& oldDevices,
         const std::vector<BlockDevice>& newDevices
     ) const;
-    void scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
+    qsizetype scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
     void applyDevicePreferenceChanges(const QList<DevicePreferenceChange>& changes);
     void cancelActiveScansForDevice(const QString& deviceId, bool removeDeviceIndex);
     void updateIndexedDeviceRuntimeState(const BlockDevice& blockDevice);
@@ -70,6 +71,8 @@ private:
 
     // stable deviceIds currently queued/scanning
     QSet<QString> activeScanDeviceIds_;
+
+    QSet<quint32> manualRefreshKnownDeviceRequestIds_;
 
     std::vector<BlockDevice> knownDevices_;
     bool hasReceivedKnownDevices_ = false;

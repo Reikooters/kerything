@@ -59,8 +59,11 @@ quint64 IndexController::addDevice(
             deviceIndex.mountPoints = mountPoints;
             deviceIndex.primaryMountPoint = primaryMountPoint;
             deviceIndex.mounted = !mountPoints.isEmpty();
+            deviceIndex.isReady = false;
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
+            deviceIndex.lowercaseStringPool.clear();
+            deviceIndex.flatIndex.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
             deviceIndex.fsIndexToRecordIndices.clear();
             deviceIndex.generation++;

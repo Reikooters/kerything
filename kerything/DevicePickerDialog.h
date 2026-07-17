@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "BlockDevice.h"
+#include "Preferences.h"
 
 class QPushButton;
 class QTableWidget;
@@ -17,7 +18,11 @@ class DevicePickerDialog final : public QDialog {
     Q_OBJECT
 
 public:
-    explicit DevicePickerDialog(const std::vector<BlockDevice>& blockDevices, QWidget* parent = nullptr);
+    explicit DevicePickerDialog(
+        const std::vector<BlockDevice>& blockDevices,
+        const Preferences& preferences,
+        QWidget* parent = nullptr
+    );
 
     [[nodiscard]] QStringList selectedDeviceIds() const;
 
@@ -40,6 +45,8 @@ private:
     static bool shouldSelectByDefault(const BlockDevice& blockDevice);
     static bool deviceLessThan(const BlockDevice& lhs, const BlockDevice& rhs);
 
+    [[nodiscard]] Qt::CheckState initialCheckStateForBlockDevice(const BlockDevice& blockDevice) const;
+
     void populateTable(const std::vector<BlockDevice>& blockDevices);
     void setAllChecked(Qt::CheckState checkState);
     void restoreDefaultSelection();
@@ -50,6 +57,8 @@ private:
 
     QTableWidget* table_ = nullptr;
     QPushButton* startButton_ = nullptr;
+
+    const Preferences& preferences_;
 };
 
 #endif // KERYTHING_DEVICEPICKERDIALOG_H

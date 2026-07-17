@@ -485,10 +485,12 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
     knownDevices_ = blockDevices;
     hasReceivedKnownDevices_ = true;
 
+    // The first run device picket dialog should be shown before preferences are updated with known devices,
+    // otherwise the dialog can't tell the difference between devices with existing preferences and new devices.
+    maybeShowFirstRunDevicePicker(blockDevices);
     preferences_.updateKnownDevices(blockDevices);
     updateIndexedDeviceRuntimeStates(blockDevices);
     updateOpenPreferencesDialog();
-    maybeShowFirstRunDevicePicker(blockDevices);
 
     for (const auto& blockDevice : blockDevices) {
         std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
@@ -532,7 +534,11 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
         return;
     }
 
-    DevicePickerDialog dialog(blockDevices, windows_.isEmpty() ? nullptr : windows_.first().data());
+    DevicePickerDialog dialog(
+        blockDevices,
+        preferences_,
+        windows_.isEmpty() ? nullptr : windows_.first().data()
+    );
     const int result = dialog.exec();
 
     if (result != QDialog::Accepted) {

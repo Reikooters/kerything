@@ -23,8 +23,13 @@ namespace {
     constexpr int DefaultCheckStateRole = Qt::UserRole + 1;
 }
 
-DevicePickerDialog::DevicePickerDialog(const std::vector<BlockDevice>& blockDevices, QWidget* parent)
-    : QDialog(parent)
+DevicePickerDialog::DevicePickerDialog(
+    const std::vector<BlockDevice>& blockDevices,
+    const Preferences& preferences,
+    QWidget* parent
+)
+    : QDialog(parent),
+      preferences_(preferences)
 {
     setWindowTitle(QStringLiteral("Choose Devices to Index"));
     resize(900, 520);
@@ -234,6 +239,16 @@ bool DevicePickerDialog::shouldSelectByDefault(const BlockDevice& blockDevice)
     return true;
 }
 
+Qt::CheckState DevicePickerDialog::initialCheckStateForBlockDevice(const BlockDevice& blockDevice) const
+{
+    if (const std::optional<IndexedDevicePreference> preference =
+            preferences_.indexedDevicePreference(blockDevice.deviceId)) {
+        return preference->enabled ? Qt::Checked : Qt::Unchecked;
+    }
+
+    return shouldSelectByDefault(blockDevice) ? Qt::Checked : Qt::Unchecked;
+}
+
 bool DevicePickerDialog::deviceLessThan(const BlockDevice& lhs, const BlockDevice& rhs)
 {
     if (lhs.mounted != rhs.mounted) {
@@ -288,13 +303,11 @@ void DevicePickerDialog::populateTable(const std::vector<BlockDevice>& blockDevi
 
     int row = 0;
     for (const BlockDevice& blockDevice : sortedDevices) {
-        const Qt::CheckState defaultCheckState = shouldSelectByDefault(blockDevice)
-            ? Qt::Checked
-            : Qt::Unchecked;
+        const Qt::CheckState defaultCheckState = initialCheckStateForBlockDevice(blockDevice);
 
         auto* enabledItem = new QTableWidgetItem();
         enabledItem->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        enabledItem->setCheckState(shouldSelectByDefault(blockDevice) ? Qt::Checked : Qt::Unchecked);
+        enabledItem->setCheckState(defaultCheckState);
         enabledItem->setData(Qt::UserRole, blockDevice.deviceId);
         enabledItem->setData(DefaultCheckStateRole, static_cast<int>(defaultCheckState));
         enabledItem->setToolTip(QStringLiteral("Click the row or press Space to include/exclude this device."));

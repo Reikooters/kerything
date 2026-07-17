@@ -44,6 +44,7 @@ public:
     void setInitialDeviceSelectionCompleted(bool completed);
 
     void setDeviceEnabled(const BlockDevice& blockDevice, bool enabled);
+    void saveIndexedDevicePreference(const IndexedDevicePreference& preference);
     void updateKnownDevices(const std::vector<BlockDevice>& blockDevices);
     void markDeviceIndexed(const QString& deviceId);
 

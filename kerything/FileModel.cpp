@@ -59,50 +59,142 @@ namespace {
         const IndexController::RecordHandle& handle,
         const std::string& filesystemPath
     ) {
-        const QString relativePath = QString::fromStdString(filesystemPath);
+        const QString relativePath = QDir::cleanPath(QString::fromStdString(filesystemPath));
 
         if (!hasMountedPath(deviceIndex, handle)) {
-            return QDir::cleanPath(
-                displayVolumeName(deviceIndex) + QStringLiteral(":") + relativePath
-            );
+            const QString volumeName = displayVolumeName(deviceIndex);
+
+            if (relativePath == QStringLiteral("/")) {
+                return volumeName + QStringLiteral(":/");
+            }
+
+            return volumeName + QStringLiteral(":") + relativePath;
         }
 
         const QString mountPoint = deviceIndex.mountPoints.at(static_cast<int>(handle.mountPointIdx));
         return QDir::cleanPath(mountPoint + QStringLiteral("/") + relativePath);
     }
 
+    QString fileTypeText(const FileRecord& rec)
+    {
+        const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+        const bool isSymlink = (rec.flags & FileRecord_IsSymlink) != 0;
+
+        if (isDirectory && isSymlink) {
+            return QStringLiteral("Folder symlink");
+        }
+
+        if (isDirectory) {
+            return QStringLiteral("Folder");
+        }
+
+        if (isSymlink) {
+            return QStringLiteral("File symlink");
+        }
+
+        return QStringLiteral("File");
+    }
+
+    QString fileSizeText(const FileRecord& rec)
+    {
+        if ((rec.flags & FileRecord_IsDir) != 0) {
+            return QStringLiteral("—");
+        }
+
+        const QLocale locale;
+        QString readableSize = locale.formattedDataSize(
+            static_cast<qint64>(rec.size),
+            1,
+            QLocale::DataSizeIecFormat
+        );
+
+        if (rec.size < 1024) {
+            return readableSize;
+        }
+
+        const QString byteCount = locale.toString(static_cast<qulonglong>(rec.size));
+
+        return QStringLiteral("%1 (%2 bytes)").arg(readableSize, byteCount);
+    }
+
+    QString modifiedTimeText(const FileRecord& rec)
+    {
+        if (rec.modificationTime == 0) {
+            return QStringLiteral("Unknown");
+        }
+
+        return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
+    }
+
+    QString tooltipRow(const QString& label, const QString& value)
+    {
+        return QStringLiteral(
+            "<tr>"
+            "<td style='padding-right: 1em; white-space: nowrap; font-weight: 600;'>%1</td>"
+            "<td style='white-space: nowrap;'>%2</td>"
+            "</tr>"
+        ).arg(
+            label.toHtmlEscaped(),
+            value.toHtmlEscaped()
+        );
+    }
+
     QString resultToolTip(
         const IndexController::DeviceIndex& deviceIndex,
         const IndexController::RecordHandle& handle,
-        const std::string& filesystemPath
+        const FileRecord& rec,
+        const std::string& parentFilesystemPath,
+        const QString& fileName
     ) {
-        const QString relativePath = QDir::cleanPath(QString::fromStdString(filesystemPath));
-        const QString displayPath = mountedPathForHandle(deviceIndex, handle, filesystemPath);
+        const QString indexedParentPath = QDir::cleanPath(QString::fromStdString(parentFilesystemPath));
+        const QString displayParentPath = mountedPathForHandle(deviceIndex, handle, parentFilesystemPath);
+        const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+        const bool mounted = hasMountedPath(deviceIndex, handle);
 
-        if (hasMountedPath(deviceIndex, handle)) {
-            return QStringLiteral(
-                "Path:\n%1\n\n"
-                "Device:\n%2\n\n"
-                "Device node:\n%3"
-            ).arg(
-                displayPath,
-                deviceIndex.deviceId,
-                deviceIndex.devNode
-            );
+        QString rows;
+        rows += tooltipRow(QStringLiteral("File name"), fileName);
+        rows += tooltipRow(QStringLiteral("Type"), fileTypeText(rec));
+
+        if (!isDirectory) {
+            rows += tooltipRow(QStringLiteral("Size"), fileSizeText(rec));
         }
 
+        rows += tooltipRow(QStringLiteral("Modified"), modifiedTimeText(rec));
+
+        if (mounted) {
+            rows += tooltipRow(QStringLiteral("Parent path"), displayParentPath);
+        } else {
+            rows += tooltipRow(QStringLiteral("Indexed parent path"), indexedParentPath);
+            rows += tooltipRow(QStringLiteral("Display parent path"), displayParentPath);
+        }
+
+        rows += tooltipRow(QStringLiteral("Device"), deviceIndex.deviceId);
+
+        if (mounted) {
+            rows += tooltipRow(QStringLiteral("Device node"), deviceIndex.devNode);
+        } else {
+            rows += tooltipRow(QStringLiteral("Last known node"), deviceIndex.devNode);
+        }
+
+        const QString warning = mounted
+            ? QString()
+            : QStringLiteral(
+                "<div style='margin-top: 0.6em;'>"
+                "<b>This result is from an unmounted device.</b><br>"
+                "Mount the device to open this item or perform file actions."
+                "</div>"
+            );
+
         return QStringLiteral(
-            "This result is from an unmounted device.\n"
-            "Drag and drop is disabled until the device is mounted.\n\n"
-            "Indexed path:\n%1\n\n"
-            "Display path:\n%2\n\n"
-            "Device:\n%3\n\n"
-            "Last known device node:\n%4"
+            "<qt>"
+            "<div style='white-space: nowrap;'>"
+            "<table cellspacing='0' cellpadding='0'>%1</table>"
+            "%2"
+            "</div>"
+            "</qt>"
         ).arg(
-            relativePath,
-            displayPath,
-            deviceIndex.deviceId,
-            deviceIndex.devNode
+            rows,
+            warning
         );
     }
 
@@ -257,8 +349,13 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     }
 
     if (role == Qt::ToolTipRole) {
+        const QString fileName = QString::fromUtf8(
+            &deviceIndex->stringPool[rec.nameOffset],
+            rec.nameLen
+        );
+
         const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-        return resultToolTip(*deviceIndex, handle, parentPath);
+        return resultToolTip(*deviceIndex, handle, rec, parentPath, fileName);
     }
 
     // DecorationRole provides the icon shown next to the filename/path.

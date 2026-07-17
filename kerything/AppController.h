@@ -11,11 +11,13 @@
 #include <QSet>
 
 #include "DaemonClient.h"
+#include "DevicePreferenceChange.h"
 #include "IndexController.h"
 #include "Preferences.h"
 
 class QApplication;
 class MainWindow;
+class PreferencesDialog;
 class SingleInstanceServer;
 
 class AppController final : public QObject {
@@ -26,6 +28,7 @@ public:
 
     bool start();
     void openNewWindow();
+    void showPreferencesDialog();
     void requestRefreshAllWindows();
     void requestWindowStatusMessage(const QString& message, int timeoutMs);
     [[nodiscard]] bool isDaemonConnected() const noexcept;
@@ -38,8 +41,20 @@ private Q_SLOTS:
 
 private:
     void cleanupWindows();
+    void updateOpenPreferencesDialog();
     void requestKnownDevices();
+    void handleKnownDevicesUpdated(quint32 requestId, const std::vector<BlockDevice>& blockDevices);
+    [[nodiscard]] std::vector<BlockDevice> devicesNeedingScanAfterKnownDeviceUpdate(
+        const std::vector<BlockDevice>& oldDevices,
+        const std::vector<BlockDevice>& newDevices
+    ) const;
     void scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
+    void applyDevicePreferenceChanges(const QList<DevicePreferenceChange>& changes);
+    void cancelActiveScansForDevice(const QString& deviceId, bool removeDeviceIndex);
+    void updateIndexedDeviceRuntimeState(const BlockDevice& blockDevice);
+    void updateIndexedDeviceRuntimeStates(const std::vector<BlockDevice>& blockDevices);
+    [[nodiscard]] std::optional<BlockDevice> knownDeviceById(const QString& deviceId) const;
+    [[nodiscard]] bool isKnownDeviceMounted(const QString& deviceId) const;
     void maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
     QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
@@ -56,6 +71,10 @@ private:
     // stable deviceIds currently queued/scanning
     QSet<QString> activeScanDeviceIds_;
 
+    std::vector<BlockDevice> knownDevices_;
+    bool hasReceivedKnownDevices_ = false;
+
+    QPointer<PreferencesDialog> preferencesDialog_;
     QList<QPointer<MainWindow>> windows_;
 };
 

@@ -245,6 +245,16 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
     addAction(quitAct);
 
+    // Configure Kerything
+    auto* configureAct = new QAction(QIcon::fromTheme("configure"), QStringLiteral("Configure Kerything..."), this);
+    configureAct->setShortcut(QKeySequence::Preferences);
+    connect(configureAct, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->showPreferencesDialog();
+        }
+    });
+    addAction(configureAct);
+
     // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
@@ -330,6 +340,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyFileNamesAct);
     editMenu->addAction(copyPathsAct);
     editMenu->addAction(copyParentPathsAct);
+
+    // Settings Menu
+    auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
+    settingsMenu->addAction(configureAct);
 
     // Help Menu
     auto* helpMenu = menuBar()->addMenu("Help");
@@ -697,9 +711,20 @@ void MainWindow::copyPaths()
         const QString displayPath = model_->data(model_->index(index.row(), 1), Qt::DisplayRole).toString();
         const QString fileName = model_->data(model_->index(index.row(), 0), Qt::DisplayRole).toString();
 
-        if (!displayPath.isEmpty() && !fileName.isEmpty()) {
-            paths.append(QDir::cleanPath(displayPath + QStringLiteral("/") + fileName));
+        if (displayPath.isEmpty()) {
+            continue;
         }
+
+        if (fileName.isEmpty()) {
+            paths.append(displayPath);
+            continue;
+        }
+
+        paths.append(
+            displayPath.endsWith(QLatin1Char('/'))
+                ? displayPath + fileName
+                : displayPath + QStringLiteral("/") + fileName
+        );
     }
 
     if (!paths.isEmpty()) {
@@ -738,7 +763,7 @@ void MainWindow::copyParentPaths()
         const QString displayPath = model_->data(model_->index(index.row(), 1), Qt::DisplayRole).toString();
 
         if (!displayPath.isEmpty()) {
-            parentPaths.append(QDir::cleanPath(displayPath));
+            parentPaths.append(displayPath);
         }
     }
 

@@ -370,12 +370,14 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
     QString deviceId;
     QString devNode;
     QString fsType;
+    QString label;
     QStringList mountPoints;
     QString primaryMountPoint;
 
     in >> deviceId
        >> devNode
        >> fsType
+       >> label
        >> mountPoints
        >> primaryMountPoint;
 
@@ -388,6 +390,7 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
               << " deviceId=" << deviceId.toStdString()
               << " devNode=" << devNode.toStdString()
               << " fsType=" << fsType.toStdString()
+              << " label=" << label.toStdString()
               << " primaryMountPoint=" << primaryMountPoint.toStdString()
               << "\n";
 
@@ -396,6 +399,7 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
         deviceId,
         devNode,
         fsType,
+        label,
         mountPoints,
         primaryMountPoint
     );
@@ -527,46 +531,18 @@ void DaemonClient::handleScanCancelled(const Protocol::MessageHeader& header, co
 
 void DaemonClient::handleKnownDevices(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
-    QDataStream in(payload);
-    in.setByteOrder(QDataStream::BigEndian);
-    in.setVersion(QDataStream::Qt_6_0);
+    const std::optional<std::vector<BlockDevice>> blockDevices =
+            Protocol::parseKnownDevicesPayload(payload);
 
-    quint32 count = 0;
-    in >> count;
-
-    if (in.status() != QDataStream::Ok) {
-        std::cerr << "Malformed KnownDevices payload header\n";
+    if (!blockDevices) {
+        std::cerr << "Malformed KnownDevices payload\n";
         return;
-    }
-
-    std::vector<BlockDevice> blockDevices;
-    blockDevices.reserve(count);
-
-    if (count > (payload.size() - sizeof(quint32)) / sizeof(BlockDevice)) {
-        std::cerr << "Invalid KnownDevices payload size\n";
-        return;
-    }
-
-    for (quint32 i = 0; i < count; ++i) {
-        BlockDevice blockDevice{};
-        in >> blockDevice.deviceId
-           >> blockDevice.devNode
-           >> blockDevice.fsType
-           >> blockDevice.uuid
-           >> blockDevice.partuuid
-           >> blockDevice.label
-           >> blockDevice.diskModel
-           >> blockDevice.mounted
-           >> blockDevice.mountPoints
-           >> blockDevice.primaryMountPoint;
-
-        blockDevices.emplace_back(std::move(blockDevice));
     }
 
     std::cout << "Received block devices requestId=" << header.requestId
-              << " count=" << blockDevices.size() << "\n";
+              << " count=" << blockDevices->size() << "\n";
 
-    Q_EMIT knownDevices(header.requestId, blockDevices);
+    Q_EMIT knownDevices(header.requestId, *blockDevices);
 }
 
 void DaemonClient::handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload)

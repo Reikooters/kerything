@@ -86,6 +86,22 @@ void Preferences::setDeviceEnabled(const BlockDevice& blockDevice, bool enabled)
     saveDevicePreference(preference);
 }
 
+void Preferences::saveIndexedDevicePreference(const IndexedDevicePreference& preference)
+{
+    if (preference.deviceId.isEmpty()) {
+        return;
+    }
+
+    QStringList ids = deviceIds();
+    if (!ids.contains(preference.deviceId)) {
+        ids << preference.deviceId;
+        ids.sort();
+        setDeviceIds(ids);
+    }
+
+    saveDevicePreference(preference);
+}
+
 void Preferences::updateKnownDevices(const std::vector<BlockDevice>& blockDevices)
 {
     QStringList ids = deviceIds();

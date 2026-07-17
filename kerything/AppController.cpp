@@ -9,6 +9,7 @@
 #include "DaemonClient.h"
 #include "DevicePickerDialog.h"
 #include "MainWindow.h"
+#include "PreferencesDialog.h"
 #include "SingleInstanceServer.h"
 #include "FileRecord.h"
 
@@ -94,7 +95,6 @@ bool AppController::start() {
             this, [this]() {
                 // Update UI: daemon is ready
                 requestRefreshAllWindows();
-                requestKnownDevices();
             });
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,
@@ -123,6 +123,7 @@ bool AppController::start() {
                 const QString& deviceId,
                 const QString& devNode,
                 const QString& fsType,
+                const QString& label,
                 const QStringList& mountPoints,
                 const QString& primaryMountPoint
             ) {
@@ -138,6 +139,7 @@ bool AppController::start() {
                           << " deviceId=" << deviceId.toStdString()
                           << " devNode=" << devNode.toStdString()
                           << " fsType=" << fsType.toStdString()
+                          << " label=" << label.toStdString()
                           << " primaryMountPoint=" << primaryMountPoint.toStdString()
                           << "\n";
 
@@ -145,10 +147,19 @@ bool AppController::start() {
                     deviceId,
                     devNode,
                     fsType,
-                    "TODO",
+                    label,
                     mountPoints,
                     primaryMountPoint,
                     requestId
+                );
+
+                const auto preference = preferences_.indexedDevicePreference(deviceId);
+                indexController_->updateDeviceRuntimeStateByDeviceId(
+                    deviceId,
+                    !mountPoints.isEmpty(),
+                    !preference || preference->showOfflineResults,
+                    mountPoints,
+                    primaryMountPoint
                 );
 
                 // requestRefreshAllWindows();
@@ -226,6 +237,12 @@ bool AppController::start() {
                     preferences_.markDeviceIndexed(deviceId);
                 }
 
+                // Update indexed device runtime state again after scan completion,
+                // to help keep state consistent if preferences changed during the scan
+                if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
+                    updateIndexedDeviceRuntimeState(*blockDevice);
+                }
+
                 takeTrackedScanDeviceId(requestId, deviceId);
 
                 // Clean up the requestId as the scan has completed successfully
@@ -274,25 +291,7 @@ bool AppController::start() {
             std::cout << "GUI: received known devices requestId=" << requestId
                           << " size=" << blockDevices.size() << "\n";
 
-            preferences_.updateKnownDevices(blockDevices);
-            maybeShowFirstRunDevicePicker(blockDevices);
-
-            for (const auto& blockDevice : blockDevices) {
-                std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
-                          << " fsType=" << blockDevice.fsType.toStdString()
-                          << " label=" << blockDevice.label.toStdString()
-                          << " diskModel=" << blockDevice.diskModel.toStdString()
-                          << " uuid=" << blockDevice.uuid.toStdString()
-                          << " partuuid=" << blockDevice.partuuid.toStdString()
-                          << " deviceId=" << blockDevice.deviceId.toStdString()
-                          << " mounted=" << (blockDevice.mounted ? "true" : "false")
-                          << " primaryMountPoint=" << blockDevice.primaryMountPoint.toStdString()
-                          << " enabled=" << (preferences_.isDeviceEnabled(blockDevice.deviceId) ? "true" : "false")
-                          << "\n";
-            }
-
-            scanEnabledKnownDevices(blockDevices);
-            requestRefreshAllWindows();
+            handleKnownDevicesUpdated(requestId, blockDevices);
         });
 
     // Primary instance opens its first window on startup.
@@ -319,6 +318,33 @@ void AppController::openNewWindow() {
     window->show();
     window->raise();
     window->activateWindow();
+}
+
+void AppController::showPreferencesDialog()
+{
+    if (preferencesDialog_) {
+        preferencesDialog_->setKnownDevices(knownDevices_);
+        preferencesDialog_->show();
+        preferencesDialog_->raise();
+        preferencesDialog_->activateWindow();
+        return;
+    }
+
+    auto* dialog = new PreferencesDialog(preferences_, knownDevices_, nullptr);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+
+    preferencesDialog_ = dialog;
+
+    connect(dialog, &QObject::destroyed, this, [this]() {
+        preferencesDialog_ = nullptr;
+    });
+
+    connect(dialog, &PreferencesDialog::preferencesApplied,
+            this, &AppController::applyDevicePreferenceChanges);
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 void AppController::requestWindowStatusMessage(const QString& message, const int timeoutMs) {
@@ -390,6 +416,13 @@ void AppController::cleanupWindows() {
     }
 }
 
+void AppController::updateOpenPreferencesDialog()
+{
+    if (preferencesDialog_) {
+        preferencesDialog_->setKnownDevices(knownDevices_);
+    }
+}
+
 void AppController::requestKnownDevices() {
     if (!daemonClient_ || !daemonClient_->isReady()) {
         return;
@@ -402,6 +435,50 @@ void AppController::requestKnownDevices() {
     }
 
     std::cout << "GUI: ListKnownDevices request sent requestId=" << requestId << "\n";
+}
+
+void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vector<BlockDevice>& blockDevices)
+{
+    const bool firstSnapshot = !hasReceivedKnownDevices_;
+    const std::vector<BlockDevice> previousKnownDevices = knownDevices_;
+
+    knownDevices_ = blockDevices;
+    hasReceivedKnownDevices_ = true;
+
+    preferences_.updateKnownDevices(blockDevices);
+    updateIndexedDeviceRuntimeStates(blockDevices);
+    updateOpenPreferencesDialog();
+    maybeShowFirstRunDevicePicker(blockDevices);
+
+    for (const auto& blockDevice : blockDevices) {
+        std::cout << "GUI: received known device devNode=" << blockDevice.devNode.toStdString()
+                  << " fsType=" << blockDevice.fsType.toStdString()
+                  << " label=" << blockDevice.label.toStdString()
+                  << " diskModel=" << blockDevice.diskModel.toStdString()
+                  << " uuid=" << blockDevice.uuid.toStdString()
+                  << " partuuid=" << blockDevice.partuuid.toStdString()
+                  << " deviceId=" << blockDevice.deviceId.toStdString()
+                  << " mounted=" << (blockDevice.mounted ? "true" : "false")
+                  << " primaryMountPoint=" << blockDevice.primaryMountPoint.toStdString()
+                  << " enabled=" << (preferences_.isDeviceEnabled(blockDevice.deviceId) ? "true" : "false")
+                  << "\n";
+    }
+
+    if (firstSnapshot) {
+        /*
+         * Initial startup behavior: scan enabled devices that are currently eligible.
+         */
+        scanEnabledKnownDevices(blockDevices);
+    } else {
+        /*
+         * Later daemon-pushed updates: scan only important transitions.
+         */
+        scanEnabledKnownDevices(
+            devicesNeedingScanAfterKnownDeviceUpdate(previousKnownDevices, blockDevices)
+        );
+    }
+
+    requestRefreshAllWindows();
 }
 
 void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices) {
@@ -482,6 +559,192 @@ void AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& bloc
                   << " fsType=" << blockDevice.fsType.toStdString()
                   << "\n";
     }
+}
+
+void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceChange>& changes) {
+    QStringList disabledDeviceIds;
+    QStringList deviceIdsToScan;
+    QStringList unmountedScanDisabledDeviceIds;
+
+    for (const DevicePreferenceChange& change : changes) {
+        if (change.becameDisabled()) {
+            disabledDeviceIds << change.deviceId;
+            continue;
+        }
+
+        if (change.becameEnabled()) {
+            deviceIdsToScan << change.deviceId;
+        }
+
+        if (change.enabled && change.scanWhenUnmountedChanged()) {
+            if (change.scanWhenUnmounted) {
+                deviceIdsToScan << change.deviceId;
+            } else if (!isKnownDeviceMounted(change.deviceId)) {
+                unmountedScanDisabledDeviceIds << change.deviceId;
+            }
+        }
+
+        if (change.enabled && change.showOfflineResultsChanged()) {
+            if (const std::optional<BlockDevice> blockDevice = knownDeviceById(change.deviceId)) {
+                updateIndexedDeviceRuntimeState(*blockDevice);
+            } else {
+                indexController_->updateDeviceRuntimeStateByDeviceId(
+                    change.deviceId,
+                    false,
+                    change.showOfflineResults
+                );
+            }
+        }
+    }
+
+    disabledDeviceIds.removeDuplicates();
+    deviceIdsToScan.removeDuplicates();
+    unmountedScanDisabledDeviceIds.removeDuplicates();
+
+    for (const QString& disabledDeviceId : disabledDeviceIds) {
+        cancelActiveScansForDevice(disabledDeviceId, true);
+
+        std::cout << "GUI: disabled indexed device deviceId="
+                  << disabledDeviceId.toStdString()
+                  << "\n";
+    }
+
+    for (const QString& deviceId : unmountedScanDisabledDeviceIds) {
+        cancelActiveScansForDevice(deviceId, false);
+
+        if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
+            updateIndexedDeviceRuntimeState(*blockDevice);
+        }
+
+        std::cout << "GUI: cancelled unmounted scan because scanWhenUnmounted was disabled deviceId="
+                  << deviceId.toStdString()
+                  << "\n";
+    }
+
+    std::vector<BlockDevice> devicesToScan;
+
+    for (const BlockDevice& blockDevice : knownDevices_) {
+        if (deviceIdsToScan.contains(blockDevice.deviceId)) {
+            updateIndexedDeviceRuntimeState(blockDevice);
+            devicesToScan.push_back(blockDevice);
+        }
+    }
+
+    scanEnabledKnownDevices(devicesToScan);
+    requestRefreshAllWindows();
+}
+
+void AppController::cancelActiveScansForDevice(const QString& deviceId, bool removeDeviceIndex)
+{
+    if (deviceId.isEmpty()) {
+        return;
+    }
+
+    QList<quint32> requestIdsToCancel;
+
+    for (auto it = scanRequestDeviceIds_.cbegin(); it != scanRequestDeviceIds_.cend(); ++it) {
+        if (it.value() == deviceId) {
+            requestIdsToCancel << it.key();
+        }
+    }
+
+    for (const quint32 requestId : requestIdsToCancel) {
+        if (daemonClient_) {
+            daemonClient_->cancelRequest(requestId);
+        }
+
+        takeTrackedScanDeviceId(requestId, deviceId);
+        indexController_->removeDeviceByRequestId(requestId);
+    }
+
+    activeScanDeviceIds_.remove(deviceId);
+
+    if (removeDeviceIndex) {
+        indexController_->removeDeviceByDeviceId(deviceId);
+    }
+}
+
+std::optional<BlockDevice> AppController::knownDeviceById(const QString& deviceId) const
+{
+    if (deviceId.isEmpty()) {
+        return std::nullopt;
+    }
+
+    for (const BlockDevice& blockDevice : knownDevices_) {
+        if (blockDevice.deviceId == deviceId) {
+            return blockDevice;
+        }
+    }
+
+    return std::nullopt;
+}
+
+void AppController::updateIndexedDeviceRuntimeState(const BlockDevice& blockDevice)
+{
+    const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
+
+    indexController_->updateDeviceRuntimeStateByDeviceId(
+        blockDevice.deviceId,
+        blockDevice.mounted,
+        !preference || preference->showOfflineResults,
+        blockDevice.mountPoints,
+        blockDevice.primaryMountPoint
+    );
+}
+
+void AppController::updateIndexedDeviceRuntimeStates(const std::vector<BlockDevice>& blockDevices)
+{
+    for (const BlockDevice& blockDevice : blockDevices) {
+        updateIndexedDeviceRuntimeState(blockDevice);
+    }
+}
+
+std::vector<BlockDevice> AppController::devicesNeedingScanAfterKnownDeviceUpdate(
+    const std::vector<BlockDevice>& oldDevices,
+    const std::vector<BlockDevice>& newDevices) const
+{
+    QHash<QString, BlockDevice> oldByDeviceId;
+
+    for (const BlockDevice& oldDevice : oldDevices) {
+        if (!oldDevice.deviceId.isEmpty()) {
+            oldByDeviceId.insert(oldDevice.deviceId, oldDevice);
+        }
+    }
+
+    std::vector<BlockDevice> out;
+
+    for (const BlockDevice& newDevice : newDevices) {
+        if (newDevice.deviceId.isEmpty()) {
+            continue;
+        }
+
+        if (!preferences_.isDeviceEnabled(newDevice.deviceId)) {
+            continue;
+        }
+
+        const bool wasKnown = oldByDeviceId.contains(newDevice.deviceId);
+        const bool wasMounted = wasKnown && oldByDeviceId.value(newDevice.deviceId).mounted;
+        const bool becameMounted = newDevice.mounted && !wasMounted;
+        const bool appearedMounted = !wasKnown && newDevice.mounted;
+
+        if (becameMounted || appearedMounted) {
+            out.push_back(newDevice);
+
+            std::cout << "GUI: scheduling scan for device transition deviceId="
+                      << newDevice.deviceId.toStdString()
+                      << " becameMounted=" << (becameMounted ? "true" : "false")
+                      << " appearedMounted=" << (appearedMounted ? "true" : "false")
+                      << "\n";
+        }
+    }
+
+    return out;
+}
+
+bool AppController::isKnownDeviceMounted(const QString& deviceId) const
+{
+    const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId);
+    return blockDevice && blockDevice->mounted;
 }
 
 bool AppController::validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const {

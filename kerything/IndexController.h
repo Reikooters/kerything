@@ -40,6 +40,17 @@ public:
         quint64 generation = 0;
         bool isReady = false;
 
+        // Runtime search visibility state.
+        // Mounted devices are always searchable. Unmounted devices are searchable
+        // only when showOfflineResults is enabled.
+        bool mounted = false;
+        bool showOfflineResults = true;
+
+        [[nodiscard]] bool isSearchable() const noexcept
+        {
+            return mounted || showOfflineResults;
+        }
+
         // Current mount points for this filesystem. A single indexed device may
         // be mounted at multiple locations.
         QStringList mountPoints;
@@ -355,10 +366,18 @@ public:
         quint32 requestId
     );
     void removeDeviceByIndexId(quint64 indexId);
+    bool removeDeviceByDeviceId(const QString& deviceId);
     bool removeDeviceByRequestId(quint32 requestId);
     void appendDeviceFileRecordsByRequestId(quint32 requestId, const std::vector<FileRecord>& records);
     void appendDeviceStringPoolByRequestId(quint32 requestId, QByteArrayView stringPool);
     bool removeRequestId(quint32 requestId);
+    bool updateDeviceRuntimeStateByDeviceId(
+        const QString& deviceId,
+        bool mounted,
+        bool showOfflineResults,
+        const QStringList& mountPoints = {},
+        const QString& primaryMountPoint = {}
+    );
     std::vector<RecordHandle> performTrigramSearch(const std::string& query);
     std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;
     void resolveParentPointersByRequestId(quint32 requestId);
@@ -389,7 +408,7 @@ Q_SIGNALS:
     void deviceRemoved(quint64 indexId);
 
 private:
-    void removeDeviceByIndexIdUnlocked(quint64 indexId);
+    bool removeDeviceByIndexIdUnlocked(quint64 indexId);
 
     quint64 nextIndexId_ = 1;
 

@@ -42,7 +42,7 @@ static std::optional<QString> blkidValueForDev(const std::string& devNode, const
  * Selects the primary mount point from a list of available mount points.
  *
  * The method applies the following selection criteria:
- * 1) Prefers mount points under "/mnt" or "/media". Among these, the shortest path is chosen.
+ * 1) Prefers mount points under "/mnt", "/media" or "/run/media". Among these, the shortest path is chosen.
  * 2) If no mount points match the first criteria, the shortest path from the provided list is selected.
  *
  * @param mountPoints A list of mount points as strings.
@@ -59,6 +59,9 @@ static QString pickPrimaryMountPoint(const QStringList& mountPoints) {
             if (best.isEmpty() || mp.size() < best.size()) best = mp;
         }
         if (mp.startsWith(QStringLiteral("/media/")) || mp == QStringLiteral("/media")) {
+            if (best.isEmpty() || mp.size() < best.size()) best = mp;
+        }
+        if (mp.startsWith(QStringLiteral("/run/media/")) || mp == QStringLiteral("/run/media")) {
             if (best.isEmpty() || mp.size() < best.size()) best = mp;
         }
     }
@@ -320,6 +323,11 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
         if (fsType != QStringLiteral("ext4") &&
             fsType != QStringLiteral("ntfs") &&
             fsType != QStringLiteral("ntfs3")) {
+            std::cout << "Skipping unsupported block device devNode="
+                      << devNode
+                      << " fsType="
+                      << fsType.toStdString()
+                      << "\n";
             continue;
         }
 

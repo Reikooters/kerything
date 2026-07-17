@@ -15,6 +15,8 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include "BlockDeviceHelper.h"
+
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -23,6 +25,11 @@ Server::Server(QObject* parent)
 {
     connect(&server_, &QLocalServer::newConnection,
             this, &Server::onNewConnection);
+
+    knownDevicesRefreshTimer_.setSingleShot(true);
+    knownDevicesRefreshTimer_.setInterval(1000);
+    connect(&knownDevicesRefreshTimer_, &QTimer::timeout,
+            this, &Server::refreshKnownDevices);
 
     const std::optional<gid_t> socketGroupId = resolveSocketGroupId();
     if (!socketGroupId) {
@@ -51,6 +58,12 @@ Server::Server(QObject* parent)
 
     std::cout << "Server listening on: "
               << Protocol::ServerName.toStdString() << "\n";
+
+    lastKnownDevices_ = BlockDeviceHelper::listKnownDevices();
+
+    deviceChangeMonitor_ = new DeviceChangeMonitor(this);
+    connect(deviceChangeMonitor_, &DeviceChangeMonitor::devicesMayHaveChanged,
+            this, &Server::scheduleKnownDevicesRefresh);
 }
 
 std::optional<gid_t> Server::resolveSocketGroupId()
@@ -116,6 +129,46 @@ bool Server::applySocketPermissions(gid_t socketGroupId)
     return true;
 }
 
+bool Server::blockDeviceListsEqual(
+    const std::vector<BlockDevice>& lhs,
+    const std::vector<BlockDevice>& rhs)
+{
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+
+    auto sorted = [](std::vector<BlockDevice> devices) {
+        std::sort(devices.begin(), devices.end(), [](const BlockDevice& a, const BlockDevice& b) {
+            return a.deviceId < b.deviceId;
+        });
+
+        return devices;
+    };
+
+    const std::vector<BlockDevice> aDevices = sorted(lhs);
+    const std::vector<BlockDevice> bDevices = sorted(rhs);
+
+    for (std::size_t i = 0; i < aDevices.size(); ++i) {
+        const BlockDevice& a = aDevices[i];
+        const BlockDevice& b = bDevices[i];
+
+        if (a.deviceId != b.deviceId ||
+            a.devNode != b.devNode ||
+            a.fsType != b.fsType ||
+            a.uuid != b.uuid ||
+            a.partuuid != b.partuuid ||
+            a.label != b.label ||
+            a.diskModel != b.diskModel ||
+            a.mounted != b.mounted ||
+            a.mountPoints != b.mountPoints ||
+            a.primaryMountPoint != b.primaryMountPoint) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void Server::onNewConnection()
 {
     while (QLocalSocket* socket = server_.nextPendingConnection()) {
@@ -126,6 +179,7 @@ void Server::onNewConnection()
                 this, &Server::onClientDisconnected);
 
         connection->sendReady();
+        connection->sendKnownDevices(0, lastKnownDevices_);
 
         clients_.push_back(connection);
     }
@@ -138,4 +192,35 @@ void Server::onClientDisconnected(ClientConnection* connection)
         clients_.end());
 
     std::cout << "Client disconnected\n";
+}
+
+void Server::scheduleKnownDevicesRefresh()
+{
+    knownDevicesRefreshTimer_.start();
+}
+
+void Server::refreshKnownDevices()
+{
+    const std::vector<BlockDevice> devices = BlockDeviceHelper::listKnownDevices();
+
+    if (blockDeviceListsEqual(lastKnownDevices_, devices)) {
+        return;
+    }
+
+    lastKnownDevices_ = devices;
+
+    std::cout << "Known devices changed; broadcasting count="
+              << devices.size()
+              << "\n";
+
+    broadcastKnownDevices(devices);
+}
+
+void Server::broadcastKnownDevices(const std::vector<BlockDevice>& devices)
+{
+    for (ClientConnection* client : clients_) {
+        if (client) {
+            client->sendKnownDevices(0, devices);
+        }
+    }
 }

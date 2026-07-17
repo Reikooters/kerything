@@ -35,7 +35,7 @@ DevicePickerDialog::DevicePickerDialog(const std::vector<BlockDevice>& blockDevi
         QStringLiteral(
             "<b>Choose devices to index</b><br>"
             "Kerything will build a fast filename index for the selected devices.<br><br>"
-            "It indexes file and folder names, paths, sizes, and timestamps.<br>"
+            "It indexes file and folder names, paths, sizes, and last modified timestamps.<br>"
             "It does not read file contents.<br><br>"
             "Choose which devices to index. You can change this later in settings."
         ),

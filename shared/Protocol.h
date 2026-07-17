@@ -8,6 +8,11 @@
 #include <QtCore/QDataStream>
 #include <QtCore/QString>
 
+#include <optional>
+#include <vector>
+
+#include "BlockDevice.h"
+
 namespace Protocol {
 
 static constexpr quint32 Magic = 0x4B455259; // 'KERY'
@@ -98,6 +103,71 @@ inline bool tryParseFrame(QByteArray& buffer, MessageFrame& frame)
     frame.payload = buffer.mid(HeaderSize, frame.header.payloadSize);
     buffer.remove(0, totalSize);
     return true;
+}
+
+inline QByteArray makeKnownDevicesPayload(const std::vector<BlockDevice>& devices)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << static_cast<quint32>(devices.size());
+
+    for (const BlockDevice& device : devices) {
+        out << device.deviceId
+            << device.devNode
+            << device.fsType
+            << device.uuid
+            << device.partuuid
+            << device.label
+            << device.diskModel
+            << device.mounted
+            << device.mountPoints
+            << device.primaryMountPoint;
+    }
+
+    return payload;
+}
+
+inline std::optional<std::vector<BlockDevice>> parseKnownDevicesPayload(const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    quint32 count = 0;
+    in >> count;
+
+    if (in.status() != QDataStream::Ok) {
+        return std::nullopt;
+    }
+
+    std::vector<BlockDevice> devices;
+    devices.reserve(count);
+
+    for (quint32 i = 0; i < count; ++i) {
+        BlockDevice device;
+
+        in >> device.deviceId
+           >> device.devNode
+           >> device.fsType
+           >> device.uuid
+           >> device.partuuid
+           >> device.label
+           >> device.diskModel
+           >> device.mounted
+           >> device.mountPoints
+           >> device.primaryMountPoint;
+
+        if (in.status() != QDataStream::Ok) {
+            return std::nullopt;
+        }
+
+        devices.emplace_back(std::move(device));
+    }
+
+    return devices;
 }
 
 inline QByteArray makeScanDevicePayload(const QString& deviceId)

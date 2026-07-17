@@ -36,6 +36,7 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
                 const QString& deviceId,
                 const QString& devNode,
                 const QString& fsType,
+                const QString& label,
                 const QStringList& mountPoints,
                 const QString& primaryMountPoint
             ) {
@@ -44,6 +45,7 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
                     deviceId,
                     devNode,
                     fsType,
+                    label,
                     mountPoints,
                     primaryMountPoint
                 );
@@ -179,6 +181,7 @@ void ClientConnection::handleScanDevice(quint32 requestId, const QByteArray& pay
     job->deviceId = device->deviceId;
     job->devNode = device->devNode;
     job->fsType = device->fsType;
+    job->label = device->label;
     job->mountPoints = device->mountPoints;
     job->primaryMountPoint = device->primaryMountPoint;
 
@@ -223,6 +226,7 @@ void ClientConnection::sendScanStarted(
         const QString& deviceId,
         const QString& devNode,
         const QString& fsType,
+        const QString& label,
         const QStringList& mountPoints,
         const QString& primaryMountPoint)
 {
@@ -234,6 +238,7 @@ void ClientConnection::sendScanStarted(
     out << deviceId
         << devNode
         << fsType
+        << label
         << mountPoints
         << primaryMountPoint;
 
@@ -324,27 +329,11 @@ void ClientConnection::sendKnownDevices(
     quint32 requestId,
     const std::vector<BlockDevice>& devices)
 {
-    QByteArray payload;
-    QDataStream out(&payload, QIODevice::WriteOnly);
-    out.setByteOrder(QDataStream::BigEndian);
-    out.setVersion(QDataStream::Qt_6_0);
-
-    out << static_cast<quint32>(devices.size());
-
-    for (const auto& device : devices) {
-        out << device.deviceId
-            << device.devNode
-            << device.fsType
-            << device.uuid
-            << device.partuuid
-            << device.label
-            << device.diskModel
-            << device.mounted
-            << device.mountPoints
-            << device.primaryMountPoint;
-    }
-
-    sendFrame(Protocol::MessageType::KnownDevices, requestId, payload);
+    sendFrame(
+        Protocol::MessageType::KnownDevices,
+        requestId,
+        Protocol::makeKnownDevicesPayload(devices)
+    );
 }
 
 void ClientConnection::sendError(quint32 requestId, const QString& errorText)

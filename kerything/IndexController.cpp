@@ -58,6 +58,7 @@ quint64 IndexController::addDevice(
             deviceIndex.devNode = devNode;
             deviceIndex.mountPoints = mountPoints;
             deviceIndex.primaryMountPoint = primaryMountPoint;
+            deviceIndex.mounted = !mountPoints.isEmpty();
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
@@ -86,6 +87,7 @@ quint64 IndexController::addDevice(
     deviceIndex->devNode = devNode;
     deviceIndex->mountPoints = mountPoints;
     deviceIndex->primaryMountPoint = primaryMountPoint;
+    deviceIndex->mounted = !mountPoints.isEmpty();
 
     indexByIndexId_.emplace(indexId, std::move(deviceIndex));
     indexIdByDevNode_[devNode] = indexId;
@@ -102,18 +104,54 @@ quint64 IndexController::addDevice(
 }
 
 void IndexController::removeDeviceByIndexId(quint64 indexId) {
-    std::unique_lock lock(indexMutex_);
-    removeDeviceByIndexIdUnlocked(indexId);
+    bool removed = false;
+
+    {
+        std::unique_lock lock(indexMutex_);
+        removed = removeDeviceByIndexIdUnlocked(indexId);
+    }
+
+    if (removed) {
+        Q_EMIT deviceRemoved(indexId);
+    }
 }
 
-void IndexController::removeDeviceByIndexIdUnlocked(quint64 indexId) {
+bool IndexController::removeDeviceByDeviceId(const QString& deviceId)
+{
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    quint64 removedIndexId = 0;
+    bool removed = false;
+
+    {
+        std::unique_lock lock(indexMutex_);
+
+        for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+            if (deviceIndex && deviceIndex->deviceId == deviceId) {
+                removedIndexId = indexId;
+                removed = removeDeviceByIndexIdUnlocked(indexId);
+                break;
+            }
+        }
+    }
+
+    if (removed) {
+        Q_EMIT deviceRemoved(removedIndexId);
+    }
+
+    return removed;
+}
+
+bool IndexController::removeDeviceByIndexIdUnlocked(quint64 indexId) {
     // Look up the owning entry in the indexId -> DeviceIndex map.
     // We use find() instead of operator[] so we don't accidentally create
     // a new empty entry if the indexId does not exist.
     const auto deviceIt = indexByIndexId_.find(indexId);
     if (deviceIt == indexByIndexId_.end()) {
         std::cerr << "IndexController: removeDeviceByIndexId: No device for indexId=" << indexId << "\n";
-        return;
+        return false;
     }
 
     // Capture the device path before removing the DeviceIndex object.
@@ -145,27 +183,36 @@ void IndexController::removeDeviceByIndexIdUnlocked(quint64 indexId) {
               << " devNode=" << devicePath.toStdString()
               << " indexId=" << indexId << "\n";
 
-    Q_EMIT deviceRemoved(indexId);
+    return true;
 }
 
 bool IndexController::removeDeviceByRequestId(quint32 requestId) {
-    std::unique_lock lock(indexMutex_);
+    quint64 removedIndexId = 0;
+    bool removed = false;
 
-    // Resolve the request to the device it belongs to.
-    const auto requestIt = indexIdByRequestId_.find(requestId);
-    if (requestIt == indexIdByRequestId_.end()) {
-        return false;
+    {
+        std::unique_lock lock(indexMutex_);
+
+        // Resolve the request to the device it belongs to.
+        const auto requestIt = indexIdByRequestId_.find(requestId);
+        if (requestIt == indexIdByRequestId_.end()) {
+            return false;
+        }
+
+        removedIndexId = requestIt->second;
+
+        // Remove the request mapping first so we don't leave a stale in-flight request.
+        indexIdByRequestId_.erase(requestIt);
+
+        // Remove the associated device and all of its reverse mappings.
+        removed = removeDeviceByIndexIdUnlocked(removedIndexId);
     }
 
-    const quint64 indexId = requestIt->second;
+    if (removed) {
+        Q_EMIT deviceRemoved(removedIndexId);
+    }
 
-    // Remove the request mapping first so we don't leave a stale in-flight request.
-    indexIdByRequestId_.erase(requestIt);
-
-    // Remove the associated device and all of its reverse mappings.
-    removeDeviceByIndexIdUnlocked(indexId);
-
-    return true;
+    return removed;
 }
 
 void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId, const std::vector<FileRecord> &records) {
@@ -242,6 +289,45 @@ bool IndexController::removeRequestId(quint32 requestId) {
     std::unique_lock lock(indexMutex_);
 
     return indexIdByRequestId_.erase(requestId) > 0;
+}
+
+bool IndexController::updateDeviceRuntimeStateByDeviceId(
+    const QString& deviceId,
+    bool mounted,
+    bool showOfflineResults,
+    const QStringList& mountPoints,
+    const QString& primaryMountPoint
+) {
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    std::unique_lock lock(indexMutex_);
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        if (!deviceIndex || deviceIndex->deviceId != deviceId) {
+            continue;
+        }
+
+        deviceIndex->mounted = mounted;
+        deviceIndex->showOfflineResults = showOfflineResults;
+
+        if (!mountPoints.isEmpty() || !primaryMountPoint.isEmpty() || !mounted) {
+            deviceIndex->mountPoints = mountPoints;
+            deviceIndex->primaryMountPoint = primaryMountPoint;
+        }
+
+        std::cout << "IndexController: Updated runtime state"
+                  << " deviceId=" << deviceId.toStdString()
+                  << " mounted=" << (mounted ? "true" : "false")
+                  << " showOfflineResults=" << (showOfflineResults ? "true" : "false")
+                  << " searchable=" << (deviceIndex->isSearchable() ? "true" : "false")
+                  << "\n";
+
+        return true;
+    }
+
+    return false;
 }
 
 void IndexController::setReadyState(quint32 requestId, bool isReady) {
@@ -335,7 +421,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         std::size_t totalSize = 0;
 
         for (const auto& [indexId, indexPtr] : indexByIndexId_) {
-            if (!indexPtr || !indexPtr->isReady) {
+            if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
                 continue;
             }
 
@@ -349,7 +435,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         results.reserve(totalSize);
 
         for (const auto& [indexId, indexPtr] : indexByIndexId_) {
-            if (!indexPtr || !indexPtr->isReady) {
+            if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
                 continue;
             }
 
@@ -363,7 +449,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     }
 
     for (const auto& [indexId, indexPtr] : indexByIndexId_) {
-        if (!indexPtr || !indexPtr->isReady) {
+        if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
             continue;
         }
 

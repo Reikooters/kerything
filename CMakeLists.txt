@@ -46,6 +46,13 @@ pkg_check_modules(EXT2FS REQUIRED ext2fs com_err)
 # libblkid (util-linux) for device inventory in the daemon
 pkg_check_modules(BLKID REQUIRED blkid)
 
+# libudev for monitoring device changes (USB plugged in,
+# partitions appearing/disappearing, filesystem label changes, etc.
+pkg_check_modules(UDEV REQUIRED libudev)
+
+# libmount (util-linux) for monitoring mount table changes
+pkg_check_modules(MOUNT REQUIRED mount)
+
 add_executable(kerything
         kerything/main.cpp
         kerything/AppController.cpp
@@ -54,6 +61,7 @@ add_executable(kerything
         kerything/DaemonClient.h
         kerything/DevicePickerDialog.cpp
         kerything/DevicePickerDialog.h
+        kerything/DevicePreferenceChange.h
         kerything/FileModel.cpp
         kerything/FileModel.h
         kerything/GuiUtils.cpp
@@ -64,6 +72,8 @@ add_executable(kerything
         kerything/MainWindow.h
         kerything/Preferences.cpp
         kerything/Preferences.h
+        kerything/PreferencesDialog.cpp
+        kerything/PreferencesDialog.h
         kerything/SearchResultTableView.cpp
         kerything/SearchResultTableView.h
         kerything/SingleInstanceServer.cpp
@@ -81,6 +91,8 @@ add_executable(kerythingd
         kerythingd/BlockDeviceHelper.h
         kerythingd/ClientConnection.cpp
         kerythingd/ClientConnection.h
+        kerythingd/DeviceChangeMonitor.cpp
+        kerythingd/DeviceChangeMonitor.h
         kerythingd/ScanJob.h
         kerythingd/ScannerHelper.cpp
         kerythingd/ScannerHelper.h
@@ -131,6 +143,8 @@ target_link_libraries(kerythingd
         Qt6::Network
         ${BLKID_LIBRARIES}
         ${EXT2FS_LIBRARIES} # Lib for parsing EXT4 inodes
+        ${UDEV_LIBRARIES}
+        ${MOUNT_LIBRARIES}
 )
 
 target_include_directories(kerything PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
@@ -138,6 +152,24 @@ target_include_directories(kerythingd
         PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/shared"
         ${EXT2FS_INCLUDE_DIRS}
+        ${UDEV_INCLUDE_DIRS}
+        ${MOUNT_INCLUDE_DIRS}
+)
+
+target_compile_options(kerythingd
+        PRIVATE
+        ${EXT2FS_CFLAGS_OTHER}
+        ${BLKID_CFLAGS_OTHER}
+        ${UDEV_CFLAGS_OTHER}
+        ${MOUNT_CFLAGS_OTHER}
+)
+
+target_link_options(kerythingd
+        PRIVATE
+        ${EXT2FS_LDFLAGS_OTHER}
+        ${BLKID_LDFLAGS_OTHER}
+        ${UDEV_LDFLAGS_OTHER}
+        ${MOUNT_LDFLAGS_OTHER}
 )
 
 if(KERYTHING_WITH_KF6)

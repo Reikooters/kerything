@@ -42,6 +42,7 @@ Q_SIGNALS:
         const QString& deviceId,
         const QString& devNode,
         const QString& fsType,
+        const QString& label,
         const QStringList& mountPoints,
         const QString& primaryMountPoint
     );

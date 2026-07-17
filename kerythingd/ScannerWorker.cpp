@@ -27,6 +27,7 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
         jobRef->deviceId,
         jobRef->devNode,
         jobRef->fsType,
+        jobRef->label,
         jobRef->mountPoints,
         jobRef->primaryMountPoint
     );

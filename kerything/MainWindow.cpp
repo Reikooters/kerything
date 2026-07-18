@@ -45,6 +45,7 @@
 
 #include "AppController.h"
 #include "HoverRowHighlight.h"
+#include "Version.h"
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
@@ -541,6 +542,7 @@ void MainWindow::showAbout()
         QStringLiteral("Copyright © 2026 Reikooters")
     );
 
+    aboutData.setOtherText(QStringLiteral("Release date: %1").arg(KerythingVersion::ReleaseDate));
     aboutData.setHomepage(QStringLiteral("https://github.com/Reikooters/kerything"));
     aboutData.setBugAddress("https://github.com/Reikooters/kerything/issues");
     aboutData.addAuthor(
@@ -561,12 +563,13 @@ void MainWindow::showAbout()
             "<h3>Kerything</h3>"
             "<p>Fast file search for Linux block devices, inspired by the Windows utility \"Everything\" by Voidtools.</p>"
             "<p>Version %1</p>"
+            "<p>Release date: %2</p>"
             "<p>Copyright &copy; 2026 Reikooters</p>"
             "<p><a href=\"https://github.com/Reikooters/kerything\">"
             "https://github.com/Reikooters/kerything"
             "</a></p>"
             "<p>Licensed under the GNU General Public License v3.0 or later.</p>"
-        ).arg(QApplication::applicationVersion())
+        ).arg(QApplication::applicationVersion(), KerythingVersion::ReleaseDate)
     );
 #endif
 }

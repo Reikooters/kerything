@@ -5,6 +5,7 @@
 #include <QIcon>
 
 #include "AppController.h"
+#include "Version.h"
 
 int main(int argc, char* argv[]) {
     // Qt application object: required for widgets, event processing, and app-wide state.
@@ -13,7 +14,7 @@ int main(int argc, char* argv[]) {
     // Basic metadata used by Qt features such as settings and platform integration.
     QApplication::setApplicationName(QStringLiteral("kerything"));
     QApplication::setOrganizationName(QStringLiteral("Reikooters"));
-    QApplication::setApplicationVersion(QStringLiteral("2.0"));
+    QApplication::setApplicationVersion(KerythingVersion::Version);
 
     // This must match the .desktop filename exactly
     QApplication::setDesktopFileName(QStringLiteral("net.reikooters.kerything"));

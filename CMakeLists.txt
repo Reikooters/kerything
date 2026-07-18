@@ -107,6 +107,7 @@ add_executable(kerything
         shared/Protocol.h
         shared/SocketFramer.cpp
         shared/SocketFramer.h
+        shared/Version.h
 )
 
 add_executable(kerythingd

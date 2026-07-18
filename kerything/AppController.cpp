@@ -613,7 +613,7 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
 #ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: first-run device selection skipped by user\n";
 #endif
-        // preferences_.setInitialDeviceSelectionCompleted(true);
+        preferences_.setInitialDeviceSelectionCompleted(true);
         return;
     }
 

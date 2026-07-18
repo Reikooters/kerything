@@ -17,8 +17,13 @@
 
 #include "BlockDeviceHelper.h"
 
+#include <systemd/sd-daemon.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+namespace {
+    constexpr int IdleShutdownTimeoutMs = 5 * 60 * 1000;
+}
 
 Server::Server(QObject* parent)
     : QObject(parent)
@@ -31,27 +36,12 @@ Server::Server(QObject* parent)
     connect(&knownDevicesRefreshTimer_, &QTimer::timeout,
             this, &Server::refreshKnownDevices);
 
-    const std::optional<gid_t> socketGroupId = resolveSocketGroupId();
-    if (!socketGroupId) {
-        QCoreApplication::exit(1);
-        return;
-    }
+    idleShutdownTimer_.setSingleShot(true);
+    idleShutdownTimer_.setInterval(IdleShutdownTimeoutMs);
+    connect(&idleShutdownTimer_, &QTimer::timeout,
+            this, &Server::maybeShutdownAfterIdle);
 
-    if (!prepareSocketDirectory(*socketGroupId)) {
-        QCoreApplication::exit(1);
-        return;
-    }
-
-    QLocalServer::removeServer(Protocol::ServerName);
-
-    if (!server_.listen(Protocol::ServerName)) {
-        std::cerr << "Failed to listen: "
-                  << server_.errorString().toStdString() << "\n";
-        QCoreApplication::exit(1);
-        return;
-    }
-
-    if (!applySocketPermissions(*socketGroupId)) {
+    if (!listen()) {
         QCoreApplication::exit(1);
         return;
     }
@@ -64,6 +54,8 @@ Server::Server(QObject* parent)
     deviceChangeMonitor_ = new DeviceChangeMonitor(this);
     connect(deviceChangeMonitor_, &DeviceChangeMonitor::devicesMayHaveChanged,
             this, &Server::scheduleKnownDevicesRefresh);
+
+    startIdleShutdownTimerIfIdle();
 }
 
 std::optional<gid_t> Server::resolveSocketGroupId()
@@ -100,7 +92,7 @@ bool Server::prepareSocketDirectory(gid_t socketGroupId)
         return false;
     }
 
-    if (::chmod(dirPathNative.constData(), 0770) != 0) {
+    if (::chmod(dirPathNative.constData(), 0750) != 0) {
         std::cerr << "Failed to chmod socket directory: "
                   << std::strerror(errno) << "\n";
         return false;
@@ -126,6 +118,81 @@ bool Server::applySocketPermissions(gid_t socketGroupId)
         return false;
     }
 
+    return true;
+}
+
+bool Server::listen()
+{
+    if (listenFromSystemd()) {
+        return true;
+    }
+
+    return listenStandalone();
+}
+
+bool Server::listenFromSystemd()
+{
+    const int fdCount = sd_listen_fds(0);
+
+    if (fdCount < 0) {
+        std::cerr << "sd_listen_fds failed: "
+                  << std::strerror(-fdCount) << "\n";
+        return false;
+    }
+
+    if (fdCount == 0) {
+        return false;
+    }
+
+    if (fdCount != 1) {
+        std::cerr << "Expected exactly one systemd socket, got "
+                  << fdCount
+                  << "\n";
+        return false;
+    }
+
+    const int fd = SD_LISTEN_FDS_START;
+
+    if (sd_is_socket_unix(fd, SOCK_STREAM, 1, nullptr, 0) <= 0) {
+        std::cerr << "Inherited systemd fd is not a listening Unix stream socket\n";
+        return false;
+    }
+
+    if (!server_.listen(static_cast<qintptr>(fd))) {
+        std::cerr << "Failed to listen on inherited systemd socket: "
+                  << server_.errorString().toStdString()
+                  << "\n";
+        return false;
+    }
+
+    std::cout << "Using systemd socket activation\n";
+    return true;
+}
+
+bool Server::listenStandalone()
+{
+    const std::optional<gid_t> socketGroupId = resolveSocketGroupId();
+    if (!socketGroupId) {
+        return false;
+    }
+
+    if (!prepareSocketDirectory(*socketGroupId)) {
+        return false;
+    }
+
+    QLocalServer::removeServer(Protocol::ServerName);
+
+    if (!server_.listen(Protocol::ServerName)) {
+        std::cerr << "Failed to listen: "
+                  << server_.errorString().toStdString() << "\n";
+        return false;
+    }
+
+    if (!applySocketPermissions(*socketGroupId)) {
+        return false;
+    }
+
+    std::cout << "Using standalone socket creation fallback\n";
     return true;
 }
 
@@ -171,6 +238,8 @@ bool Server::blockDeviceListsEqual(
 
 void Server::onNewConnection()
 {
+    stopIdleShutdownTimer();
+
     while (QLocalSocket* socket = server_.nextPendingConnection()) {
         std::cout << "Client connected\n";
 
@@ -192,6 +261,41 @@ void Server::onClientDisconnected(ClientConnection* connection)
         clients_.end());
 
     std::cout << "Client disconnected\n";
+
+    startIdleShutdownTimerIfIdle();
+}
+
+void Server::startIdleShutdownTimerIfIdle()
+{
+    if (!clients_.empty() || idleShutdownTimer_.isActive()) {
+        return;
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "No clients connected; daemon will shut down after idle timeout\n";
+#endif
+
+    idleShutdownTimer_.start();
+}
+
+void Server::stopIdleShutdownTimer()
+{
+    if (idleShutdownTimer_.isActive()) {
+        idleShutdownTimer_.stop();
+    }
+}
+
+void Server::maybeShutdownAfterIdle()
+{
+    if (!clients_.empty()) {
+        return;
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "Idle timeout reached; shutting down daemon\n";
+#endif
+
+    QCoreApplication::quit();
 }
 
 void Server::scheduleKnownDevicesRefresh()

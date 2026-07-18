@@ -7,6 +7,11 @@ project(kerything)
 include(GNUInstallDirs)
 include(CheckIPOSupported)
 
+set(KERYTHING_SYSTEMD_SYSTEM_UNIT_DIR
+        "${CMAKE_INSTALL_LIBDIR}/systemd/system"
+        CACHE PATH "Directory for systemd system units"
+)
+
 check_ipo_supported(RESULT KERYTHING_IPO_SUPPORTED OUTPUT KERYTHING_IPO_ERROR)
 
 if(KERYTHING_IPO_SUPPORTED)
@@ -64,6 +69,9 @@ pkg_check_modules(UDEV REQUIRED libudev)
 
 # libmount (util-linux) for monitoring mount table changes
 pkg_check_modules(MOUNT REQUIRED mount)
+
+# libsystemd for socket activation
+pkg_check_modules(SYSTEMD REQUIRED libsystemd)
 
 add_executable(kerything
         kerything/main.cpp
@@ -175,6 +183,7 @@ target_link_libraries(kerythingd
         ${EXT2FS_LIBRARIES} # Lib for parsing EXT4 inodes
         ${UDEV_LIBRARIES}
         ${MOUNT_LIBRARIES}
+        ${SYSTEMD_LIBRARIES}
 )
 
 target_include_directories(kerything PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
@@ -184,6 +193,7 @@ target_include_directories(kerythingd
         ${EXT2FS_INCLUDE_DIRS}
         ${UDEV_INCLUDE_DIRS}
         ${MOUNT_INCLUDE_DIRS}
+        ${SYSTEMD_INCLUDE_DIRS}
 )
 
 target_compile_options(kerythingd
@@ -192,6 +202,7 @@ target_compile_options(kerythingd
         ${BLKID_CFLAGS_OTHER}
         ${UDEV_CFLAGS_OTHER}
         ${MOUNT_CFLAGS_OTHER}
+        ${SYSTEMD_CFLAGS_OTHER}
 )
 
 target_link_options(kerythingd
@@ -200,11 +211,30 @@ target_link_options(kerythingd
         ${BLKID_LDFLAGS_OTHER}
         ${UDEV_LDFLAGS_OTHER}
         ${MOUNT_LDFLAGS_OTHER}
+        ${SYSTEMD_LDFLAGS_OTHER}
 )
 
 # Install the binaries
 install(TARGETS kerything kerythingd
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/kerythingd.service.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/kerythingd.service"
+        @ONLY
+)
+
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/kerythingd.socket.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/kerythingd.socket"
+        @ONLY
+)
+
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/kerythingd.service"
+        "${CMAKE_CURRENT_BINARY_DIR}/kerythingd.socket"
+        DESTINATION "${KERYTHING_SYSTEMD_SYSTEM_UNIT_DIR}"
 )
 
 # Install the icons into the freedesktop hicolor icon theme.

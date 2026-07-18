@@ -1,0 +1,68 @@
+post_install() {
+  systemd-sysusers kerything.conf >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+
+  cat <<'EOF'
+
+Kerything has been installed.
+
+Kerything uses a privileged daemon started on demand by systemd socket activation.
+
+To allow your user to connect to the daemon socket, run:
+
+  sudo usermod -aG kerything "$USER"
+
+Then log out and back in, or restart your computer.
+
+Enable the daemon socket with:
+
+  sudo systemctl enable --now kerythingd.socket
+
+Do not enable kerythingd.service directly. It is started automatically when the
+GUI connects to kerythingd.socket.
+
+EOF
+}
+
+post_upgrade() {
+  systemd-sysusers kerything.conf >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+
+  cat <<'EOF'
+
+Kerything has been upgraded.
+
+If Kerything was running during the upgrade, restart the socket-activated daemon:
+
+  sudo systemctl restart kerythingd.socket
+
+If the daemon is currently active, you can also restart it with:
+
+  sudo systemctl restart kerythingd.service
+
+The socket should remain the enabled unit:
+
+  systemctl status kerythingd.socket
+
+EOF
+}
+
+pre_remove() {
+  systemctl stop kerythingd.service >/dev/null 2>&1 || true
+  systemctl stop kerythingd.socket >/dev/null 2>&1 || true
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+
+  cat <<'EOF'
+
+Kerything has been removed.
+
+The kerything system group was not removed automatically. If you no longer need
+it, remove it manually with:
+
+  sudo groupdel kerything
+
+EOF
+}

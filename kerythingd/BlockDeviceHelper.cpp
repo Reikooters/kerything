@@ -114,6 +114,7 @@ static std::string decodeMountInfoField(const std::string& input)
 }
 
 struct MountInfoEntry {
+    std::string root;
     std::string mountPoint;
     std::string mountSource;
 };
@@ -121,12 +122,12 @@ struct MountInfoEntry {
 /**
  * Reads and parses the contents of /proc/self/mountinfo to retrieve a list of mounted file systems.
  *
- * This method extracts the mount point and the corresponding mount source from each line of the file.
+ * This method extracts the mount root, mount point, and mount source from each line of the file.
  * Only entries that conform to the expected format are included in the output.
  *
- * @return A vector of MountInfoEntry structures, where each structure contains the mount point and
- *         the associated mount source. Returns an empty vector if the file cannot be read or if
- *         no valid entries are found.
+ * @return A vector of MountInfoEntry structures, where each structure contains the mount root,
+ *         mount point, and associated mount source. Returns an empty vector if the file cannot
+ *         be read or if no valid entries are found.
  */
 static std::vector<MountInfoEntry> readMountInfo() {
     std::ifstream f("/proc/self/mountinfo");
@@ -138,15 +139,14 @@ static std::vector<MountInfoEntry> readMountInfo() {
         // mountinfo format:
         //  id parent major:minor root mount_point opts ... - fstype mount_source superopts
         //
-        // We need mount_point and mount_source.
+        // We need root, mount_point and mount_source.
         const auto sep = line.find(" - ");
         if (sep == std::string::npos) continue;
 
         const std::string left = line.substr(0, sep);
         const std::string right = line.substr(sep + 3);
 
-        // left: fields separated by spaces; mount_point is field 5 (1-based)
-        // We'll parse first 6 tokens: id, parent, maj:min, root, mount_point, opts
+        // left: fields separated by spaces; root is field 4, mount_point is field 5.
         std::string id, parent, majmin, root, mountPoint;
         {
             std::istringstream iss(left);
@@ -162,7 +162,11 @@ static std::vector<MountInfoEntry> readMountInfo() {
             if (!(iss >> fstype >> mountSource >> superopts)) continue;
         }
 
-        out.push_back({decodeMountInfoField(mountPoint), decodeMountInfoField(mountSource)});
+        out.push_back({
+            decodeMountInfoField(root),
+            decodeMountInfoField(mountPoint),
+            decodeMountInfoField(mountSource)
+        });
     }
 
     return out;
@@ -339,6 +343,20 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
         QStringList mountPoints;
 
         for (const auto& mi : mountInfo) {
+            /*
+             * Ignore bind mounts of subdirectories. systemd service hardening
+             * options such as ProtectSystem= and ProtectHome= create private
+             * bind mounts like /usr, /etc, /home and /root backed by the same
+             * block device as /. Treating those as device mount points causes
+             * every indexed result to appear once per bind mount.
+             *
+             * For ordinary full filesystem mounts, the mountinfo "root" field
+             * is "/".
+             */
+            if (mi.root != "/") {
+                continue;
+            }
+
             if (mi.mountSource.rfind("/dev/", 0) != 0) {
                 continue;
             }

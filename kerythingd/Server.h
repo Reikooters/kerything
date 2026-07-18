@@ -26,12 +26,18 @@ private:
         const std::vector<BlockDevice>& lhs,
         const std::vector<BlockDevice>& rhs
     );
+    bool listen();
+    bool listenFromSystemd();
+    bool listenStandalone();
+    void startIdleShutdownTimerIfIdle();
+    void stopIdleShutdownTimer();
 
 private Q_SLOTS:
     void onNewConnection();
     void onClientDisconnected(ClientConnection* connection);
     void scheduleKnownDevicesRefresh();
     void refreshKnownDevices();
+    void maybeShutdownAfterIdle();
 
 private:
     void broadcastKnownDevices(const std::vector<BlockDevice>& devices);
@@ -41,6 +47,7 @@ private:
 
     DeviceChangeMonitor* deviceChangeMonitor_ = nullptr;
     QTimer knownDevicesRefreshTimer_;
+    QTimer idleShutdownTimer_;
     std::vector<BlockDevice> lastKnownDevices_;
 };
 

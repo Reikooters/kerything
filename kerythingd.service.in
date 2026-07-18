@@ -1,0 +1,23 @@
+[Unit]
+Description=Kerything file indexing daemon
+Documentation=https://github.com/Reikooters/kerything
+Requires=kerythingd.socket
+After=kerythingd.socket local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/kerythingd
+Restart=on-failure
+RestartSec=2s
+
+# kerythingd needs root-level block device/filesystem access.
+User=root
+Group=kerything
+UMask=0007
+
+# Basic hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full

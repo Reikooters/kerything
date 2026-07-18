@@ -88,6 +88,8 @@ add_executable(kerything
         kerything/FileModel.h
         kerything/GuiUtils.cpp
         kerything/GuiUtils.h
+        kerything/HoverRowHighlight.cpp
+        kerything/HoverRowHighlight.h
         kerything/IndexController.cpp
         kerything/IndexController.h
         kerything/MainWindow.cpp

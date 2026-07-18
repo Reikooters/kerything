@@ -24,6 +24,7 @@
 #include <QVBoxLayout>
 
 #include "BlockDeviceDisplayUtils.h"
+#include "HoverRowHighlight.h"
 
 namespace {
     constexpr int DeviceIdRole = Qt::UserRole + 1;
@@ -249,6 +250,7 @@ QWidget* PreferencesDialog::createDevicesPage()
     deviceTable_->horizontalHeader()->setSectionResizeMode(DeviceMountPointColumn, QHeaderView::Stretch);
     deviceTable_->horizontalHeader()->setSectionResizeMode(DeviceNodeColumn, QHeaderView::ResizeToContents);
     deviceTable_->horizontalHeader()->setSectionResizeMode(DeviceModelColumn, QHeaderView::ResizeToContents);
+    installHoverRowHighlight(deviceTable_);
 
     populateDeviceTable();
 

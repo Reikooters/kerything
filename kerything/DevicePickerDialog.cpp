@@ -20,6 +20,7 @@
 #include <QVBoxLayout>
 
 #include "BlockDeviceDisplayUtils.h"
+#include "HoverRowHighlight.h"
 
 namespace {
     constexpr int DefaultCheckStateRole = Qt::UserRole + 1;
@@ -78,6 +79,7 @@ DevicePickerDialog::DevicePickerDialog(
     table_->horizontalHeader()->setSectionResizeMode(MountPointColumn, QHeaderView::Stretch);
     table_->horizontalHeader()->setSectionResizeMode(DevNodeColumn, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(DiskModelColumn, QHeaderView::ResizeToContents);
+    installHoverRowHighlight(table_);
     table_->viewport()->installEventFilter(this);
     table_->installEventFilter(this);
 

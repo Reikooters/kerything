@@ -44,6 +44,7 @@
 #endif
 
 #include "AppController.h"
+#include "HoverRowHighlight.h"
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
@@ -83,6 +84,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView_->verticalHeader()->setVisible(false);
     tableView_->setWordWrap(false);
+    installHoverRowHighlight(tableView_);
 
     // Full-row hover
     // tableView->setItemDelegate(new HoverRowDelegate(this));

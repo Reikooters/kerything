@@ -1,7 +1,7 @@
 # Kerything 🔍
 
 > [!NOTE]
-> This branch contains the rewrite of the Kerything project.
+> This branch contains the rewrite of the Kerything project. The code for Kerything v1 can be found in the [v1-legacy](https://github.com/Reikooters/kerything/tree/v1-legacy) branch.
 
 Kerything is a fast Linux file search application built with C++26 and Qt 6.
 
@@ -102,6 +102,12 @@ The following keyboard shortcuts are available in Kerything:
 | `Ctrl + Q`                          | Exit the application (closes all windows)                                 |
 
 ## Building and Installation
+
+> [!WARNING]
+> Kerything v2 is a full rewrite of the application. If you previously had Kerything v1 installed,
+> you will need to uninstall it first before installing Kerything v2.
+>
+> To do this, follow the uninstallation instructions in the [v1-legacy](https://github.com/Reikooters/kerything/tree/v1-legacy) branch.
 
 Kerything can be installed in two main ways:
 

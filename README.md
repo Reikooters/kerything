@@ -158,9 +158,14 @@ Qt-only build is recommended for non-KDE desktops.
 
 If you already have Kerything installed, see [Upgrading](#upgrading) first.
 
-From the project root:
-
 ```bash
+# Clone the repository
+git clone --branch v2.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+
+# Enter the source code directory
+cd kerything
+
+# Build and install the package
 makepkg -si -f -c
 ```
 
@@ -196,6 +201,12 @@ sudo pacman -S --needed \
   kio \
   kxmlgui
 
+# Clone the repository
+git clone --branch v2.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+
+# Enter the source code directory
+cd kerything
+
 # Build and install
 cmake -B build -S . \
   -DCMAKE_BUILD_TYPE=Release \
@@ -229,6 +240,12 @@ sudo pacman -S --needed \
   e2fsprogs \
   util-linux-libs \
   systemd-libs
+
+# Clone the repository
+git clone --branch v2.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+
+# Enter the source code directory
+cd kerything
 
 cmake -B build -S . \
   -DCMAKE_BUILD_TYPE=Release \
@@ -268,6 +285,16 @@ For KDE Frameworks 6 integration, also install the development packages for:
 - KF6 I18n
 - KF6 KIO
 - KF6 XmlGui
+
+Clone the repo:
+
+```bash
+# Clone the repository
+git clone --branch v2.0.0 --depth 1 https://github.com/Reikooters/kerything.git
+
+# Enter the source code directory
+cd kerything
+```
 
 Then build either the KDE version:
 

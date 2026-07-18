@@ -84,21 +84,21 @@ Can be built with KDE Frameworks 6 for better integration on KDE Plasma desktops
 
 The following keyboard shortcuts are available in Kerything:
 
-| Shortcut                            | Action                                                                       |
-|:------------------------------------|:-----------------------------------------------------------------------------|
-| `Ctrl + L` or `Alt + D` or `Ctrl+F` | Focus search bar and select all text                                         |
-| `Down / Up`                         | Move focus from search bar to the results table                              |
-| `Return`                            | Open selected file(s) with default applications                              |
-| `Ctrl + Return`                     | Open the folder containing the selected file                                 |
-| `Ctrl + C`                          | Copy selected file(s) to clipboard (for pasting into another application)    |
-| `Ctrl + Shift + C`                  | Copy selected file(s) file name(s) to clipboard                              |
-| `Ctrl + Alt + C`                    | Copy selected file(s) full absolute path(s) to clipboard                     |
-| `Alt + Shift + F4`                  | Open your default terminal in the folder of the selected file                |
-| `F5`                                | Refresh indexes                                                              |
-| `Ctrl + N`                          | Open a New Window                                                            |
-| `Ctrl + W`                          | Close Window                                                                 |
-| `Ctrl + Shift + ,`                  | Open Preferences                                                             |
-| `Ctrl + Q`                          | Exit the application                                                         |
+| Shortcut                            | Action                                                                    |
+|:------------------------------------|:--------------------------------------------------------------------------|
+| `Ctrl + L` or `Alt + D` or `Ctrl+F` | Focus search bar and select all text                                      |
+| `Down / Up`                         | Move focus from search bar to the results table                           |
+| `Return`                            | Open selected file(s) with default applications                           |
+| `Ctrl + Return`                     | Open the folder containing the selected file                              |
+| `Ctrl + C`                          | Copy selected file(s) to clipboard (for pasting into another application) |
+| `Ctrl + Shift + C`                  | Copy selected file(s) file name(s) to clipboard                           |
+| `Ctrl + Alt + C`                    | Copy selected file(s) full absolute path(s) to clipboard                  |
+| `Alt + Shift + F4`                  | Open your default terminal in the folder of the selected file             |
+| `F5`                                | Refresh indexes                                                           |
+| `Ctrl + N`                          | Open a new window                                                         |
+| `Ctrl + W`                          | Close window                                                              |
+| `Ctrl + Shift + ,`                  | Open preferences                                                         |
+| `Ctrl + Q`                          | Exit the application                                                      |
 
 ## Building and Installation
 
@@ -132,6 +132,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now kerythingd.socket
 ```
 
+---
+
 ### Arch Linux
 
 For Arch Linux there are two installation options. You can either install the KDE
@@ -141,7 +143,7 @@ install either the KF6 or Qt-only builds using CMake.
 The KDE Frameworks 6 build is recommended for KDE Plasma desktop users. The
 Qt-only build is recommended for non-KDE desktops.
 
-#### Installing the KDE Frameworks 6 build from the included PKGBUILD
+### Installing the KDE Frameworks 6 build from the included PKGBUILD
 
 If you already have Kerything installed, see [Upgrading](#upgrading) first.
 
@@ -155,11 +157,11 @@ This builds Kerything with KDE Frameworks 6 integration enabled.
 
 After installation, complete [Post-install setup](#post-install-setup).
 
-#### Building manually on Arch Linux using CMake
+### Building manually on Arch Linux using CMake
 
 If you already have Kerything installed, see [Upgrading](#upgrading) first.
 
-##### KDE Frameworks 6 build
+### KDE Frameworks 6 build
 
 Recommended for KDE Plasma users.
 
@@ -195,7 +197,11 @@ sudo cmake --install build
 
 After installation, complete [Post-install setup](#post-install-setup).
 
-##### Qt-only build
+> [!IMPORTANT]
+> Use `-DCMAKE_BUILD_TYPE=Release` for normal use. Debug builds are significantly
+> slower and are intended for development only.
+
+### Qt-only build
 
 Recommended for non-KDE desktops.
 
@@ -227,6 +233,8 @@ After installation, complete [Post-install setup](#post-install-setup).
 > [!IMPORTANT]
 > Use `-DCMAKE_BUILD_TYPE=Release` for normal use. Debug builds are significantly
 > slower and are intended for development only.
+
+---
 
 ### Building on other distributions
 

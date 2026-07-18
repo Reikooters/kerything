@@ -106,8 +106,10 @@ The following keyboard shortcuts are available in Kerything:
 > [!WARNING]
 > Kerything v2 is a full rewrite of the application. If you previously had Kerything v1 installed,
 > you will need to uninstall it first before installing Kerything v2.
->
+> 
 > To do this, follow the uninstallation instructions in the [v1-legacy](https://github.com/Reikooters/kerything/tree/v1-legacy) branch.
+> 
+> The project was rewritten to provide a better base with which features like real-time updates can be implemented onto.
 
 Kerything can be installed in two main ways:
 

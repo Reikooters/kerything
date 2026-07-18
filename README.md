@@ -16,6 +16,8 @@ The name is a nod to the iconic "Everything" utility, while the 'K' prefix follo
 
 *Kerything is a community project and is not affiliated with Voidtools.*
 
+![Screenshot](assets/screenshots/screenshot-file-list.png)
+
 ## Desktop integration
 
 Kerything can be built in two modes:

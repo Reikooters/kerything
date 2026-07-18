@@ -78,7 +78,7 @@ Can be built with KDE Frameworks 6 for better integration on KDE Plasma desktops
   - Additional right-click context actions (similar to Dolphin) such as "Open With", share, compress, etc.
   - "Show in File Manager" not only opens the folder, but also directly highlights the selected file.
   - Group files by mime type when opening multiple files. This means when you select 4 music files and 3 images and press Open, you get a playlist containing the selected 4 songs open in your music player, and the selected 3 images open in your image viewer.
-  - Better "Open Terminal Here" integration
+  - Better "Open Terminal Here" integration.
   - About box uses KDE Plasma's standard about box style.
 
 ## Keyboard Shortcuts

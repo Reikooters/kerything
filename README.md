@@ -52,8 +52,8 @@ be enabled to start at boot. Instead, `kerythingd.socket` should be enabled. Whe
 the GUI connects to `/run/kerythingd/kerythingd.sock`, systemd starts the daemon
 automatically if it is not already running.
 
-The daemon exits automatically after it has had no GUI clients connected for 5
-minutes. The socket remains active, so the next GUI connection starts the daemon
+The daemon exits automatically after it has had no GUI clients connected for 30
+seconds. The socket remains active, so the next GUI connection starts the daemon
 again.
 
 ## Features

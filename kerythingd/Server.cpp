@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 namespace {
-    constexpr int IdleShutdownTimeoutMs = 5 * 60 * 1000;
+    constexpr int IdleShutdownTimeoutMs = 30 * 1000;
 }
 
 Server::Server(QObject* parent)

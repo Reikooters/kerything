@@ -5,8 +5,8 @@
 #define KERYTHING_VERSION_H
 
 namespace KerythingVersion {
-    inline constexpr auto Version = "2.0";
-    inline constexpr auto ReleaseDate = "2026-07-18";
+    inline constexpr auto Version = "2.0.1";
+    inline constexpr auto ReleaseDate = "2026-07-19";
 }
 
 #endif // KERYTHING_VERSION_H

@@ -19,6 +19,8 @@
 
 #include <systemd/sd-daemon.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace {
@@ -158,12 +160,26 @@ bool Server::listenFromSystemd()
         return false;
     }
 
-    if (!server_.listen(static_cast<qintptr>(fd))) {
-        std::cerr << "Failed to listen on inherited systemd socket: "
-                  << server_.errorString().toStdString()
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        std::cerr << "Failed to get inherited systemd socket flags: "
+                  << std::strerror(errno)
                   << "\n";
         return false;
     }
+
+    if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        std::cerr << "Failed to set inherited systemd socket nonblocking: "
+                  << std::strerror(errno)
+                  << "\n";
+        return false;
+    }
+
+    systemdListenFd_ = fd;
+    systemdSocketNotifier_ = new QSocketNotifier(systemdListenFd_, QSocketNotifier::Read, this);
+
+    connect(systemdSocketNotifier_, &QSocketNotifier::activated,
+            this, &Server::onSystemdSocketActivated);
 
     std::cout << "Using systemd socket activation\n";
     return true;
@@ -236,21 +252,76 @@ bool Server::blockDeviceListsEqual(
     return true;
 }
 
+void Server::addClientConnection(QLocalSocket* socket)
+{
+    std::cout << "Client connected\n";
+
+    auto* connection = new ClientConnection(socket, this);
+    connect(connection, &ClientConnection::disconnected,
+            this, &Server::onClientDisconnected);
+
+    connection->sendReady();
+    connection->sendKnownDevices(0, lastKnownDevices_);
+
+    clients_.push_back(connection);
+}
+
 void Server::onNewConnection()
 {
     stopIdleShutdownTimer();
 
     while (QLocalSocket* socket = server_.nextPendingConnection()) {
-        std::cout << "Client connected\n";
+        addClientConnection(socket);
+    }
+}
 
-        ClientConnection *connection = new ClientConnection(socket, this);
-        connect(connection, &ClientConnection::disconnected,
-                this, &Server::onClientDisconnected);
+void Server::onSystemdSocketActivated()
+{
+    stopIdleShutdownTimer();
 
-        connection->sendReady();
-        connection->sendKnownDevices(0, lastKnownDevices_);
+    if (systemdSocketNotifier_) {
+        systemdSocketNotifier_->setEnabled(false);
+    }
 
-        clients_.push_back(connection);
+    while (true) {
+        const int clientFd = ::accept4(
+            systemdListenFd_,
+            nullptr,
+            nullptr,
+            SOCK_NONBLOCK | SOCK_CLOEXEC
+        );
+
+        if (clientFd < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                std::cerr << "accept4 failed on systemd socket: "
+                          << std::strerror(errno)
+                          << "\n";
+            }
+
+            break;
+        }
+
+        auto* socket = new QLocalSocket(this);
+
+        if (!socket->setSocketDescriptor(
+                static_cast<qintptr>(clientFd),
+                QLocalSocket::ConnectedState,
+                QIODevice::ReadWrite
+            )) {
+            std::cerr << "Failed to wrap accepted client socket: "
+                      << socket->errorString().toStdString()
+                      << "\n";
+
+            socket->deleteLater();
+            ::close(clientFd);
+            continue;
+            }
+
+        addClientConnection(socket);
+    }
+
+    if (systemdSocketNotifier_) {
+        systemdSocketNotifier_->setEnabled(true);
     }
 }
 

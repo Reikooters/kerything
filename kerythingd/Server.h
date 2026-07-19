@@ -6,6 +6,7 @@
 
 #include <QLocalServer>
 #include <QObject>
+#include <QSocketNotifier>
 #include <QTimer>
 
 #include "BlockDevice.h"
@@ -31,9 +32,11 @@ private:
     bool listenStandalone();
     void startIdleShutdownTimerIfIdle();
     void stopIdleShutdownTimer();
+    void addClientConnection(QLocalSocket* socket);
 
 private Q_SLOTS:
     void onNewConnection();
+    void onSystemdSocketActivated();
     void onClientDisconnected(ClientConnection* connection);
     void scheduleKnownDevicesRefresh();
     void refreshKnownDevices();
@@ -43,6 +46,8 @@ private:
     void broadcastKnownDevices(const std::vector<BlockDevice>& devices);
 
     QLocalServer server_;
+    QSocketNotifier* systemdSocketNotifier_ = nullptr;
+    int systemdListenFd_ = -1;
     std::vector<ClientConnection*> clients_;
 
     DeviceChangeMonitor* deviceChangeMonitor_ = nullptr;

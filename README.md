@@ -61,6 +61,7 @@ again.
 - **Blazing Fast Indexing:** Uses low level disk partiton scanning to index devices much faster than standard directory crawling.
 - **Offline Indexing:** Supports scanning NTFS and EXT4 partitions even when they are not mounted in Linux.
 - **Instant Search:** Uses trigram indexing for real-time search results as you type.
+- **Extension Filters:** Narrow searches by file extension using queries such as `ext:mp4` or `ext:wav;mp3`, or use saved filters from the Filter menu.
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
 - **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning, regular expressions and other complex patterns, Kerything stays lightweight and responsive.
 - **Multithreaded:** Leverages Intel OneTBB for parallel trigram generation and sorting.
@@ -75,13 +76,107 @@ again.
 
 **Native KDE Integration (Optional):**
 
-Can be built with KDE Frameworks 6 for better integration on KDE Plasma desktops, including:
+Kerything can be built with KDE Frameworks 6 for better integration on KDE Plasma desktops, including:
 
   - Additional right-click context actions (similar to Dolphin) such as "Open With", share, compress, etc.
   - "Show in File Manager" not only opens the folder, but also directly highlights the selected file.
   - Group files by mime type when opening multiple files. This means when you select 4 music files and 3 images and press Open, you get a playlist containing the selected 4 songs open in your music player, and the selected 3 images open in your image viewer.
   - Better "Open Terminal Here" integration.
   - About box uses KDE Plasma's standard about box style.
+
+## Searching and filters
+
+Kerything searches indexed file names as you type. Searches are case-insensitive
+and use the in-memory trigram index for fast matching.
+
+### Extension filters
+
+You can narrow results by file extension using `ext:`:
+
+```text
+ext:mp4
+```
+
+Multiple extensions can be separated with semicolons:
+
+```text
+ext:wav;mp3
+```
+
+Extension filters can be combined with normal search terms:
+
+```text
+holiday ext:jpg;png
+ubuntu ext:iso
+```
+
+The leading dot is optional, so these are equivalent:
+
+```text
+ext:mp4
+ext:.mp4
+```
+
+Additionally, multiple uses of `ext:` are combined, so these are equivalent:
+
+```text
+ext:mp4 ext:mkv
+ext:mp4;mkv
+```
+
+Extension matching is case-insensitive. For example, `ext:jpg` matches `.jpg`,
+`.JPG`, and `.Jpg`.
+
+Kerything matches only the final extension after the last dot. For example,
+`archive.tar.gz` would be matched with the following filter:
+
+```text
+ext:gz
+```
+
+This means that currently no results will be returned if you attempt to use a compound extension, such as:
+
+```text
+ext:tar.gz
+```
+
+> [!NOTE]
+> File type filters are based on filename extensions. Kerything does not inspect
+> file contents or perform MIME-type sniffing.
+
+### Saved filters
+
+The **Filter** menu provides reusable filter presets such as Audio, Images,
+Videos, Documents, Archives, and Code. Selecting a filter narrows the current
+search without changing the text in the search box.
+
+For example, selecting **Filter → Images** and searching for:
+
+```text
+holiday
+```
+searches for image files matching `holiday`.
+
+Filters can be edited from:
+
+```text
+Filter → Manage Filters...
+```
+or:
+
+```text
+Settings → Configure Kerything... → Filters
+```
+
+Saved filters are stored as query fragments. For example, an Images filter may
+contain:
+
+```text
+ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp
+```
+
+Custom filters can be added, duplicated, removed, or restored to the default
+presets.
 
 ## Keyboard Shortcuts
 
@@ -90,6 +185,7 @@ The following keyboard shortcuts are available in Kerything:
 | Shortcut                            | Action                                                                    |
 |:------------------------------------|:--------------------------------------------------------------------------|
 | `Ctrl + L` or `Alt + D` or `Ctrl+F` | Focus search bar and select all text                                      |
+| `Esc`                               | Focus search bar and clear all text                                       |
 | `Down / Up`                         | Move focus from search bar to the results table                           |
 | `Return`                            | Open selected file(s) with default applications                           |
 | `Ctrl + Return`                     | Open the folder containing the selected file                              |

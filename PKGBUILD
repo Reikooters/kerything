@@ -2,7 +2,7 @@
 # Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 pkgname=kerything
-pkgver=2.0.1
+pkgver=2.1.0
 pkgrel=1
 pkgdesc='Fast Linux block device file scanner and search application using trigrams'
 arch=('x86_64')
@@ -59,7 +59,7 @@ build() {
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DKERYTHING_SYSTEMD_SYSTEM_UNIT_DIR=/usr/lib/systemd/system \
     -DKERYTHING_WITH_KF6=ON \
-    -Wno-dev
+    -Wno-author
 
   cmake --build build --parallel "$(nproc)"
 }

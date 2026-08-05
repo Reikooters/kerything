@@ -6,6 +6,7 @@
 #include <iostream>
 #include <shared_mutex>
 #include <mutex>
+#include <cctype>
 
 IndexController::IndexController(QObject* parent)
     : QObject(parent)
@@ -385,6 +386,135 @@ bool IndexController::contains(std::string_view haystack, std::string_view needl
     return it != haystack.end();
 }
 
+std::string IndexController::normalizeExtensionToken(std::string_view extension)
+{
+    while (!extension.empty() && extension.front() == '.') {
+        extension.remove_prefix(1);
+    }
+
+    std::string out;
+    out.reserve(extension.size());
+
+    for (const unsigned char c : extension) {
+        if (std::isspace(c) || c == ';') {
+            continue;
+        }
+
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+
+    return out;
+}
+
+std::string_view IndexController::finalExtension(std::string_view lowercaseFileName)
+{
+    if (lowercaseFileName.empty()) {
+        return {};
+    }
+
+    const std::size_t dotPos = lowercaseFileName.rfind('.');
+    if (dotPos == std::string_view::npos) {
+        return {};
+    }
+
+    // Treat ".bashrc" as extensionless.
+    if (dotPos == 0) {
+        return {};
+    }
+
+    // Treat "file." as extensionless.
+    if (dotPos + 1 >= lowercaseFileName.size()) {
+        return {};
+    }
+
+    return lowercaseFileName.substr(dotPos + 1);
+}
+
+bool IndexController::matchesExtensionFilter(
+    std::string_view lowercaseFileName,
+    const std::unordered_set<std::string>& extensions
+) {
+    if (extensions.empty()) {
+        return true;
+    }
+
+    const std::string_view extension = finalExtension(lowercaseFileName);
+    if (extension.empty()) {
+        return false;
+    }
+
+    return extensions.contains(std::string(extension));
+}
+
+IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string_view query)
+{
+    ParsedSearchQuery parsed;
+
+    std::string lowercaseQuery(query);
+    std::transform(
+        lowercaseQuery.begin(),
+        lowercaseQuery.end(),
+        lowercaseQuery.begin(),
+        [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        }
+    );
+
+    auto consumeExtensionList = [&parsed](std::string_view extensionList) {
+        std::size_t start = 0;
+
+        while (start <= extensionList.size()) {
+            const std::size_t end = extensionList.find(';', start);
+            const std::string_view token = end == std::string_view::npos
+                ? extensionList.substr(start)
+                : extensionList.substr(start, end - start);
+
+            std::string normalized = normalizeExtensionToken(token);
+            if (!normalized.empty()) {
+                parsed.extensions.insert(std::move(normalized));
+            }
+
+            if (end == std::string_view::npos) {
+                break;
+            }
+
+            start = end + 1;
+        }
+    };
+
+    std::size_t start = 0;
+    while (start < lowercaseQuery.size()) {
+        while (start < lowercaseQuery.size() &&
+               std::isspace(static_cast<unsigned char>(lowercaseQuery[start]))) {
+            ++start;
+        }
+
+        if (start >= lowercaseQuery.size()) {
+            break;
+        }
+
+        std::size_t end = start;
+        while (end < lowercaseQuery.size() &&
+               !std::isspace(static_cast<unsigned char>(lowercaseQuery[end]))) {
+            ++end;
+        }
+
+        const std::string_view token(lowercaseQuery.data() + start, end - start);
+
+        if (token.starts_with("ext:")) {
+            consumeExtensionList(token.substr(4));
+        } else if (token.starts_with("extension:")) {
+            consumeExtensionList(token.substr(10));
+        } else {
+            parsed.keywords.emplace_back(token);
+        }
+
+        start = end;
+    }
+
+    return parsed;
+}
+
 std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch(const std::string& query) {
     std::shared_lock lock(indexMutex_);
 
@@ -415,27 +545,11 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         return results;
     }
 
-    // Convert query to lowercase
-    std::string lowercaseQuery = query;
-    std::transform(lowercaseQuery.begin(), lowercaseQuery.end(), lowercaseQuery.begin(),
-           [](unsigned char c) { return std::tolower(c); });
+    const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
+    const std::vector<std::string>& keywords = parsedQuery.keywords;
+    const std::unordered_set<std::string>& extensionFilter = parsedQuery.extensions;
 
-    // 1. Tokenize query by spaces
-    std::vector<std::string> keywords;
-    size_t start = 0, end = 0;
-
-    while ((end = lowercaseQuery.find(' ', start)) != std::string::npos) {
-        if (end != start) {
-            keywords.push_back(lowercaseQuery.substr(start, end - start));
-        }
-        start = end + 1;
-    }
-
-    if (start < lowercaseQuery.length()) {
-        keywords.push_back(lowercaseQuery.substr(start));
-    }
-
-    // IF EMPTY: Return everything
+    // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {
         std::size_t totalSize = 0;
 
@@ -460,6 +574,21 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
             const auto& index = *indexPtr;
             for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
+                const FileRecord& rec = index.fileRecords[i];
+
+                if (rec.nameOffset + rec.nameLen > index.lowercaseStringPool.size()) {
+                    continue;
+                }
+
+                const std::string_view name(
+                    &index.lowercaseStringPool[rec.nameOffset],
+                    rec.nameLen
+                );
+
+                if (!matchesExtensionFilter(name, extensionFilter)) {
+                    continue;
+                }
+
                 appendResult(index, i);
             }
         }
@@ -556,7 +685,16 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         // Otherwise, we only scan the filtered candidates.
         auto resultCallback = [&](uint32_t recordIdx) {
             const auto& rec = indexPtr->fileRecords[recordIdx];
+
+            if (rec.nameOffset + rec.nameLen > indexPtr->lowercaseStringPool.size()) {
+                return;
+            }
+
             std::string_view name(&indexPtr->lowercaseStringPool[rec.nameOffset], rec.nameLen);
+
+            if (!matchesExtensionFilter(name, extensionFilter)) {
+                return;
+            }
 
             for (const auto& kw : keywords) {
                 if (!contains(name, kw)) {

@@ -19,6 +19,7 @@
 #include <QMimeData>
 #include <QPushButton>
 #include <QShortcut>
+#include <QActionGroup>
 #include <QStatusBar>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -49,6 +50,38 @@
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
+
+    struct BuiltInSearchFilter {
+        const char* name;
+        const char* queryFragment;
+    };
+
+    constexpr BuiltInSearchFilter BuiltInSearchFilters[] = {
+        {
+            "Audio",
+            "ext:aac;flac;m4a;mp3;ogg;opus;wav;wma"
+        },
+        {
+            "Images",
+            "ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp"
+        },
+        {
+            "Videos",
+            "ext:avi;flv;m2ts;m4v;mkv;mov;mp4;mpeg;mpg;ogv;webm;wmv"
+        },
+        {
+            "Documents",
+            "ext:csv;doc;docx;epub;md;odp;ods;odt;pdf;ppt;pptx;rtf;tex;txt;xls;xlsx"
+        },
+        {
+            "Archives",
+            "ext:7z;bz2;gz;rar;tar;tbz2;tgz;txz;xz;zip;zst"
+        },
+        {
+            "Code",
+            "ext:c;cc;cpp;cxx;h;hh;hpp;hxx;go;java;js;jsx;kt;kts;lua;php;py;rs;sh;ts;tsx"
+        }
+    };
 }
 
 MainWindow::MainWindow(AppController* controller, QWidget* parent)
@@ -308,6 +341,35 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(refreshIndexesAct);
 
+    // Filters
+    auto* filterActionGroup = new QActionGroup(this);
+    filterActionGroup->setExclusive(true);
+
+    auto* allFilesFilterAct = new QAction(QStringLiteral("All Files"), this);
+    allFilesFilterAct->setCheckable(true);
+    allFilesFilterAct->setChecked(true);
+    allFilesFilterAct->setData(QString());
+    filterActionGroup->addAction(allFilesFilterAct);
+
+    connect(allFilesFilterAct, &QAction::triggered, this, [this]() {
+        applySearchFilter(QString());
+    });
+
+    QList<QAction*> builtInFilterActions;
+    builtInFilterActions.reserve(std::size(BuiltInSearchFilters));
+
+    for (const BuiltInSearchFilter& filter : BuiltInSearchFilters) {
+        auto* filterAct = new QAction(QString::fromUtf8(filter.name), this);
+        filterAct->setCheckable(true);
+        filterAct->setData(QString::fromUtf8(filter.queryFragment));
+        filterActionGroup->addAction(filterAct);
+        builtInFilterActions.append(filterAct);
+
+        connect(filterAct, &QAction::triggered, this, [this, filterAct]() {
+            applySearchFilter(filterAct->data().toString());
+        });
+    }
+
     // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
@@ -394,6 +456,15 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyPathsAct);
     editMenu->addAction(copyParentPathsAct);
 
+    // Filter Menu
+    auto* filterMenu = menuBar()->addMenu(QStringLiteral("Filter"));
+    filterMenu->addAction(allFilesFilterAct);
+    filterMenu->addSeparator();
+
+    for (QAction* filterAct : builtInFilterActions) {
+        filterMenu->addAction(filterAct);
+    }
+
     // Index Menu
     auto* indexMenu = menuBar()->addMenu(QStringLiteral("Index"));
     indexMenu->addAction(refreshIndexesAct);
@@ -419,7 +490,18 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
 void MainWindow::updateSearch(const QString &text) {
     auto start1 = std::chrono::steady_clock::now();
-    auto results = controller_->indexController()->performTrigramSearch(text.toStdString());
+
+    QString effectiveQuery = text;
+
+    if (!activeSearchFilter_.isEmpty()) {
+        if (!effectiveQuery.trimmed().isEmpty()) {
+            effectiveQuery += QLatin1Char(' ');
+        }
+
+        effectiveQuery += activeSearchFilter_;
+    }
+
+    auto results = controller_->indexController()->performTrigramSearch(effectiveQuery.toStdString());
     model_->setSearchResults(std::move(results));
     auto end1 = std::chrono::steady_clock::now();
 
@@ -454,6 +536,25 @@ void MainWindow::refresh() {
     //         .arg(controller_->isDaemonConnected() ? "Connected" : "Disconnected")
     //         .arg(controller_->isDaemonReady() ? "Ready" : "Not Ready")
     //     );
+}
+
+void MainWindow::applySearchFilter(const QString& queryFragment)
+{
+    activeSearchFilter_ = queryFragment;
+
+    searchLine_->setPlaceholderText(
+        activeSearchFilter_.isEmpty()
+            ? QStringLiteral("Search files...")
+            : QStringLiteral("Search files within selected filter...")
+    );
+
+    updateSearch(searchLine_->text());
+
+    if (queryFragment.isEmpty()) {
+        showTemporaryStatus(QStringLiteral("Filter cleared"), 2500);
+    } else {
+        showTemporaryStatus(QStringLiteral("Filter applied: %1").arg(queryFragment), 3500);
+    }
 }
 
 void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)

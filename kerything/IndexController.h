@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QStringList>
 #include <shared_mutex>
+#include <unordered_set>
 
 #include "FileRecord.h"
 
@@ -364,6 +365,11 @@ public:
         uint32_t mountPointIdx = 0xFFFFFFFF;
     };
 
+    struct ParsedSearchQuery {
+        std::vector<std::string> keywords;
+        std::unordered_set<std::string> extensions;
+    };
+
     const DeviceIndex* deviceIndex(quint64 indexId) const;
 
     quint64 addDevice(
@@ -413,6 +419,14 @@ public:
      * @brief Case-insensitive substring helper.
      */
     static bool contains(std::string_view haystack, std::string_view needle);
+
+    static ParsedSearchQuery parseSearchQuery(std::string_view query);
+    static std::string normalizeExtensionToken(std::string_view extension);
+    static std::string_view finalExtension(std::string_view lowercaseFileName);
+    static bool matchesExtensionFilter(
+        std::string_view lowercaseFileName,
+        const std::unordered_set<std::string>& extensions
+    );
 
 Q_SIGNALS:
     void deviceRemoved(quint64 indexId);

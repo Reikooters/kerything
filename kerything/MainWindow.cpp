@@ -497,7 +497,7 @@ void MainWindow::rebuildFilterMenu()
     filterMenu_->addAction(allFilesAction);
 
     connect(allFilesAction, &QAction::triggered, this, [this]() {
-        applySearchFilter(QString(), QString());
+        applySearchFilter(QString(), QString(), QString());
     });
 
     filterMenu_->addSeparator();
@@ -515,6 +515,7 @@ void MainWindow::rebuildFilterMenu()
 
         if (filter.id == activeSearchFilterId_) {
             filterAction->setChecked(true);
+            activeSearchFilterName_ = filter.name;
             activeSearchFilter_ = filter.query;
             activeFilterStillExists = true;
         }
@@ -523,12 +524,13 @@ void MainWindow::rebuildFilterMenu()
         filterMenu_->addAction(filterAction);
 
         connect(filterAction, &QAction::triggered, this, [this, filter]() {
-            applySearchFilter(filter.id, filter.query);
+            applySearchFilter(filter.id, filter.name, filter.query);
         });
     }
 
     if (!activeFilterStillExists) {
         activeSearchFilterId_.clear();
+        activeSearchFilterName_.clear();
         activeSearchFilter_.clear();
         allFilesAction->setChecked(true);
     }
@@ -543,16 +545,13 @@ void MainWindow::rebuildFilterMenu()
     });
     filterMenu_->addAction(manageFiltersAction);
 
-    searchLine_->setPlaceholderText(
-        activeSearchFilter_.isEmpty()
-            ? QStringLiteral("Search files...")
-            : QStringLiteral("Search files within selected filter...")
-    );
+    updateSearchLineFilterHint();
 }
 
-void MainWindow::applySearchFilter(const QString& filterId, const QString& queryFragment)
+void MainWindow::applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment)
 {
     activeSearchFilterId_ = filterId;
+    activeSearchFilterName_ = filterName;
     activeSearchFilter_ = queryFragment;
     rebuildFilterMenu();
     updateSearch(searchLine_->text());
@@ -560,8 +559,37 @@ void MainWindow::applySearchFilter(const QString& filterId, const QString& query
     if (queryFragment.isEmpty()) {
         showTemporaryStatus(QStringLiteral("Filter cleared"), 2500);
     } else {
-        showTemporaryStatus(QStringLiteral("Filter applied: %1").arg(queryFragment), 3500);
+        showTemporaryStatus(QStringLiteral("Filter applied: %1").arg(filterName), 3500);
     }
+}
+
+void MainWindow::updateSearchLineFilterHint()
+{
+    if (!searchLine_) {
+        return;
+    }
+
+    if (activeSearchFilter_.isEmpty()) {
+        searchLine_->setPlaceholderText(QStringLiteral("Search files..."));
+        searchLine_->setToolTip(
+            QStringLiteral("Search indexed file names. You can use filters such as ext:mp4 or ext:wav;mp3.")
+        );
+        return;
+    }
+
+    searchLine_->setPlaceholderText(
+        QStringLiteral("Search files in %1...").arg(activeSearchFilterName_)
+    );
+
+    searchLine_->setToolTip(
+        QStringLiteral(
+            "Active filter: %1\n"
+            "Query fragment: %2"
+        ).arg(
+            activeSearchFilterName_,
+            activeSearchFilter_
+        )
+    );
 }
 
 void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)

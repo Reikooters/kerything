@@ -140,7 +140,8 @@ private:
         qsizetype openableCount
     );
     void rebuildFilterMenu();
-    void applySearchFilter(const QString& filterId, const QString& queryFragment);
+    void applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment);
+    void updateSearchLineFilterHint();
 
     AppController* controller_ = nullptr;
     // QString fsType_;
@@ -153,6 +154,7 @@ private:
     quint64 statusMessageId_ = 0;
     QMenu* filterMenu_ = nullptr;
     QString activeSearchFilterId_;
+    QString activeSearchFilterName_;
     QString activeSearchFilter_;
 
     int hoveredRow_ = -1;

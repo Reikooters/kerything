@@ -400,8 +400,9 @@ QWidget* PreferencesDialog::createFiltersPage()
     auto* title = new QLabel(
         QStringLiteral(
             "<h2>Filters</h2>"
-            "<p>Manage the filter presets shown in the Filter menu. "
-            "Filters are saved as query fragments and are combined with the current search text.</p>"
+            "<p>Create and manage the filter presets shown in the Filter menu. "
+            "Filters are saved search shortcuts that are added to your current search text. "
+            "Double-click a filter name or query to change it.</p>"
         ),
         page
     );
@@ -546,18 +547,25 @@ QWidget* PreferencesDialog::createFiltersPage()
     });
 
     connect(restoreDefaultFiltersButton_, &QPushButton::clicked, this, [this]() {
-        const QMessageBox::StandardButton result = QMessageBox::question(
-            this,
-            QStringLiteral("Restore Default Filters?"),
-            QStringLiteral(
-                "This will restore the default filters and keep any custom filters you created.\n\n"
-                "Existing default filters will be reset to their original names and queries."
-            ),
-            QMessageBox::RestoreDefaults | QMessageBox::Cancel,
-            QMessageBox::Cancel
-        );
+        QMessageBox messageBox(this);
+        messageBox.setIcon(QMessageBox::Question);
+        messageBox.setWindowTitle(QStringLiteral("Restore Default Filters?"));
+        messageBox.setText(QStringLiteral(
+            "This will restore the default filters and keep any custom filters you created.\n\n"
+            "Existing default filters will be reset to their original names and queries."
+        ));
 
-        if (result != QMessageBox::RestoreDefaults) {
+        QPushButton* restoreButton = messageBox.addButton(
+            QStringLiteral("Restore Defaults"),
+            QMessageBox::AcceptRole
+        );
+        messageBox.addButton(QMessageBox::Cancel);
+        messageBox.setDefaultButton(QMessageBox::Cancel);
+        messageBox.setEscapeButton(QMessageBox::Cancel);
+
+        messageBox.exec();
+
+        if (messageBox.clickedButton() != restoreButton) {
             return;
         }
 

@@ -500,9 +500,27 @@ void MainWindow::rebuildFilterMenu()
         applySearchFilter(QString(), QString(), QString());
     });
 
+    auto* foldersAction = new QAction(QStringLiteral("Folders"), filterMenu_);
+    foldersAction->setCheckable(true);
+    foldersAction->setStatusTip(QStringLiteral("folder:"));
+    foldersAction->setToolTip(QStringLiteral("folder:"));
+    foldersAction->setChecked(activeSearchFilterId_ == QStringLiteral("builtin-folders"));
+    filterActionGroup->addAction(foldersAction);
+    filterMenu_->addAction(foldersAction);
+
+    connect(foldersAction, &QAction::triggered, this, [this]() {
+        applySearchFilter(
+            QStringLiteral("builtin-folders"),
+            QStringLiteral("Folders"),
+            QStringLiteral("folder:")
+        );
+    });
+
     filterMenu_->addSeparator();
 
-    bool activeFilterStillExists = activeSearchFilterId_.isEmpty();
+    bool activeFilterStillExists =
+        activeSearchFilterId_.isEmpty() ||
+        activeSearchFilterId_ == QStringLiteral("builtin-folders");
 
     const std::vector<SearchFilterPreference> filters =
         controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
@@ -572,14 +590,18 @@ void MainWindow::updateSearchLineFilterHint()
     if (activeSearchFilter_.isEmpty()) {
         searchLine_->setPlaceholderText(QStringLiteral("Search files..."));
         searchLine_->setToolTip(
-            QStringLiteral("Search indexed file names. You can use filters such as ext:mp4 or ext:wav;mp3.")
+            QStringLiteral("Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, or folder:.")
         );
         return;
     }
 
-    searchLine_->setPlaceholderText(
-        QStringLiteral("Search files in %1...").arg(activeSearchFilterName_)
-    );
+    if (activeSearchFilterId_ == QStringLiteral("builtin-folders")) {
+        searchLine_->setPlaceholderText(QStringLiteral("Search folders..."));
+    } else {
+        searchLine_->setPlaceholderText(
+            QStringLiteral("Search files in %1...").arg(activeSearchFilterName_)
+        );
+    }
 
     searchLine_->setToolTip(
         QStringLiteral(

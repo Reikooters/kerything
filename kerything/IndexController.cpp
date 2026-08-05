@@ -446,6 +446,15 @@ bool IndexController::matchesExtensionFilter(
     return extensions.contains(std::string(extension));
 }
 
+bool IndexController::matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query)
+{
+    if (query.foldersOnly && (record.flags & FileRecord_IsDir) == 0) {
+        return false;
+    }
+
+    return true;
+}
+
 IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string_view query)
 {
     ParsedSearchQuery parsed;
@@ -505,6 +514,8 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
             consumeExtensionList(token.substr(4));
         } else if (token.starts_with("extension:")) {
             consumeExtensionList(token.substr(10));
+        } else if (token == "folder:" || token == "folders:" || token == "type:folder" || token == "type:folders") {
+            parsed.foldersOnly = true;
         } else {
             parsed.keywords.emplace_back(token);
         }
@@ -584,6 +595,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     &index.lowercaseStringPool[rec.nameOffset],
                     rec.nameLen
                 );
+
+                if (!matchesQueryRecordType(rec, parsedQuery)) {
+                    continue;
+                }
 
                 if (!matchesExtensionFilter(name, extensionFilter)) {
                     continue;
@@ -691,6 +706,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             }
 
             std::string_view name(&indexPtr->lowercaseStringPool[rec.nameOffset], rec.nameLen);
+
+            if (!matchesQueryRecordType(rec, parsedQuery)) {
+                return;
+            }
 
             if (!matchesExtensionFilter(name, extensionFilter)) {
                 return;

@@ -178,6 +178,17 @@ ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp
 Custom filters can be added, duplicated, removed, or restored to the default
 presets.
 
+### Folder filter
+
+You can narrow results to only folders using `folder:`, or any of the below aliases:
+
+```text
+folder:
+folders:
+type:folder
+type:folders
+```
+
 ## Keyboard Shortcuts
 
 The following keyboard shortcuts are available in Kerything:

@@ -782,6 +782,8 @@ void PreferencesDialog::populateFilterTable(const std::vector<SearchFilterPrefer
         return;
     }
 
+    const QSignalBlocker blocker(filterTable_);
+
     filterTable_->clearContents();
     filterTable_->setRowCount(static_cast<int>(filters.size()));
 

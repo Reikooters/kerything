@@ -368,6 +368,7 @@ public:
     struct ParsedSearchQuery {
         std::vector<std::string> keywords;
         std::unordered_set<std::string> extensions;
+        bool foldersOnly = false;
     };
 
     const DeviceIndex* deviceIndex(quint64 indexId) const;
@@ -433,6 +434,7 @@ Q_SIGNALS:
 
 private:
     bool removeDeviceByIndexIdUnlocked(quint64 indexId);
+    static bool matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query);
 
     quint64 nextIndexId_ = 1;
 

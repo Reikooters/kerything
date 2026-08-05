@@ -249,32 +249,32 @@ std::vector<SearchFilterPreference> Preferences::defaultSearchFilters()
         SearchFilterPreference{
             .id = QStringLiteral("audio"),
             .name = QStringLiteral("Audio"),
-            .query = QStringLiteral("ext:aac;flac;m4a;mp3;ogg;opus;wav;wma"),
+            .query = QStringLiteral("ext:aac;aif;aifc;aiff;au;flac;m3u;m3u8;m4a;m4b;mid;midi;mka;mp2;mp3;mpa;pls;ogg;opus;ra;rmi;voc;wav;wma;xspf"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("images"),
             .name = QStringLiteral("Images"),
-            .query = QStringLiteral("ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp"),
+            .query = QStringLiteral("ext:ani;apng;avif;bmp;cur;gif;heic;heif;ico;jpe;jpeg;jpg;jxl;pcx;png;psd;svg;tga;tif;tiff;webp;wmf;xcf"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("videos"),
             .name = QStringLiteral("Videos"),
-            .query = QStringLiteral("ext:avi;flv;m2ts;m4v;mkv;mov;mp4;mpeg;mpg;ogv;webm;wmv"),
+            .query = QStringLiteral("ext:3g2;3gp;asf;avi;divx;f4v;flv;m2t;m2ts;m2v;m4v;mkv;mov;mp2v;mp4;mpe;mpeg;mpg;mpv;mts;ogm;ogv;qt;rm;rmvb;ts;vob;webm;wmv"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("documents"),
             .name = QStringLiteral("Documents"),
-            .query = QStringLiteral("ext:csv;doc;docx;epub;md;odp;ods;odt;pdf;ppt;pptx;rtf;tex;txt;xls;xlsx"),
+            .query = QStringLiteral("ext:chm;csv;djvu;doc;docm;docx;dot;dotm;dotx;epub;fb2;htm;html;log;md;mht;mhtml;odg;odp;ods;odt;ott;pages;pdf;pot;potm;potx;pps;ppsm;ppsx;ppt;pptm;pptx;rst;rtf;tex;txt;wpd;wps;xls;xlsb;xlsm;xlsx;xlt;xltm;xltx;xml"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("archives"),
             .name = QStringLiteral("Archives"),
-            .query = QStringLiteral("ext:7z;bz2;gz;rar;tar;tbz2;tgz;txz;xz;zip;zst"),
+            .query = QStringLiteral("ext:7z;appimage;bz2;cab;deb;gz;iso;jar;lz;lz4;lzma;pkg;rar;rpm;squashfs;tar;tbz2;tgz;tlz;txz;war;xar;xz;zip;zst"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("code"),
             .name = QStringLiteral("Code"),
-            .query = QStringLiteral("ext:c;cc;cpp;cs;cxx;h;hh;hpp;hxx;go;java;js;jsx;kt;kts;lua;php;py;rs;sh;ts;tsx"),
+            .query = QStringLiteral("ext:asm;bash;c;cc;cpp;cs;css;cxx;dart;el;fish;go;gradle;groovy;h;hh;hpp;hxx;ini;ipynb;java;js;jsx;kt;kts;lua;m;mm;make;mk;php;pl;pm;py;rb;rs;scala;scss;sh;sql;svelte;swift;ts;tsx;vim;vue;xml;yaml;yml;zig"),
         },
     };
 }

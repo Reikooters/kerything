@@ -59,6 +59,7 @@ public:
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
     void saveSearchFilters(const std::vector<SearchFilterPreference>& filters);
     void restoreDefaultSearchFilters();
+    static std::vector<SearchFilterPreference> defaultSearchFilters();
 
 private:
     // Devices
@@ -73,7 +74,6 @@ private:
 
     // Filters
     static QString searchFilterKey(const QString& filterId, const QString& key);
-    static std::vector<SearchFilterPreference> defaultSearchFilters();
 
     void ensureDefaultSearchFilters();
 

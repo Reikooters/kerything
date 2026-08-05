@@ -440,11 +440,15 @@ QWidget* PreferencesDialog::createFiltersPage()
     addFilterButton_ = new QPushButton(QStringLiteral("Add"), page);
     duplicateFilterButton_ = new QPushButton(QStringLiteral("Duplicate"), page);
     removeFilterButton_ = new QPushButton(QStringLiteral("Remove"), page);
+    moveFilterUpButton_ = new QPushButton(QStringLiteral("Move Up"), page);
+    moveFilterDownButton_ = new QPushButton(QStringLiteral("Move Down"), page);
     restoreDefaultFiltersButton_ = new QPushButton(QStringLiteral("Restore Defaults"), page);
 
     buttonLayout->addWidget(addFilterButton_);
     buttonLayout->addWidget(duplicateFilterButton_);
     buttonLayout->addWidget(removeFilterButton_);
+    buttonLayout->addWidget(moveFilterUpButton_);
+    buttonLayout->addWidget(moveFilterDownButton_);
     buttonLayout->addStretch();
     buttonLayout->addWidget(restoreDefaultFiltersButton_);
 
@@ -546,13 +550,22 @@ QWidget* PreferencesDialog::createFiltersPage()
         updateApplyButtonEnabled();
     });
 
+    connect(moveFilterUpButton_, &QPushButton::clicked, this, [this]() {
+        moveSelectedFilters(-1);
+    });
+
+    connect(moveFilterDownButton_, &QPushButton::clicked, this, [this]() {
+        moveSelectedFilters(1);
+    });
+
     connect(restoreDefaultFiltersButton_, &QPushButton::clicked, this, [this]() {
         QMessageBox messageBox(this);
         messageBox.setIcon(QMessageBox::Question);
         messageBox.setWindowTitle(QStringLiteral("Restore Default Filters?"));
         messageBox.setText(QStringLiteral(
             "This will restore the default filters and keep any custom filters you created.\n\n"
-            "Existing default filters will be reset to their original names and queries."
+            "Existing default filters will be reset to their original names and queries.\n\n"
+            "The change will not be saved until you click Apply or OK."
         ));
 
         QPushButton* restoreButton = messageBox.addButton(
@@ -569,12 +582,27 @@ QWidget* PreferencesDialog::createFiltersPage()
             return;
         }
 
-        preferences_.restoreDefaultSearchFilters();
-        originalSearchFilters_ = preferences_.searchFilters();
-        populateFilterTable();
-        updateApplyButtonEnabled();
+        std::vector<SearchFilterPreference> filters = filtersFromTable();
+        const std::vector<SearchFilterPreference> defaults = Preferences::defaultSearchFilters();
 
-        Q_EMIT searchFiltersApplied();
+        for (const SearchFilterPreference& defaultFilter : defaults) {
+            auto existing = std::ranges::find_if(
+                filters,
+                [&](const SearchFilterPreference& filter) {
+                    return filter.id == defaultFilter.id;
+                }
+            );
+
+            if (existing == filters.end()) {
+                filters.push_back(defaultFilter);
+            } else {
+                *existing = defaultFilter;
+            }
+        }
+
+        populateFilterTable(filters);
+        updateApplyButtonEnabled();
+        updateFilterButtonStates();
     });
 
     const bool hasSelection = !filterTable_->selectionModel()->selectedRows().isEmpty();
@@ -745,12 +773,14 @@ void PreferencesDialog::populateDeviceTable()
 
 void PreferencesDialog::populateFilterTable()
 {
+    populateFilterTable(preferences_.searchFilters());
+}
+
+void PreferencesDialog::populateFilterTable(const std::vector<SearchFilterPreference>& filters)
+{
     if (!filterTable_) {
         return;
     }
-
-    const QSignalBlocker blocker(filterTable_);
-    const std::vector<SearchFilterPreference> filters = preferences_.searchFilters();
 
     filterTable_->clearContents();
     filterTable_->setRowCount(static_cast<int>(filters.size()));
@@ -772,6 +802,8 @@ void PreferencesDialog::populateFilterTable()
     if (filterTable_->rowCount() > 0) {
         filterTable_->setCurrentCell(0, FilterNameColumn);
     }
+
+    updateFilterButtonStates();
 }
 
 QStringList PreferencesDialog::enabledDeviceIdsFromTable() const
@@ -897,6 +929,126 @@ QString PreferencesDialog::uniqueFilterName(const QString& baseName) const
 QString PreferencesDialog::newCustomFilterId() const
 {
     return QStringLiteral("custom-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+QList<int> PreferencesDialog::selectedFilterRows() const
+{
+    QList<int> rows;
+
+    if (!filterTable_ || !filterTable_->selectionModel()) {
+        return rows;
+    }
+
+    const QModelIndexList selectedRows = filterTable_->selectionModel()->selectedRows();
+    rows.reserve(selectedRows.size());
+
+    for (const QModelIndex& index : selectedRows) {
+        rows << index.row();
+    }
+
+    std::ranges::sort(rows);
+    return rows;
+}
+
+void PreferencesDialog::updateFilterButtonStates()
+{
+    if (!filterTable_) {
+        return;
+    }
+
+    const QList<int> rows = selectedFilterRows();
+    const bool hasSelection = !rows.isEmpty();
+
+    if (duplicateFilterButton_) {
+        duplicateFilterButton_->setEnabled(hasSelection);
+    }
+
+    if (removeFilterButton_) {
+        removeFilterButton_->setEnabled(hasSelection);
+    }
+
+    if (moveFilterUpButton_) {
+        moveFilterUpButton_->setEnabled(hasSelection && rows.first() > 0);
+    }
+
+    if (moveFilterDownButton_) {
+        moveFilterDownButton_->setEnabled(hasSelection && rows.last() < filterTable_->rowCount() - 1);
+    }
+}
+
+void PreferencesDialog::moveSelectedFilters(int direction)
+{
+    if (!filterTable_ || direction == 0) {
+        return;
+    }
+
+    QList<int> rows = selectedFilterRows();
+    if (rows.isEmpty()) {
+        return;
+    }
+
+    const int rowCount = filterTable_->rowCount();
+
+    if (direction < 0 && rows.first() <= 0) {
+        return;
+    }
+
+    if (direction > 0 && rows.last() >= rowCount - 1) {
+        return;
+    }
+
+    filterTable_->clearSelection();
+
+    if (direction > 0) {
+        std::ranges::reverse(rows);
+    }
+
+    QList<int> movedRows;
+    movedRows.reserve(rows.size());
+
+    for (const int row : rows) {
+        const int destinationRow = row + direction;
+
+        QList<QTableWidgetItem*> movedItems;
+        movedItems.reserve(FilterColumnCount);
+
+        for (int column = 0; column < FilterColumnCount; ++column) {
+            movedItems << filterTable_->takeItem(row, column);
+        }
+
+        filterTable_->removeRow(row);
+        filterTable_->insertRow(destinationRow);
+
+        for (int column = 0; column < FilterColumnCount; ++column) {
+            filterTable_->setItem(destinationRow, column, movedItems.at(column));
+        }
+
+        movedRows << destinationRow;
+    }
+
+    std::ranges::sort(movedRows);
+
+    if (auto* selectionModel = filterTable_->selectionModel()) {
+        const int currentRow = direction < 0 ? movedRows.first() : movedRows.last();
+        const QModelIndex currentIndex = filterTable_->model()->index(currentRow, FilterNameColumn);
+
+        selectionModel->setCurrentIndex(currentIndex, QItemSelectionModel::NoUpdate);
+
+        for (const int row : movedRows) {
+            const QModelIndex left = filterTable_->model()->index(row, 0);
+            const QModelIndex right = filterTable_->model()->index(row, FilterColumnCount - 1);
+
+            selectionModel->select(
+                QItemSelection(left, right),
+                QItemSelectionModel::Select | QItemSelectionModel::Rows
+            );
+        }
+
+        filterTable_->scrollTo(currentIndex, QAbstractItemView::EnsureVisible);
+    }
+
+    updateFilterButtonStates();
+    updateApplyButtonEnabled();
 }
 
 bool PreferencesDialog::validateFilters(QString* errorText) const

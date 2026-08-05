@@ -66,6 +66,7 @@ private:
     void populateNavigation();
     void populateDeviceTable();
     void populateFilterTable();
+    void populateFilterTable(const std::vector<SearchFilterPreference>& filters);
     void updateApplyButtonEnabled();
     void applyChanges();
     bool hasChanges() const;
@@ -80,6 +81,9 @@ private:
     std::vector<SearchFilterPreference> filtersFromTable() const;
     QString uniqueFilterName(const QString& baseName) const;
     QString newCustomFilterId() const;
+    QList<int> selectedFilterRows() const;
+    void updateFilterButtonStates();
+    void moveSelectedFilters(int direction);
 
     Preferences& preferences_;
     std::vector<BlockDevice> knownDevices_;
@@ -102,6 +106,8 @@ private:
     QPushButton* addFilterButton_ = nullptr;
     QPushButton* duplicateFilterButton_ = nullptr;
     QPushButton* removeFilterButton_ = nullptr;
+    QPushButton* moveFilterUpButton_ = nullptr;
+    QPushButton* moveFilterDownButton_ = nullptr;
     QPushButton* restoreDefaultFiltersButton_ = nullptr;
 };
 

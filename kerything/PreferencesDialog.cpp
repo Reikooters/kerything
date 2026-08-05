@@ -444,6 +444,11 @@ QWidget* PreferencesDialog::createFiltersPage()
     moveFilterDownButton_ = new QPushButton(QStringLiteral("Move Down"), page);
     restoreDefaultFiltersButton_ = new QPushButton(QStringLiteral("Restore Defaults"), page);
 
+    duplicateFilterButton_->setEnabled(false);
+    removeFilterButton_->setEnabled(false);
+    moveFilterUpButton_->setEnabled(false);
+    moveFilterDownButton_->setEnabled(false);
+
     buttonLayout->addWidget(addFilterButton_);
     buttonLayout->addWidget(duplicateFilterButton_);
     buttonLayout->addWidget(removeFilterButton_);
@@ -459,15 +464,7 @@ QWidget* PreferencesDialog::createFiltersPage()
     });
 
     connect(filterTable_->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
-        const bool hasSelection = filterTable_ && !filterTable_->selectionModel()->selectedRows().isEmpty();
-
-        if (duplicateFilterButton_) {
-            duplicateFilterButton_->setEnabled(hasSelection);
-        }
-
-        if (removeFilterButton_) {
-            removeFilterButton_->setEnabled(hasSelection);
-        }
+        updateFilterButtonStates();
     });
 
     connect(addFilterButton_, &QPushButton::clicked, this, [this]() {
@@ -484,6 +481,7 @@ QWidget* PreferencesDialog::createFiltersPage()
         filterTable_->setCurrentCell(row, FilterNameColumn);
         filterTable_->editItem(nameItem);
 
+        updateFilterButtonStates();
         updateApplyButtonEnabled();
     });
 
@@ -514,6 +512,7 @@ QWidget* PreferencesDialog::createFiltersPage()
         filterTable_->setCurrentCell(row, FilterNameColumn);
         filterTable_->editItem(nameItem);
 
+        updateFilterButtonStates();
         updateApplyButtonEnabled();
     });
 
@@ -547,6 +546,7 @@ QWidget* PreferencesDialog::createFiltersPage()
             filterTable_->removeRow(index.row());
         }
 
+        updateFilterButtonStates();
         updateApplyButtonEnabled();
     });
 
@@ -605,9 +605,7 @@ QWidget* PreferencesDialog::createFiltersPage()
         updateFilterButtonStates();
     });
 
-    const bool hasSelection = !filterTable_->selectionModel()->selectedRows().isEmpty();
-    duplicateFilterButton_->setEnabled(hasSelection);
-    removeFilterButton_->setEnabled(hasSelection);
+    updateFilterButtonStates();
 
     return page;
 }
@@ -954,12 +952,10 @@ QList<int> PreferencesDialog::selectedFilterRows() const
 
 void PreferencesDialog::updateFilterButtonStates()
 {
-    if (!filterTable_) {
-        return;
-    }
-
     const QList<int> rows = selectedFilterRows();
     const bool hasSelection = !rows.isEmpty();
+    const int rowCount = filterTable_ ? filterTable_->rowCount() : 0;
+    const bool canReorder = hasSelection && rowCount > 1;
 
     if (duplicateFilterButton_) {
         duplicateFilterButton_->setEnabled(hasSelection);
@@ -970,11 +966,11 @@ void PreferencesDialog::updateFilterButtonStates()
     }
 
     if (moveFilterUpButton_) {
-        moveFilterUpButton_->setEnabled(hasSelection && rows.first() > 0);
+        moveFilterUpButton_->setEnabled(canReorder && rows.first() > 0);
     }
 
     if (moveFilterDownButton_) {
-        moveFilterDownButton_->setEnabled(hasSelection && rows.last() < filterTable_->rowCount() - 1);
+        moveFilterDownButton_->setEnabled(canReorder && rows.last() < rowCount - 1);
     }
 }
 

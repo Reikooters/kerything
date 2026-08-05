@@ -21,8 +21,10 @@
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QUuid>
 #include <QVBoxLayout>
 
+#include "PreferencesDialogPage.h"
 #include "BlockDeviceDisplayUtils.h"
 #include "HoverRowHighlight.h"
 
@@ -31,6 +33,8 @@ namespace {
     constexpr int InitialEnabledRole = Qt::UserRole + 2;
     constexpr int ScanWhenUnmountedRole = Qt::UserRole + 3;
     constexpr int ShowOfflineResultsRole = Qt::UserRole + 4;
+
+    constexpr int FilterIdRole = Qt::UserRole + 20;
 }
 
 PreferencesDialog::PreferencesDialog(
@@ -56,6 +60,8 @@ PreferencesDialog::PreferencesDialog(
             originalPreferencesByDeviceId_.insert(preference.deviceId, preference);
         }
     }
+
+    originalSearchFilters_ = preferences_.searchFilters();
 
     auto* rootLayout = new QVBoxLayout(this);
     auto* contentLayout = new QHBoxLayout();
@@ -99,6 +105,31 @@ PreferencesDialog::PreferencesDialog(
     }
 
     updateApplyButtonEnabled();
+}
+
+void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
+{
+    if (!navigation_ || !pages_) {
+        return;
+    }
+
+    int row = 0;
+
+    switch (page) {
+        case PreferencesDialogPage::Devices:
+            row = 0;
+            break;
+        case PreferencesDialogPage::Filters:
+            row = 1;
+            break;
+        case PreferencesDialogPage::Advanced:
+            row = 2;
+            break;
+    }
+
+    if (row >= 0 && row < navigation_->count()) {
+        navigation_->setCurrentRow(row);
+    }
 }
 
 void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDevices)
@@ -199,6 +230,9 @@ void PreferencesDialog::populateNavigation()
 {
     pages_->addWidget(createDevicesPage());
     navigation_->addItem(QStringLiteral("Devices"));
+
+    pages_->addWidget(createFiltersPage());
+    navigation_->addItem(QStringLiteral("Filters"));
 
     // pages_->addWidget(createIndexingPage());
     // navigation_->addItem(QStringLiteral("Indexing"));
@@ -354,6 +388,190 @@ QWidget* PreferencesDialog::createDevicesPage()
     }
 
     updateSelectedDeviceOptions();
+
+    return page;
+}
+
+QWidget* PreferencesDialog::createFiltersPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+
+    auto* title = new QLabel(
+        QStringLiteral(
+            "<h2>Filters</h2>"
+            "<p>Manage the filter presets shown in the Filter menu. "
+            "Filters are saved as query fragments and are combined with the current search text.</p>"
+        ),
+        page
+    );
+    title->setWordWrap(true);
+    layout->addWidget(title);
+
+    filterTable_ = new QTableWidget(page);
+    filterTable_->setColumnCount(FilterColumnCount);
+    filterTable_->setHorizontalHeaderLabels({
+        QStringLiteral("Name"),
+        QStringLiteral("Query"),
+    });
+
+    filterTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    filterTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    filterTable_->setEditTriggers(
+        QAbstractItemView::DoubleClicked |
+        QAbstractItemView::EditKeyPressed |
+        QAbstractItemView::SelectedClicked
+    );
+    filterTable_->setAlternatingRowColors(true);
+    filterTable_->setShowGrid(false);
+    filterTable_->setWordWrap(false);
+    filterTable_->verticalHeader()->setVisible(false);
+    filterTable_->horizontalHeader()->setSectionResizeMode(FilterNameColumn, QHeaderView::ResizeToContents);
+    filterTable_->horizontalHeader()->setSectionResizeMode(FilterQueryColumn, QHeaderView::Stretch);
+    installHoverRowHighlight(filterTable_);
+
+    populateFilterTable();
+
+    layout->addWidget(filterTable_, 1);
+
+    auto* buttonLayout = new QHBoxLayout();
+
+    addFilterButton_ = new QPushButton(QStringLiteral("Add"), page);
+    duplicateFilterButton_ = new QPushButton(QStringLiteral("Duplicate"), page);
+    removeFilterButton_ = new QPushButton(QStringLiteral("Remove"), page);
+    restoreDefaultFiltersButton_ = new QPushButton(QStringLiteral("Restore Defaults"), page);
+
+    buttonLayout->addWidget(addFilterButton_);
+    buttonLayout->addWidget(duplicateFilterButton_);
+    buttonLayout->addWidget(removeFilterButton_);
+    buttonLayout->addStretch();
+    buttonLayout->addWidget(restoreDefaultFiltersButton_);
+
+    layout->addLayout(buttonLayout);
+
+    connect(filterTable_, &QTableWidget::itemChanged, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(filterTable_->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
+        const bool hasSelection = filterTable_ && !filterTable_->selectionModel()->selectedRows().isEmpty();
+
+        if (duplicateFilterButton_) {
+            duplicateFilterButton_->setEnabled(hasSelection);
+        }
+
+        if (removeFilterButton_) {
+            removeFilterButton_->setEnabled(hasSelection);
+        }
+    });
+
+    connect(addFilterButton_, &QPushButton::clicked, this, [this]() {
+        const int row = filterTable_->rowCount();
+        filterTable_->insertRow(row);
+
+        auto* nameItem = new QTableWidgetItem(uniqueFilterName(QStringLiteral("New Filter")));
+        nameItem->setData(FilterIdRole, newCustomFilterId());
+
+        auto* queryItem = new QTableWidgetItem(QStringLiteral("ext:"));
+
+        filterTable_->setItem(row, FilterNameColumn, nameItem);
+        filterTable_->setItem(row, FilterQueryColumn, queryItem);
+        filterTable_->setCurrentCell(row, FilterNameColumn);
+        filterTable_->editItem(nameItem);
+
+        updateApplyButtonEnabled();
+    });
+
+    connect(duplicateFilterButton_, &QPushButton::clicked, this, [this]() {
+        const QModelIndexList selectedRows = filterTable_->selectionModel()->selectedRows();
+        if (selectedRows.isEmpty()) {
+            return;
+        }
+
+        const int sourceRow = selectedRows.first().row();
+        const auto* sourceNameItem = filterTable_->item(sourceRow, FilterNameColumn);
+        const auto* sourceQueryItem = filterTable_->item(sourceRow, FilterQueryColumn);
+
+        if (!sourceNameItem || !sourceQueryItem) {
+            return;
+        }
+
+        const int row = filterTable_->rowCount();
+        filterTable_->insertRow(row);
+
+        auto* nameItem = new QTableWidgetItem(uniqueFilterName(sourceNameItem->text() + QStringLiteral(" Copy")));
+        nameItem->setData(FilterIdRole, newCustomFilterId());
+
+        auto* queryItem = new QTableWidgetItem(sourceQueryItem->text());
+
+        filterTable_->setItem(row, FilterNameColumn, nameItem);
+        filterTable_->setItem(row, FilterQueryColumn, queryItem);
+        filterTable_->setCurrentCell(row, FilterNameColumn);
+        filterTable_->editItem(nameItem);
+
+        updateApplyButtonEnabled();
+    });
+
+    connect(removeFilterButton_, &QPushButton::clicked, this, [this]() {
+        QModelIndexList selectedRows = filterTable_->selectionModel()->selectedRows();
+        if (selectedRows.isEmpty()) {
+            return;
+        }
+
+        std::ranges::sort(selectedRows, [](const QModelIndex& lhs, const QModelIndex& rhs) {
+            return lhs.row() > rhs.row();
+        });
+
+        const QString message = selectedRows.size() == 1
+            ? QStringLiteral("Remove the selected filter?")
+            : QStringLiteral("Remove %1 selected filters?").arg(selectedRows.size());
+
+        QMessageBox confirmBox(this);
+        confirmBox.setIcon(QMessageBox::Question);
+        confirmBox.setWindowTitle(QStringLiteral("Remove Filters?"));
+        confirmBox.setText(message);
+        confirmBox.setStandardButtons(QMessageBox::Discard | QMessageBox::Cancel);
+        confirmBox.setDefaultButton(QMessageBox::Cancel);
+        confirmBox.button(QMessageBox::Discard)->setText(QStringLiteral("Remove"));
+
+        if (confirmBox.exec() != QMessageBox::Discard) {
+            return;
+        }
+
+        for (const QModelIndex& index : selectedRows) {
+            filterTable_->removeRow(index.row());
+        }
+
+        updateApplyButtonEnabled();
+    });
+
+    connect(restoreDefaultFiltersButton_, &QPushButton::clicked, this, [this]() {
+        const QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            QStringLiteral("Restore Default Filters?"),
+            QStringLiteral(
+                "This will restore the default filters and keep any custom filters you created.\n\n"
+                "Existing default filters will be reset to their original names and queries."
+            ),
+            QMessageBox::RestoreDefaults | QMessageBox::Cancel,
+            QMessageBox::Cancel
+        );
+
+        if (result != QMessageBox::RestoreDefaults) {
+            return;
+        }
+
+        preferences_.restoreDefaultSearchFilters();
+        originalSearchFilters_ = preferences_.searchFilters();
+        populateFilterTable();
+        updateApplyButtonEnabled();
+
+        Q_EMIT searchFiltersApplied();
+    });
+
+    const bool hasSelection = !filterTable_->selectionModel()->selectedRows().isEmpty();
+    duplicateFilterButton_->setEnabled(hasSelection);
+    removeFilterButton_->setEnabled(hasSelection);
 
     return page;
 }
@@ -517,6 +735,37 @@ void PreferencesDialog::populateDeviceTable()
     }
 }
 
+void PreferencesDialog::populateFilterTable()
+{
+    if (!filterTable_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(filterTable_);
+    const std::vector<SearchFilterPreference> filters = preferences_.searchFilters();
+
+    filterTable_->clearContents();
+    filterTable_->setRowCount(static_cast<int>(filters.size()));
+
+    int row = 0;
+    for (const SearchFilterPreference& filter : filters) {
+        auto* nameItem = new QTableWidgetItem(filter.name);
+        nameItem->setData(FilterIdRole, filter.id);
+
+        auto* queryItem = new QTableWidgetItem(filter.query);
+        queryItem->setToolTip(filter.query);
+
+        filterTable_->setItem(row, FilterNameColumn, nameItem);
+        filterTable_->setItem(row, FilterQueryColumn, queryItem);
+
+        ++row;
+    }
+
+    if (filterTable_->rowCount() > 0) {
+        filterTable_->setCurrentCell(0, FilterNameColumn);
+    }
+}
+
 QStringList PreferencesDialog::enabledDeviceIdsFromTable() const
 {
     QStringList out;
@@ -572,7 +821,128 @@ bool PreferencesDialog::showOfflineResultsForDevice(const QString& deviceId) con
     return true;
 }
 
+std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
+{
+    std::vector<SearchFilterPreference> filters;
+
+    if (!filterTable_) {
+        return filters;
+    }
+
+    filters.reserve(static_cast<std::size_t>(filterTable_->rowCount()));
+
+    for (int row = 0; row < filterTable_->rowCount(); ++row) {
+        const auto* nameItem = filterTable_->item(row, FilterNameColumn);
+        const auto* queryItem = filterTable_->item(row, FilterQueryColumn);
+
+        if (!nameItem || !queryItem) {
+            continue;
+        }
+
+        SearchFilterPreference filter;
+        filter.id = nameItem->data(FilterIdRole).toString().trimmed();
+
+        if (filter.id.isEmpty()) {
+            filter.id = QStringLiteral("custom-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+
+        filter.name = nameItem->text().trimmed();
+        filter.query = queryItem->text().trimmed();
+
+        filters.push_back(std::move(filter));
+    }
+
+    return filters;
+}
+
+QString PreferencesDialog::uniqueFilterName(const QString& baseName) const
+{
+    QStringList existingNames;
+
+    if (filterTable_) {
+        for (int row = 0; row < filterTable_->rowCount(); ++row) {
+            if (const auto* item = filterTable_->item(row, FilterNameColumn)) {
+                existingNames << item->text().trimmed().toCaseFolded();
+            }
+        }
+    }
+
+    QString candidate = baseName.trimmed().isEmpty()
+        ? QStringLiteral("New Filter")
+        : baseName.trimmed();
+
+    if (!existingNames.contains(candidate.toCaseFolded())) {
+        return candidate;
+    }
+
+    int suffix = 2;
+    while (true) {
+        const QString numbered = QStringLiteral("%1 %2").arg(candidate).arg(suffix);
+        if (!existingNames.contains(numbered.toCaseFolded())) {
+            return numbered;
+        }
+
+        ++suffix;
+    }
+}
+
+QString PreferencesDialog::newCustomFilterId() const
+{
+    return QStringLiteral("custom-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+bool PreferencesDialog::validateFilters(QString* errorText) const
+{
+    if (!filterTable_) {
+        return true;
+    }
+
+    QSet<QString> names;
+
+    for (int row = 0; row < filterTable_->rowCount(); ++row) {
+        const auto* nameItem = filterTable_->item(row, FilterNameColumn);
+        const auto* queryItem = filterTable_->item(row, FilterQueryColumn);
+
+        const QString name = nameItem ? nameItem->text().trimmed() : QString();
+        const QString query = queryItem ? queryItem->text().trimmed() : QString();
+
+        if (name.isEmpty()) {
+            if (errorText) {
+                *errorText = QStringLiteral("Filter names cannot be empty.");
+            }
+
+            return false;
+        }
+
+        if (query.isEmpty()) {
+            if (errorText) {
+                *errorText = QStringLiteral("Filter queries cannot be empty.");
+            }
+
+            return false;
+        }
+
+        const QString foldedName = name.toCaseFolded();
+        if (names.contains(foldedName)) {
+            if (errorText) {
+                *errorText = QStringLiteral("Filter names must be unique.");
+            }
+
+            return false;
+        }
+
+        names.insert(foldedName);
+    }
+
+    return true;
+}
+
 bool PreferencesDialog::hasChanges() const
+{
+    return hasDeviceChanges() || hasFilterChanges();
+}
+
+bool PreferencesDialog::hasDeviceChanges() const
 {
     if (!deviceTable_) {
         return false;
@@ -607,6 +977,25 @@ bool PreferencesDialog::hasChanges() const
     return false;
 }
 
+bool PreferencesDialog::hasFilterChanges() const
+{
+    const std::vector<SearchFilterPreference> current = filtersFromTable();
+
+    if (current.size() != originalSearchFilters_.size()) {
+        return true;
+    }
+
+    for (std::size_t i = 0; i < current.size(); ++i) {
+        if (current[i].id != originalSearchFilters_[i].id ||
+            current[i].name != originalSearchFilters_[i].name ||
+            current[i].query != originalSearchFilters_[i].query) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void PreferencesDialog::updateApplyButtonEnabled()
 {
     if (applyButton_) {
@@ -616,7 +1005,30 @@ void PreferencesDialog::updateApplyButtonEnabled()
 
 void PreferencesDialog::applyChanges()
 {
+    QString filterError;
+    if (!validateFilters(&filterError)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Invalid Filters"),
+            filterError
+        );
+        return;
+    }
+
+    const bool filtersChanged = hasFilterChanges();
+
+    if (filtersChanged) {
+        preferences_.saveSearchFilters(filtersFromTable());
+        originalSearchFilters_ = preferences_.searchFilters();
+        populateFilterTable();
+    }
+
     if (!deviceTable_) {
+        if (filtersChanged) {
+            Q_EMIT searchFiltersApplied();
+        }
+
+        updateApplyButtonEnabled();
         return;
     }
 
@@ -692,6 +1104,10 @@ void PreferencesDialog::applyChanges()
     }
 
     updateApplyButtonEnabled();
+
+    if (filtersChanged) {
+        Q_EMIT searchFiltersApplied();
+    }
 
     if (!changes.isEmpty()) {
         Q_EMIT preferencesApplied(changes);

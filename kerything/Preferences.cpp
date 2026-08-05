@@ -8,6 +8,7 @@
 Preferences::Preferences()
     : settings_(QStringLiteral("Reikooters"), QStringLiteral("Kerything"))
 {
+    ensureDefaultSearchFilters();
 }
 
 bool Preferences::hasAnyIndexedDevicePreferences() const
@@ -240,4 +241,136 @@ void Preferences::saveDevicePreference(const IndexedDevicePreference& preference
     settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("lastIndexedAt")), preference.lastIndexedAt);
 
     settings_.sync();
+}
+
+std::vector<SearchFilterPreference> Preferences::defaultSearchFilters()
+{
+    return {
+        SearchFilterPreference{
+            .id = QStringLiteral("audio"),
+            .name = QStringLiteral("Audio"),
+            .query = QStringLiteral("ext:aac;flac;m4a;mp3;ogg;opus;wav;wma"),
+        },
+        SearchFilterPreference{
+            .id = QStringLiteral("images"),
+            .name = QStringLiteral("Images"),
+            .query = QStringLiteral("ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp"),
+        },
+        SearchFilterPreference{
+            .id = QStringLiteral("videos"),
+            .name = QStringLiteral("Videos"),
+            .query = QStringLiteral("ext:avi;flv;m2ts;m4v;mkv;mov;mp4;mpeg;mpg;ogv;webm;wmv"),
+        },
+        SearchFilterPreference{
+            .id = QStringLiteral("documents"),
+            .name = QStringLiteral("Documents"),
+            .query = QStringLiteral("ext:csv;doc;docx;epub;md;odp;ods;odt;pdf;ppt;pptx;rtf;tex;txt;xls;xlsx"),
+        },
+        SearchFilterPreference{
+            .id = QStringLiteral("archives"),
+            .name = QStringLiteral("Archives"),
+            .query = QStringLiteral("ext:7z;bz2;gz;rar;tar;tbz2;tgz;txz;xz;zip;zst"),
+        },
+        SearchFilterPreference{
+            .id = QStringLiteral("code"),
+            .name = QStringLiteral("Code"),
+            .query = QStringLiteral("ext:c;cc;cpp;cs;cxx;h;hh;hpp;hxx;go;java;js;jsx;kt;kts;lua;php;py;rs;sh;ts;tsx"),
+        },
+    };
+}
+
+QString Preferences::searchFilterKey(const QString& filterId, const QString& key)
+{
+    return QStringLiteral("searchFilters/filters/%1/%2").arg(filterId, key);
+}
+
+void Preferences::ensureDefaultSearchFilters()
+{
+    const QStringList ids = settings_.value(QStringLiteral("searchFilters/filterIds")).toStringList();
+
+    if (!ids.isEmpty()) {
+        return;
+    }
+
+    saveSearchFilters(defaultSearchFilters());
+}
+
+std::vector<SearchFilterPreference> Preferences::searchFilters() const
+{
+    const QStringList ids = settings_.value(QStringLiteral("searchFilters/filterIds")).toStringList();
+
+    std::vector<SearchFilterPreference> out;
+    out.reserve(static_cast<std::size_t>(ids.size()));
+
+    for (const QString& id : ids) {
+        if (id.trimmed().isEmpty()) {
+            continue;
+        }
+
+        SearchFilterPreference filter;
+        filter.id = id;
+        filter.name = settings_.value(searchFilterKey(id, QStringLiteral("name"))).toString();
+        filter.query = settings_.value(searchFilterKey(id, QStringLiteral("query"))).toString();
+
+        if (!filter.name.trimmed().isEmpty() && !filter.query.trimmed().isEmpty()) {
+            out.push_back(std::move(filter));
+        }
+    }
+
+    return out;
+}
+
+void Preferences::saveSearchFilters(const std::vector<SearchFilterPreference>& filters)
+{
+    const QStringList oldIds = settings_.value(QStringLiteral("searchFilters/filterIds")).toStringList();
+
+    for (const QString& oldId : oldIds) {
+        settings_.remove(QStringLiteral("searchFilters/filters/%1").arg(oldId));
+    }
+
+    QStringList ids;
+
+    for (const SearchFilterPreference& filter : filters) {
+        const QString id = filter.id.trimmed();
+        const QString name = filter.name.trimmed();
+        const QString query = filter.query.trimmed();
+
+        if (id.isEmpty() || name.isEmpty() || query.isEmpty()) {
+            continue;
+        }
+
+        if (ids.contains(id)) {
+            continue;
+        }
+
+        ids << id;
+        settings_.setValue(searchFilterKey(id, QStringLiteral("name")), name);
+        settings_.setValue(searchFilterKey(id, QStringLiteral("query")), query);
+    }
+
+    settings_.setValue(QStringLiteral("searchFilters/filterIds"), ids);
+    settings_.sync();
+}
+
+void Preferences::restoreDefaultSearchFilters()
+{
+    std::vector<SearchFilterPreference> filters = searchFilters();
+    const std::vector<SearchFilterPreference> defaults = defaultSearchFilters();
+
+    for (const SearchFilterPreference& defaultFilter : defaults) {
+        auto existing = std::ranges::find_if(
+            filters,
+            [&](const SearchFilterPreference& filter) {
+                return filter.id == defaultFilter.id;
+            }
+        );
+
+        if (existing == filters.end()) {
+            filters.push_back(defaultFilter);
+        } else {
+            *existing = defaultFilter;
+        }
+    }
+
+    saveSearchFilters(filters);
 }

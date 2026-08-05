@@ -373,10 +373,11 @@ void AppController::openNewWindow() {
     window->activateWindow();
 }
 
-void AppController::showPreferencesDialog()
+void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
 {
     if (preferencesDialog_) {
         preferencesDialog_->setKnownDevices(knownDevices_);
+        preferencesDialog_->setCurrentPage(initialPage);
         preferencesDialog_->show();
         preferencesDialog_->raise();
         preferencesDialog_->activateWindow();
@@ -385,6 +386,7 @@ void AppController::showPreferencesDialog()
 
     auto* dialog = new PreferencesDialog(preferences_, knownDevices_, nullptr);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setCurrentPage(initialPage);
 
     preferencesDialog_ = dialog;
 
@@ -394,6 +396,12 @@ void AppController::showPreferencesDialog()
 
     connect(dialog, &PreferencesDialog::preferencesApplied,
             this, &AppController::applyDevicePreferenceChanges);
+
+    connect(dialog, &PreferencesDialog::searchFiltersApplied,
+        this, [this]() {
+            Q_EMIT searchFiltersChanged();
+            requestRefreshAllWindows();
+        });
 
     dialog->show();
     dialog->raise();
@@ -467,6 +475,11 @@ bool AppController::isDaemonReady() const noexcept {
     }
 
     return daemonClient_->isReady();
+}
+
+std::vector<SearchFilterPreference> AppController::searchFilters() const
+{
+    return preferences_.searchFilters();
 }
 
 IndexController* AppController::indexController() const noexcept {

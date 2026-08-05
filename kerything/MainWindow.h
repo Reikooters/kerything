@@ -129,18 +129,6 @@ private Q_SLOTS:
      */
     void openTerminal();
 
-    /**
-     * @brief Applies a search filter to refine the results shown in the UI.
-     *
-     * This method updates the active search filter, adjusts the placeholder text
-     * in the search input field, and re-applies the search. It also displays
-     * a temporary status message indicating whether the filter was applied or cleared.
-     *
-     * @param queryFragment A string representing the search filter to apply.
-     *                      An empty string clears the current filter.
-     */
-    void applySearchFilter(const QString& queryFragment);
-
 private:
     void showUnavailableSelectionStatus(qsizetype selectedCount, qsizetype mountedCount, const QString& actionText);
     void showSkippedUnmountedStatus(qsizetype attemptedCount, qsizetype completedCount, const QString& actionText);
@@ -151,6 +139,8 @@ private:
         qsizetype selectedCount,
         qsizetype openableCount
     );
+    void rebuildFilterMenu();
+    void applySearchFilter(const QString& filterId, const QString& queryFragment);
 
     AppController* controller_ = nullptr;
     // QString fsType_;
@@ -161,6 +151,8 @@ private:
     FileModel *model_ = nullptr;
     QLabel *statusLabel_ = nullptr;
     quint64 statusMessageId_ = 0;
+    QMenu* filterMenu_ = nullptr;
+    QString activeSearchFilterId_;
     QString activeSearchFilter_;
 
     int hoveredRow_ = -1;

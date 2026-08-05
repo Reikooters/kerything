@@ -14,6 +14,7 @@
 #include "DevicePreferenceChange.h"
 #include "IndexController.h"
 #include "Preferences.h"
+#include "PreferencesDialogPage.h"
 
 class QApplication;
 class MainWindow;
@@ -28,13 +29,17 @@ public:
 
     bool start();
     void openNewWindow();
-    void showPreferencesDialog();
+    void showPreferencesDialog(PreferencesDialogPage initialPage = PreferencesDialogPage::Devices);
     void refreshIndexes();
     void requestRefreshAllWindows();
     void requestWindowStatusMessage(const QString& message, int timeoutMs);
     [[nodiscard]] bool isDaemonConnected() const noexcept;
     [[nodiscard]] bool isDaemonReady() const noexcept;
+    [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
     IndexController* indexController() const noexcept;
+
+Q_SIGNALS:
+    void searchFiltersChanged();
 
 private Q_SLOTS:
     void onPrimaryRequestedOpenWindow();

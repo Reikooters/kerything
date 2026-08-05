@@ -50,38 +50,6 @@
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
-
-    struct BuiltInSearchFilter {
-        const char* name;
-        const char* queryFragment;
-    };
-
-    constexpr BuiltInSearchFilter BuiltInSearchFilters[] = {
-        {
-            "Audio",
-            "ext:aac;flac;m4a;mp3;ogg;opus;wav;wma"
-        },
-        {
-            "Images",
-            "ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp"
-        },
-        {
-            "Videos",
-            "ext:avi;flv;m2ts;m4v;mkv;mov;mp4;mpeg;mpg;ogv;webm;wmv"
-        },
-        {
-            "Documents",
-            "ext:csv;doc;docx;epub;md;odp;ods;odt;pdf;ppt;pptx;rtf;tex;txt;xls;xlsx"
-        },
-        {
-            "Archives",
-            "ext:7z;bz2;gz;rar;tar;tbz2;tgz;txz;xz;zip;zst"
-        },
-        {
-            "Code",
-            "ext:c;cc;cpp;cxx;h;hh;hpp;hxx;go;java;js;jsx;kt;kts;lua;php;py;rs;sh;ts;tsx"
-        }
-    };
 }
 
 MainWindow::MainWindow(AppController* controller, QWidget* parent)
@@ -341,35 +309,6 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(refreshIndexesAct);
 
-    // Filters
-    auto* filterActionGroup = new QActionGroup(this);
-    filterActionGroup->setExclusive(true);
-
-    auto* allFilesFilterAct = new QAction(QStringLiteral("All Files"), this);
-    allFilesFilterAct->setCheckable(true);
-    allFilesFilterAct->setChecked(true);
-    allFilesFilterAct->setData(QString());
-    filterActionGroup->addAction(allFilesFilterAct);
-
-    connect(allFilesFilterAct, &QAction::triggered, this, [this]() {
-        applySearchFilter(QString());
-    });
-
-    QList<QAction*> builtInFilterActions;
-    builtInFilterActions.reserve(std::size(BuiltInSearchFilters));
-
-    for (const BuiltInSearchFilter& filter : BuiltInSearchFilters) {
-        auto* filterAct = new QAction(QString::fromUtf8(filter.name), this);
-        filterAct->setCheckable(true);
-        filterAct->setData(QString::fromUtf8(filter.queryFragment));
-        filterActionGroup->addAction(filterAct);
-        builtInFilterActions.append(filterAct);
-
-        connect(filterAct, &QAction::triggered, this, [this, filterAct]() {
-            applySearchFilter(filterAct->data().toString());
-        });
-    }
-
     // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
@@ -457,13 +396,8 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyParentPathsAct);
 
     // Filter Menu
-    auto* filterMenu = menuBar()->addMenu(QStringLiteral("Filter"));
-    filterMenu->addAction(allFilesFilterAct);
-    filterMenu->addSeparator();
-
-    for (QAction* filterAct : builtInFilterActions) {
-        filterMenu->addAction(filterAct);
-    }
+    filterMenu_ = menuBar()->addMenu(QStringLiteral("Filter"));
+    rebuildFilterMenu();
 
     // Index Menu
     auto* indexMenu = menuBar()->addMenu(QStringLiteral("Index"));
@@ -477,6 +411,13 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto* helpMenu = menuBar()->addMenu("Help");
     helpMenu->addAction(aboutAct);
     // ---------------------
+
+    if (controller_) {
+        connect(controller_, &AppController::searchFiltersChanged, this, [this]() {
+            rebuildFilterMenu();
+            updateSearch(searchLine_->text());
+        });
+    }
 
     updateActionStates();
 
@@ -538,16 +479,82 @@ void MainWindow::refresh() {
     //     );
 }
 
-void MainWindow::applySearchFilter(const QString& queryFragment)
+void MainWindow::rebuildFilterMenu()
 {
-    activeSearchFilter_ = queryFragment;
+    if (!filterMenu_) {
+        return;
+    }
+
+    filterMenu_->clear();
+
+    auto* filterActionGroup = new QActionGroup(filterMenu_);
+    filterActionGroup->setExclusive(true);
+
+    auto* allFilesAction = new QAction(QStringLiteral("All Files"), filterMenu_);
+    allFilesAction->setCheckable(true);
+    allFilesAction->setChecked(activeSearchFilterId_.isEmpty());
+    filterActionGroup->addAction(allFilesAction);
+    filterMenu_->addAction(allFilesAction);
+
+    connect(allFilesAction, &QAction::triggered, this, [this]() {
+        applySearchFilter(QString(), QString());
+    });
+
+    filterMenu_->addSeparator();
+
+    bool activeFilterStillExists = activeSearchFilterId_.isEmpty();
+
+    const std::vector<SearchFilterPreference> filters =
+        controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
+
+    for (const SearchFilterPreference& filter : filters) {
+        auto* filterAction = new QAction(filter.name, filterMenu_);
+        filterAction->setCheckable(true);
+        filterAction->setStatusTip(filter.query);
+        filterAction->setToolTip(filter.query);
+
+        if (filter.id == activeSearchFilterId_) {
+            filterAction->setChecked(true);
+            activeSearchFilter_ = filter.query;
+            activeFilterStillExists = true;
+        }
+
+        filterActionGroup->addAction(filterAction);
+        filterMenu_->addAction(filterAction);
+
+        connect(filterAction, &QAction::triggered, this, [this, filter]() {
+            applySearchFilter(filter.id, filter.query);
+        });
+    }
+
+    if (!activeFilterStillExists) {
+        activeSearchFilterId_.clear();
+        activeSearchFilter_.clear();
+        allFilesAction->setChecked(true);
+    }
+
+    filterMenu_->addSeparator();
+
+    auto* manageFiltersAction = new QAction(QStringLiteral("Manage Filters..."), filterMenu_);
+    connect(manageFiltersAction, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->showPreferencesDialog(PreferencesDialogPage::Filters);
+        }
+    });
+    filterMenu_->addAction(manageFiltersAction);
 
     searchLine_->setPlaceholderText(
         activeSearchFilter_.isEmpty()
             ? QStringLiteral("Search files...")
             : QStringLiteral("Search files within selected filter...")
     );
+}
 
+void MainWindow::applySearchFilter(const QString& filterId, const QString& queryFragment)
+{
+    activeSearchFilterId_ = filterId;
+    activeSearchFilter_ = queryFragment;
+    rebuildFilterMenu();
     updateSearch(searchLine_->text());
 
     if (queryFragment.isEmpty()) {

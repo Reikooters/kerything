@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "FileRecord.h"
+#include "LiveUpdateEvent.h"
 
 class IndexController final : public QObject {
     Q_OBJECT
@@ -371,6 +372,13 @@ public:
         bool foldersOnly = false;
     };
 
+    struct LiveUpdateApplyResult {
+        qsizetype metadataChanged = 0;
+        qsizetype unsupported = 0;
+        qsizetype missingDevice = 0;
+        qsizetype missingInode = 0;
+    };
+
     const DeviceIndex* deviceIndex(quint64 indexId) const;
 
     quint64 addDevice(
@@ -402,6 +410,10 @@ public:
     void sortByNameAscendingParallelByRequestId(quint32 requestId);
     void buildTrigramIndexParallelByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
+    LiveUpdateApplyResult applyLiveUpdateOperations(
+        const QString& deviceId,
+        const std::vector<LiveUpdateOperation>& operations
+    );
 
     template <typename Fn>
     auto withDeviceIndexRead(quint64 indexId, Fn&& fn) const

@@ -350,6 +350,77 @@ bool IndexController::updateDeviceRuntimeStateByDeviceId(
     return false;
 }
 
+IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperations(
+    const QString& deviceId,
+    const std::vector<LiveUpdateOperation>& operations)
+{
+    LiveUpdateApplyResult result;
+
+    if (deviceId.isEmpty() || operations.empty()) {
+        return result;
+    }
+
+    std::unique_lock lock(indexMutex_);
+
+    DeviceIndex* targetIndex = nullptr;
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        if (deviceIndex && deviceIndex->deviceId == deviceId) {
+            targetIndex = deviceIndex.get();
+            break;
+        }
+    }
+
+    if (!targetIndex || !targetIndex->isReady) {
+        result.missingDevice = static_cast<qsizetype>(operations.size());
+        return result;
+    }
+
+    for (const LiveUpdateOperation& operation : operations) {
+        if (operation.kind != LiveUpdateOperationKind::MetadataChanged) {
+            ++result.unsupported;
+            continue;
+        }
+
+        if (operation.inode == 0) {
+            ++result.missingInode;
+            continue;
+        }
+
+        const std::vector<uint32_t>* recordIndices =
+            targetIndex->recordIndicesForFsIndex(operation.inode);
+
+        if (!recordIndices || recordIndices->empty()) {
+            ++result.missingInode;
+            continue;
+        }
+
+        for (const uint32_t recordIdx : *recordIndices) {
+            if (recordIdx >= targetIndex->fileRecords.size()) {
+                continue;
+            }
+
+            FileRecord& record = targetIndex->fileRecords[recordIdx];
+            record.size = operation.size;
+            record.modificationTime = operation.modificationTime;
+        }
+
+        ++result.metadataChanged;
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "IndexController: applied live update operations"
+              << " deviceId=" << deviceId.toStdString()
+              << " metadataChanged=" << result.metadataChanged
+              << " unsupported=" << result.unsupported
+              << " missingDevice=" << result.missingDevice
+              << " missingInode=" << result.missingInode
+              << "\n";
+#endif
+
+    return result;
+}
+
 void IndexController::setReadyState(quint32 requestId, bool isReady) {
     std::unique_lock lock(indexMutex_);
 

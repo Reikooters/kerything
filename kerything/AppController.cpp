@@ -496,7 +496,7 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::liveUpdateOperationBatchReceived,
-            this, [](
+            this, [this](
                 const QString& deviceId,
                 const QString& mountPoint,
                 const std::vector<LiveUpdateOperation>& operations
@@ -538,9 +538,33 @@ bool AppController::start() {
                     std::cout << "\n";
                 }
 #else
-                Q_UNUSED(deviceId);
                 Q_UNUSED(mountPoint);
-                Q_UNUSED(operations);
+#endif
+
+                if (!indexController_) {
+                    return;
+                }
+
+                const IndexController::LiveUpdateApplyResult result =
+                    indexController_->applyLiveUpdateOperations(deviceId, operations);
+
+                if (result.metadataChanged > 0) {
+                    requestRefreshAllWindows();
+                }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                if (result.metadataChanged > 0 ||
+                    result.unsupported > 0 ||
+                    result.missingDevice > 0 ||
+                    result.missingInode > 0) {
+                    std::cout << "GUI: applied live update operation batch"
+                              << " deviceId=" << deviceId.toStdString()
+                              << " metadataChanged=" << result.metadataChanged
+                              << " unsupported=" << result.unsupported
+                              << " missingDevice=" << result.missingDevice
+                              << " missingInode=" << result.missingInode
+                              << "\n";
+                }
 #endif
             });
 

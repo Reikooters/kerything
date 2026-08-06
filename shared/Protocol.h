@@ -206,6 +206,7 @@ inline QByteArray makeLiveUpdateBatchPayload(
             out << info.infoType
                 << info.fsidHex
                 << info.handleHex
+                << info.handleType
                 << info.name;
         }
     }
@@ -254,6 +255,7 @@ parseLiveUpdateBatchPayload(const QByteArray& payload)
             in >> info.infoType
                >> info.fsidHex
                >> info.handleHex
+               >> info.handleType
                >> info.name;
 
             if (in.status() != QDataStream::Ok) {

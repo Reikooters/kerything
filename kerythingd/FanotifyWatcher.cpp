@@ -28,6 +28,7 @@ namespace {
         QString infoType;
         QString fsidHex;
         QString handleHex;
+        qint32 handleType = 0;
         QString name;
     };
 
@@ -90,6 +91,7 @@ namespace {
                     reinterpret_cast<const unsigned char*>(&fid->fsid),
                     sizeof(fid->fsid)
                 );
+                nameInfo.handleType = fileHandle->handle_type;nameInfo.handleType = fileHandle->handle_type;
                 nameInfo.handleHex = bytesToHex(
                     reinterpret_cast<const unsigned char*>(fileHandle->f_handle),
                     fileHandle->handle_bytes
@@ -185,7 +187,8 @@ bool FanotifyWatcher::start()
         FAN_CLOSE_WRITE |
         FAN_ATTRIB |
         FAN_DELETE_SELF |
-        FAN_MOVE_SELF;
+        FAN_MOVE_SELF |
+        FAN_ONDIR;
 
     if (::fanotify_mark(
             fanotifyFd_,
@@ -327,6 +330,7 @@ void FanotifyWatcher::captureEvent(const fanotify_event_metadata* metadata)
         pendingInfo.infoType = info.infoType;
         pendingInfo.fsidHex = info.fsidHex;
         pendingInfo.handleHex = info.handleHex;
+        pendingInfo.handleType = info.handleType;
         pendingInfo.name = info.name;
 
         pending.infos.push_back(std::move(pendingInfo));

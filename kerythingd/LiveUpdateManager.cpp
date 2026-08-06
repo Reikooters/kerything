@@ -3,11 +3,252 @@
 
 #include "LiveUpdateManager.h"
 
+#include "FanotifyHandleResolver.h"
+
 #include <iostream>
 
 #include <QSet>
 
 #include <linux/fanotify.h>
+
+namespace {
+    enum class LiveUpdateOperationKind : quint8 {
+        MetadataChanged,
+        Upsert,
+        DeleteEntry,
+        NeedsRescan,
+        Ignored
+    };
+
+    QString operationKindToString(LiveUpdateOperationKind kind)
+    {
+        switch (kind) {
+            case LiveUpdateOperationKind::MetadataChanged:
+                return QStringLiteral("MetadataChanged");
+            case LiveUpdateOperationKind::Upsert:
+                return QStringLiteral("Upsert");
+            case LiveUpdateOperationKind::DeleteEntry:
+                return QStringLiteral("DeleteEntry");
+            case LiveUpdateOperationKind::NeedsRescan:
+                return QStringLiteral("NeedsRescan");
+            case LiveUpdateOperationKind::Ignored:
+                return QStringLiteral("Ignored");
+            default:
+                return QStringLiteral("Unknown");
+        }
+    }
+
+    struct LiveUpdateOperation {
+        LiveUpdateOperationKind kind = LiveUpdateOperationKind::Ignored;
+
+        quint64 inode = 0;
+        quint64 parentInode = 0;
+
+        QString parentHandleHex;
+        qint32 parentHandleType = 0;
+
+        QString name;
+
+        quint64 size = 0;
+        qint64 modificationTime = 0;
+        bool isDirectory = false;
+
+        QString reason;
+    };
+
+    const LiveUpdateEventInfo* firstRawInfoOfType(
+        const LiveUpdateEvent& event,
+        const QString& infoType)
+    {
+        for (const LiveUpdateEventInfo& info : event.infos) {
+            if (info.infoType == infoType) {
+                return &info;
+            }
+        }
+
+        return nullptr;
+    }
+
+    const LiveUpdateEventInfo* firstRawDirectoryEntryInfo(const LiveUpdateEvent& event)
+    {
+        if (const LiveUpdateEventInfo* info = firstRawInfoOfType(event, QStringLiteral("DFID_NAME"))) {
+            return info;
+        }
+
+        if (const LiveUpdateEventInfo* info = firstRawInfoOfType(event, QStringLiteral("OLD_DFID_NAME"))) {
+            return info;
+        }
+
+        if (const LiveUpdateEventInfo* info = firstRawInfoOfType(event, QStringLiteral("NEW_DFID_NAME"))) {
+            return info;
+        }
+
+        return nullptr;
+    }
+
+    void logOperation(const LiveUpdateOperation& operation)
+    {
+        std::cout << "  operation kind="
+                  << operationKindToString(operation.kind).toStdString();
+
+        if (operation.inode != 0) {
+            std::cout << " inode=" << operation.inode;
+        }
+
+        if (operation.parentInode != 0) {
+            std::cout << " parentInode=" << operation.parentInode;
+        }
+
+        if (!operation.name.isEmpty()) {
+            std::cout << " name=" << operation.name.toStdString();
+        }
+
+        if (operation.kind == LiveUpdateOperationKind::MetadataChanged ||
+            operation.kind == LiveUpdateOperationKind::Upsert) {
+            std::cout << " size=" << operation.size
+                      << " mtime=" << operation.modificationTime
+                      << " isDirectory=" << (operation.isDirectory ? "true" : "false");
+        }
+
+        if (!operation.reason.isEmpty()) {
+            std::cout << " reason=" << operation.reason.toStdString();
+        }
+
+        std::cout << "\n";
+    }
+
+    LiveUpdateOperation operationFromEvent(
+        const FanotifyHandleResolver& resolver,
+        const LiveUpdateEvent& event)
+    {
+        if (event.mask & FAN_Q_OVERFLOW) {
+            LiveUpdateOperation operation;
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = QStringLiteral("fanotify queue overflow");
+            return operation;
+        }
+
+        if (event.mask & (FAN_MOVED_FROM | FAN_MOVED_TO)) {
+            LiveUpdateOperation operation;
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = QStringLiteral("move or rename events are not supported yet");
+            return operation;
+        }
+
+        if (event.mask & (FAN_DELETE_SELF | FAN_MOVE_SELF)) {
+            LiveUpdateOperation operation;
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = QStringLiteral("watched object was deleted or moved");
+            return operation;
+        }
+
+        if (event.mask & FAN_DELETE) {
+            const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
+
+            LiveUpdateOperation operation;
+            operation.kind = LiveUpdateOperationKind::DeleteEntry;
+
+            if (!entryInfo) {
+                operation.kind = LiveUpdateOperationKind::NeedsRescan;
+                operation.reason = QStringLiteral("delete event has no directory entry info");
+                return operation;
+            }
+
+            operation.parentHandleHex = entryInfo->handleHex;
+            operation.parentHandleType = entryInfo->handleType;
+            operation.name = entryInfo->name;
+
+            const ResolvedFanotifyHandle parent =
+                resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
+
+            if (parent.ok) {
+                operation.parentInode = parent.inode;
+            }
+
+            return operation;
+        }
+
+        if (event.mask & FAN_CREATE) {
+            const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
+
+            LiveUpdateOperation operation;
+            operation.kind = LiveUpdateOperationKind::Upsert;
+
+            if (!entryInfo) {
+                operation.kind = LiveUpdateOperationKind::NeedsRescan;
+                operation.reason = QStringLiteral("create event has no directory entry info");
+                return operation;
+            }
+
+            operation.parentHandleHex = entryInfo->handleHex;
+            operation.parentHandleType = entryInfo->handleType;
+            operation.name = entryInfo->name;
+
+            const ResolvedFanotifyHandle child =
+                resolver.resolveChildByParentHandleAndName(
+                    entryInfo->handleHex,
+                    entryInfo->handleType,
+                    entryInfo->name
+                );
+
+            if (!child.ok) {
+                operation.kind = LiveUpdateOperationKind::Ignored;
+                operation.reason = QStringLiteral("created entry no longer exists: %1")
+                    .arg(child.errorText);
+                return operation;
+            }
+
+            const ResolvedFanotifyHandle parent =
+                resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
+
+            if (parent.ok) {
+                operation.parentInode = parent.inode;
+            }
+
+            operation.inode = child.inode;
+            operation.size = child.size;
+            operation.modificationTime = child.modificationTime;
+            operation.isDirectory = child.isDirectory;
+
+            return operation;
+        }
+
+        if (event.mask & (FAN_CLOSE_WRITE | FAN_ATTRIB | FAN_MODIFY)) {
+            const LiveUpdateEventInfo* objectInfo = firstRawInfoOfType(event, QStringLiteral("FID"));
+
+            LiveUpdateOperation operation;
+            operation.kind = LiveUpdateOperationKind::MetadataChanged;
+
+            if (!objectInfo) {
+                operation.kind = LiveUpdateOperationKind::Ignored;
+                operation.reason = QStringLiteral("metadata event has no object FID");
+                return operation;
+            }
+
+            const ResolvedFanotifyHandle object =
+                resolver.resolveObjectHandle(objectInfo->handleHex, objectInfo->handleType);
+
+            if (!object.ok) {
+                operation.kind = LiveUpdateOperationKind::Ignored;
+                operation.reason = QStringLiteral("metadata object no longer exists: %1")
+                    .arg(object.errorText);
+                return operation;
+            }
+
+            operation.inode = object.inode;
+            operation.size = object.size;
+            operation.modificationTime = object.modificationTime;
+            operation.isDirectory = object.isDirectory;
+
+            return operation;
+        }
+
+        LiveUpdateOperation operation;
+        operation.kind = LiveUpdateOperationKind::Ignored;
+        operation.reason = QStringLiteral("unhandled fanotify event mask");
+        return operation;
+    }
+}
 
 LiveUpdateManager::LiveUpdateManager(QObject* parent)
     : QObject(parent)
@@ -134,6 +375,8 @@ void LiveUpdateManager::logEventBatch(
     const QString& mountPoint,
     const std::vector<LiveUpdateEvent>& events)
 {
+    FanotifyHandleResolver resolver(mountPoint);
+
     std::cout << "live update batch: deviceId="
               << deviceId.toStdString()
               << " mountPoint="
@@ -151,6 +394,8 @@ void LiveUpdateManager::logEventBatch(
                       << info.infoType.toStdString()
                       << " fsid="
                       << info.fsidHex.toStdString()
+                      << " handleType="
+                      << info.handleType
                       << " handle="
                       << info.handleHex.toStdString();
 
@@ -161,6 +406,9 @@ void LiveUpdateManager::logEventBatch(
         }
 
         std::cout << "\n";
+
+        const LiveUpdateOperation operation = operationFromEvent(resolver, event);
+        logOperation(operation);
     }
 }
 

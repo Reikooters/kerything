@@ -14,6 +14,7 @@ struct LiveUpdateEventInfo {
     QString infoType;
     QString fsidHex;
     QString handleHex;
+    qint32 handleType = 0;
     QString name;
 };
 

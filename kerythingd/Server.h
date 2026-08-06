@@ -55,6 +55,11 @@ private:
         LiveUpdateStatus status,
         const QString& reason
     );
+    void broadcastLiveUpdateOperationBatch(
+        const QString& deviceId,
+        const QString& mountPoint,
+        const std::vector<LiveUpdateOperation>& operations
+    );
 
     QLocalServer server_;
     QSocketNotifier* systemdSocketNotifier_ = nullptr;

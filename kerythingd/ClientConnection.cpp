@@ -362,6 +362,18 @@ void ClientConnection::sendLiveUpdateStatusChanged(
     );
 }
 
+void ClientConnection::sendLiveUpdateOperationBatch(
+    const QString& deviceId,
+    const QString& mountPoint,
+    const std::vector<LiveUpdateOperation>& operations)
+{
+    sendFrame(
+        Protocol::MessageType::LiveUpdateOperationBatch,
+        0,
+        Protocol::makeLiveUpdateOperationBatchPayload(deviceId, mountPoint, operations)
+    );
+}
+
 void ClientConnection::sendError(quint32 requestId, const QString& errorText)
 {
     QByteArray payload;

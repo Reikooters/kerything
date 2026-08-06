@@ -317,6 +317,10 @@ void DaemonClient::handleMessage(const Protocol::MessageHeader& header, const QB
             handleLiveUpdateStatusChanged(header, payload);
             break;
 
+        case Protocol::MessageType::LiveUpdateOperationBatch:
+            handleLiveUpdateOperationBatch(header, payload);
+            break;
+
         case Protocol::MessageType::Error:
             handleErrorMessage(header, payload);
             break;
@@ -618,6 +622,28 @@ void DaemonClient::handleLiveUpdateStatusChanged(const Protocol::MessageHeader&,
 #endif
 
     Q_EMIT liveUpdateStatusChanged(deviceId, status, reason);
+}
+
+void DaemonClient::handleLiveUpdateOperationBatch(const Protocol::MessageHeader&, const QByteArray& payload)
+{
+    const auto parsed = Protocol::parseLiveUpdateOperationBatchPayload(payload);
+
+    if (!parsed) {
+        std::cerr << "Malformed LiveUpdateOperationBatch payload\n";
+        return;
+    }
+
+    const auto& [deviceId, mountPoint, operations] = *parsed;
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "GUI: received live update operation batch"
+              << " deviceId=" << deviceId.toStdString()
+              << " mountPoint=" << mountPoint.toStdString()
+              << " count=" << operations.size()
+              << "\n";
+#endif
+
+    Q_EMIT liveUpdateOperationBatchReceived(deviceId, mountPoint, operations);
 }
 
 void DaemonClient::handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload)

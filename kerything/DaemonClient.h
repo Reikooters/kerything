@@ -64,6 +64,11 @@ Q_SIGNALS:
         LiveUpdateStatus status,
         const QString& reason
     );
+    void liveUpdateOperationBatchReceived(
+        const QString& deviceId,
+        const QString& mountPoint,
+        const std::vector<LiveUpdateOperation>& operations
+    );
 
 private Q_SLOTS:
     void tryConnect();
@@ -95,6 +100,7 @@ private:
     void handleKnownDevices(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleLiveUpdateBatch(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleLiveUpdateStatusChanged(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleLiveUpdateOperationBatch(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
 
     AppController* controller_ = nullptr;

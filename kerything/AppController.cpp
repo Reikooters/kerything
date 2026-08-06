@@ -495,6 +495,55 @@ bool AppController::start() {
                 requestRefreshAllWindows();
             });
 
+    connect(daemonClient_, &DaemonClient::liveUpdateOperationBatchReceived,
+            this, [](
+                const QString& deviceId,
+                const QString& mountPoint,
+                const std::vector<LiveUpdateOperation>& operations
+            ) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cout << "GUI: live update operation batch received"
+                          << " deviceId=" << deviceId.toStdString()
+                          << " mountPoint=" << mountPoint.toStdString()
+                          << " count=" << operations.size()
+                          << "\n";
+
+                for (const LiveUpdateOperation& operation : operations) {
+                    std::cout << "  operation kind="
+                              << liveUpdateOperationKindToString(operation.kind).toStdString();
+
+                    if (operation.inode != 0) {
+                        std::cout << " inode=" << operation.inode;
+                    }
+
+                    if (operation.parentInode != 0) {
+                        std::cout << " parentInode=" << operation.parentInode;
+                    }
+
+                    if (!operation.name.isEmpty()) {
+                        std::cout << " name=" << operation.name.toStdString();
+                    }
+
+                    if (operation.kind == LiveUpdateOperationKind::MetadataChanged ||
+                        operation.kind == LiveUpdateOperationKind::Upsert) {
+                        std::cout << " size=" << operation.size
+                                  << " mtime=" << operation.modificationTime
+                                  << " isDirectory=" << (operation.isDirectory ? "true" : "false");
+                    }
+
+                    if (!operation.reason.isEmpty()) {
+                        std::cout << " reason=" << operation.reason.toStdString();
+                    }
+
+                    std::cout << "\n";
+                }
+#else
+                Q_UNUSED(deviceId);
+                Q_UNUSED(mountPoint);
+                Q_UNUSED(operations);
+#endif
+            });
+
     // Primary instance opens its first window on startup.
     openNewWindow();
 

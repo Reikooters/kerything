@@ -43,6 +43,47 @@ inline QString liveUpdateStatusToString(LiveUpdateStatus status)
     }
 }
 
+enum class LiveUpdateOperationKind : quint8 {
+    Ignored = 0,
+    MetadataChanged,
+    Upsert,
+    DeleteEntry,
+    NeedsRescan
+};
+
+struct LiveUpdateOperation {
+    LiveUpdateOperationKind kind = LiveUpdateOperationKind::Ignored;
+
+    quint64 inode = 0;
+    quint64 parentInode = 0;
+
+    QString name;
+
+    quint64 size = 0;
+    qint64 modificationTime = 0;
+    bool isDirectory = false;
+
+    QString reason;
+};
+
+inline QString liveUpdateOperationKindToString(LiveUpdateOperationKind kind)
+{
+    switch (kind) {
+        case LiveUpdateOperationKind::Ignored:
+            return QStringLiteral("Ignored");
+        case LiveUpdateOperationKind::MetadataChanged:
+            return QStringLiteral("MetadataChanged");
+        case LiveUpdateOperationKind::Upsert:
+            return QStringLiteral("Upsert");
+        case LiveUpdateOperationKind::DeleteEntry:
+            return QStringLiteral("DeleteEntry");
+        case LiveUpdateOperationKind::NeedsRescan:
+            return QStringLiteral("NeedsRescan");
+        default:
+            return QStringLiteral("Unknown");
+    }
+}
+
 enum class NormalizedLiveUpdateKind : quint8 {
     Unknown = 0,
     Created,

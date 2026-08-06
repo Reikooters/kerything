@@ -92,6 +92,15 @@ Server::Server(QObject* parent)
                 broadcastLiveUpdateBatch(deviceId, mountPoint, events);
             });
 
+    connect(liveUpdateManager_, &LiveUpdateManager::operationsReady,
+        this, [this](
+            const QString& deviceId,
+            const QString& mountPoint,
+            const std::vector<LiveUpdateOperation>& operations
+        ) {
+            broadcastLiveUpdateOperationBatch(deviceId, mountPoint, operations);
+        });
+
     liveUpdateManager_->setKnownDevices(lastKnownDevices_);
 
     deviceChangeMonitor_ = new DeviceChangeMonitor(this);
@@ -485,6 +494,22 @@ void Server::broadcastLiveUpdateStatusChanged(
     for (ClientConnection* client : clients_) {
         if (client) {
             client->sendLiveUpdateStatusChanged(deviceId, status, reason);
+        }
+    }
+}
+
+void Server::broadcastLiveUpdateOperationBatch(
+    const QString& deviceId,
+    const QString& mountPoint,
+    const std::vector<LiveUpdateOperation>& operations)
+{
+    if (operations.empty()) {
+        return;
+    }
+
+    for (ClientConnection* client : clients_) {
+        if (client) {
+            client->sendLiveUpdateOperationBatch(deviceId, mountPoint, operations);
         }
     }
 }

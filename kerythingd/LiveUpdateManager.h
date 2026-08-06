@@ -34,6 +34,7 @@ Q_SIGNALS:
     void liveUpdateStatusChanged(QString deviceId, LiveUpdateStatus status, QString reason);
     void deviceNeedsRescan(QString deviceId, QString reason);
     void eventsReady(QString deviceId, QString mountPoint, std::vector<LiveUpdateEvent> events);
+    void operationsReady(QString deviceId, QString mountPoint, std::vector<LiveUpdateOperation> operations);
 
 private:
     static QString watchKeyForDevice(const BlockDevice& device);

@@ -36,6 +36,7 @@ enum class MessageType : quint16 {
     KnownDevices = 11,
     LiveUpdateBatch = 12,
     LiveUpdateStatusChanged = 13,
+    LiveUpdateOperationBatch = 14,
     Error = 99
 };
 
@@ -315,6 +316,88 @@ parseLiveUpdateStatusChangedPayload(const QByteArray& payload)
         std::move(deviceId),
         static_cast<LiveUpdateStatus>(rawStatus),
         std::move(reason)
+    );
+}
+
+inline QByteArray makeLiveUpdateOperationBatchPayload(
+    const QString& deviceId,
+    const QString& mountPoint,
+    const std::vector<LiveUpdateOperation>& operations)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << deviceId
+        << mountPoint
+        << static_cast<quint32>(operations.size());
+
+    for (const LiveUpdateOperation& operation : operations) {
+        out << static_cast<quint8>(operation.kind)
+            << operation.inode
+            << operation.parentInode
+            << operation.name
+            << operation.size
+            << operation.modificationTime
+            << operation.isDirectory
+            << operation.reason;
+    }
+
+    return payload;
+}
+
+inline std::optional<std::tuple<QString, QString, std::vector<LiveUpdateOperation>>>
+parseLiveUpdateOperationBatchPayload(const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    QString deviceId;
+    QString mountPoint;
+    quint32 operationCount = 0;
+
+    in >> deviceId
+       >> mountPoint
+       >> operationCount;
+
+    if (in.status() != QDataStream::Ok) {
+        return std::nullopt;
+    }
+
+    std::vector<LiveUpdateOperation> operations;
+    operations.reserve(operationCount);
+
+    for (quint32 i = 0; i < operationCount; ++i) {
+        LiveUpdateOperation operation;
+        quint8 rawKind = 0;
+
+        in >> rawKind
+           >> operation.inode
+           >> operation.parentInode
+           >> operation.name
+           >> operation.size
+           >> operation.modificationTime
+           >> operation.isDirectory
+           >> operation.reason;
+
+        if (in.status() != QDataStream::Ok) {
+            return std::nullopt;
+        }
+
+        if (rawKind > static_cast<quint8>(LiveUpdateOperationKind::NeedsRescan)) {
+            return std::nullopt;
+        }
+
+        operation.kind = static_cast<LiveUpdateOperationKind>(rawKind);
+        operations.push_back(std::move(operation));
+    }
+
+    return std::make_tuple(
+        std::move(deviceId),
+        std::move(mountPoint),
+        std::move(operations)
     );
 }
 

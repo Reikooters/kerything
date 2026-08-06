@@ -52,6 +52,11 @@ public:
         LiveUpdateStatus status,
         const QString& reason
     );
+    void sendLiveUpdateOperationBatch(
+        const QString& deviceId,
+        const QString& mountPoint,
+        const std::vector<LiveUpdateOperation>& operations
+    );
     void sendError(quint32 requestId, const QString& errorText);
 
 Q_SIGNALS:

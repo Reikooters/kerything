@@ -12,48 +12,21 @@
 #include <linux/fanotify.h>
 
 namespace {
-    enum class LiveUpdateOperationKind : quint8 {
-        MetadataChanged,
-        Upsert,
-        DeleteEntry,
-        NeedsRescan,
-        Ignored
-    };
-
-    QString operationKindToString(LiveUpdateOperationKind kind)
-    {
-        switch (kind) {
-            case LiveUpdateOperationKind::MetadataChanged:
-                return QStringLiteral("MetadataChanged");
-            case LiveUpdateOperationKind::Upsert:
-                return QStringLiteral("Upsert");
-            case LiveUpdateOperationKind::DeleteEntry:
-                return QStringLiteral("DeleteEntry");
-            case LiveUpdateOperationKind::NeedsRescan:
-                return QStringLiteral("NeedsRescan");
-            case LiveUpdateOperationKind::Ignored:
-                return QStringLiteral("Ignored");
-            default:
-                return QStringLiteral("Unknown");
-        }
-    }
-
-    struct LiveUpdateOperation {
-        LiveUpdateOperationKind kind = LiveUpdateOperationKind::Ignored;
-
-        quint64 inode = 0;
+    struct ParentNameKey {
         quint64 parentInode = 0;
-
-        QString parentHandleHex;
-        qint32 parentHandleType = 0;
-
         QString name;
 
-        quint64 size = 0;
-        qint64 modificationTime = 0;
-        bool isDirectory = false;
+        bool operator==(const ParentNameKey& other) const
+        {
+            return parentInode == other.parentInode && name == other.name;
+        }
+    };
 
-        QString reason;
+    struct ParentNameKeyHash {
+        std::size_t operator()(const ParentNameKey& key) const
+        {
+            return qHashMulti(0, key.parentInode, key.name);
+        }
     };
 
     const LiveUpdateEventInfo* firstRawInfoOfType(
@@ -86,37 +59,6 @@ namespace {
         return nullptr;
     }
 
-    void logOperation(const LiveUpdateOperation& operation)
-    {
-        std::cout << "  operation kind="
-                  << operationKindToString(operation.kind).toStdString();
-
-        if (operation.inode != 0) {
-            std::cout << " inode=" << operation.inode;
-        }
-
-        if (operation.parentInode != 0) {
-            std::cout << " parentInode=" << operation.parentInode;
-        }
-
-        if (!operation.name.isEmpty()) {
-            std::cout << " name=" << operation.name.toStdString();
-        }
-
-        if (operation.kind == LiveUpdateOperationKind::MetadataChanged ||
-            operation.kind == LiveUpdateOperationKind::Upsert) {
-            std::cout << " size=" << operation.size
-                      << " mtime=" << operation.modificationTime
-                      << " isDirectory=" << (operation.isDirectory ? "true" : "false");
-        }
-
-        if (!operation.reason.isEmpty()) {
-            std::cout << " reason=" << operation.reason.toStdString();
-        }
-
-        std::cout << "\n";
-    }
-
     LiveUpdateOperation operationFromEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event)
@@ -138,7 +80,7 @@ namespace {
         if (event.mask & (FAN_DELETE_SELF | FAN_MOVE_SELF)) {
             LiveUpdateOperation operation;
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
-            operation.reason = QStringLiteral("watched object was deleted or moved");
+            operation.reason = QStringLiteral("object was deleted or moved");
             return operation;
         }
 
@@ -154,8 +96,6 @@ namespace {
                 return operation;
             }
 
-            operation.parentHandleHex = entryInfo->handleHex;
-            operation.parentHandleType = entryInfo->handleType;
             operation.name = entryInfo->name;
 
             const ResolvedFanotifyHandle parent =
@@ -163,6 +103,10 @@ namespace {
 
             if (parent.ok) {
                 operation.parentInode = parent.inode;
+            }
+            else {
+                operation.reason = QStringLiteral("parent inode could not be resolved: %1")
+                    .arg(parent.errorText);
             }
 
             return operation;
@@ -180,8 +124,6 @@ namespace {
                 return operation;
             }
 
-            operation.parentHandleHex = entryInfo->handleHex;
-            operation.parentHandleType = entryInfo->handleType;
             operation.name = entryInfo->name;
 
             const ResolvedFanotifyHandle child =
@@ -247,6 +189,78 @@ namespace {
         operation.kind = LiveUpdateOperationKind::Ignored;
         operation.reason = QStringLiteral("unhandled fanotify event mask");
         return operation;
+    }
+
+    void logOperation(const LiveUpdateOperation& operation)
+    {
+        std::cout << "  operation kind="
+                  << liveUpdateOperationKindToString(operation.kind).toStdString();
+
+        if (operation.inode != 0) {
+            std::cout << " inode=" << operation.inode;
+        }
+
+        if (operation.parentInode != 0) {
+            std::cout << " parentInode=" << operation.parentInode;
+        }
+
+        if (!operation.name.isEmpty()) {
+            std::cout << " name=" << operation.name.toStdString();
+        }
+
+        if (operation.kind == LiveUpdateOperationKind::MetadataChanged ||
+            operation.kind == LiveUpdateOperationKind::Upsert) {
+            std::cout << " size=" << operation.size
+                      << " mtime=" << operation.modificationTime
+                      << " isDirectory=" << (operation.isDirectory ? "true" : "false");
+        }
+
+        if (!operation.reason.isEmpty()) {
+            std::cout << " reason=" << operation.reason.toStdString();
+        }
+
+        std::cout << "\n";
+    }
+
+    std::vector<LiveUpdateOperation> coalesceOperations(
+        const std::vector<LiveUpdateOperation>& operations)
+    {
+        QSet<quint64> upsertInodes;
+        bool hasDeleteEntry = false;
+
+        for (const LiveUpdateOperation& operation : operations) {
+            if (operation.kind == LiveUpdateOperationKind::Upsert && operation.inode != 0) {
+                upsertInodes.insert(operation.inode);
+            }
+            else if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
+                hasDeleteEntry = true;
+            }
+        }
+
+        std::vector<LiveUpdateOperation> coalesced;
+        coalesced.reserve(operations.size());
+
+        for (const LiveUpdateOperation& operation : operations) {
+            if (operation.kind == LiveUpdateOperationKind::Ignored) {
+                continue;
+            }
+
+            if (operation.kind == LiveUpdateOperationKind::MetadataChanged &&
+                operation.inode != 0 &&
+                upsertInodes.contains(operation.inode)) {
+                continue;
+            }
+
+            if (operation.kind == LiveUpdateOperationKind::NeedsRescan &&
+                hasDeleteEntry &&
+                operation.reason == QStringLiteral("object was deleted or moved")) {
+                continue;
+            }
+
+            coalesced.push_back(operation);
+        }
+
+        return coalesced;
     }
 }
 
@@ -375,8 +389,6 @@ void LiveUpdateManager::logEventBatch(
     const QString& mountPoint,
     const std::vector<LiveUpdateEvent>& events)
 {
-    FanotifyHandleResolver resolver(mountPoint);
-
     std::cout << "live update batch: deviceId="
               << deviceId.toStdString()
               << " mountPoint="
@@ -406,9 +418,6 @@ void LiveUpdateManager::logEventBatch(
         }
 
         std::cout << "\n";
-
-        const LiveUpdateOperation operation = operationFromEvent(resolver, event);
-        logOperation(operation);
     }
 }
 
@@ -456,6 +465,26 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
                 std::vector<LiveUpdateEvent> events
             ) {
                 logEventBatch(deviceId, mountPoint, events);
+
+                FanotifyHandleResolver resolver(mountPoint);
+                std::vector<LiveUpdateOperation> operations;
+                operations.reserve(events.size());
+
+                for (const LiveUpdateEvent& event : events) {
+                    operations.push_back(operationFromEvent(resolver, event));
+                }
+
+                operations = coalesceOperations(operations);
+
+                for (const LiveUpdateOperation& operation : operations) {
+                    logOperation(operation);
+                }
+
+                Q_EMIT operationsReady(
+                    deviceId,
+                    mountPoint,
+                    std::move(operations)
+                );
 
                 Q_EMIT eventsReady(
                     deviceId,

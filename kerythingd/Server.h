@@ -12,6 +12,7 @@
 #include "BlockDevice.h"
 #include "ClientConnection.h"
 #include "DeviceChangeMonitor.h"
+#include "LiveUpdateManager.h"
 
 class Server : public QObject {
     Q_OBJECT
@@ -51,6 +52,7 @@ private:
     std::vector<ClientConnection*> clients_;
 
     DeviceChangeMonitor* deviceChangeMonitor_ = nullptr;
+    LiveUpdateManager* liveUpdateManager_ = nullptr;
     QTimer knownDevicesRefreshTimer_;
     QTimer idleShutdownTimer_;
     std::vector<BlockDevice> lastKnownDevices_;

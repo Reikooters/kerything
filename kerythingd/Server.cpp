@@ -53,6 +53,18 @@ Server::Server(QObject* parent)
 
     lastKnownDevices_ = BlockDeviceHelper::listKnownDevices();
 
+    liveUpdateManager_ = new LiveUpdateManager(this);
+    connect(liveUpdateManager_, &LiveUpdateManager::deviceNeedsRescan,
+            this, [](const QString& deviceId, const QString& reason) {
+                std::cerr << "Live update stream became unreliable deviceId="
+                          << deviceId.toStdString()
+                          << " reason="
+                          << reason.toStdString()
+                          << "\n";
+            });
+
+    liveUpdateManager_->setKnownDevices(lastKnownDevices_);
+
     deviceChangeMonitor_ = new DeviceChangeMonitor(this);
     connect(deviceChangeMonitor_, &DeviceChangeMonitor::devicesMayHaveChanged,
             this, &Server::scheduleKnownDevicesRefresh);
@@ -383,6 +395,10 @@ void Server::refreshKnownDevices()
     }
 
     lastKnownDevices_ = devices;
+
+    if (liveUpdateManager_) {
+        liveUpdateManager_->setKnownDevices(lastKnownDevices_);
+    }
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Known devices changed; broadcasting count="

@@ -118,6 +118,10 @@ add_executable(kerythingd
         kerythingd/ClientConnection.h
         kerythingd/DeviceChangeMonitor.cpp
         kerythingd/DeviceChangeMonitor.h
+        kerythingd/FanotifyWatcher.cpp
+        kerythingd/FanotifyWatcher.h
+        kerythingd/LiveUpdateManager.cpp
+        kerythingd/LiveUpdateManager.h
         kerythingd/ScanJob.h
         kerythingd/ScannerHelper.cpp
         kerythingd/ScannerHelper.h

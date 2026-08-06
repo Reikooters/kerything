@@ -104,6 +104,7 @@ add_executable(kerything
         kerything/SingleInstanceServer.h
         shared/BlockDevice.h
         shared/FileRecord.h
+        shared/LiveUpdateEvent.h
         shared/Protocol.h
         shared/SocketFramer.cpp
         shared/SocketFramer.h
@@ -136,6 +137,7 @@ add_executable(kerythingd
         kerythingd/scanners/NtfsScannerEngine.h
         shared/BlockDevice.h
         shared/FileRecord.h
+        shared/LiveUpdateEvent.h
         shared/Protocol.h
         shared/SocketFramer.cpp
         shared/SocketFramer.h

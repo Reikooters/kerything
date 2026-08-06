@@ -10,6 +10,7 @@
 #include "ScannerWorker.h"
 #include "FileRecord.h"
 #include "BlockDeviceHelper.h"
+#include "LiveUpdateEvent.h"
 
 #include <QObject>
 #include <QPointer>
@@ -41,6 +42,16 @@ public:
     void sendScanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
     void sendScanCancelled(quint32 requestId, const QString& deviceId);
     void sendKnownDevices(quint32 requestId, const std::vector<BlockDevice>& devices);
+    void sendLiveUpdateBatch(
+        const QString& deviceId,
+        const QString& mountPoint,
+        const std::vector<LiveUpdateEvent>& events
+    );
+    void sendLiveUpdateStatusChanged(
+        const QString& deviceId,
+        LiveUpdateStatus status,
+        const QString& reason
+    );
     void sendError(quint32 requestId, const QString& errorText);
 
 Q_SIGNALS:

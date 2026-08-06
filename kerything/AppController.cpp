@@ -14,6 +14,55 @@
 #include "PreferencesDialog.h"
 #include "SingleInstanceServer.h"
 #include "FileRecord.h"
+#include "LiveUpdateEvent.h"
+
+namespace {
+    struct LiveUpdateBatchSummary {
+        qsizetype created = 0;
+        qsizetype deleted = 0;
+        qsizetype movedFrom = 0;
+        qsizetype movedTo = 0;
+        qsizetype metadataChanged = 0;
+        qsizetype selfDeletedOrMoved = 0;
+        qsizetype unknown = 0;
+    };
+
+    LiveUpdateBatchSummary summarizeLiveUpdateBatch(const std::vector<LiveUpdateEvent>& events)
+    {
+        LiveUpdateBatchSummary summary;
+
+        for (const LiveUpdateEvent& event : events) {
+            const NormalizedLiveUpdateEvent normalized = normalizeLiveUpdateEvent(event);
+
+            switch (normalized.kind) {
+                case NormalizedLiveUpdateKind::Created:
+                    ++summary.created;
+                    break;
+                case NormalizedLiveUpdateKind::Deleted:
+                    ++summary.deleted;
+                    break;
+                case NormalizedLiveUpdateKind::MovedFrom:
+                    ++summary.movedFrom;
+                    break;
+                case NormalizedLiveUpdateKind::MovedTo:
+                    ++summary.movedTo;
+                    break;
+                case NormalizedLiveUpdateKind::MetadataChanged:
+                    ++summary.metadataChanged;
+                    break;
+                case NormalizedLiveUpdateKind::SelfDeletedOrMoved:
+                    ++summary.selfDeletedOrMoved;
+                    break;
+                case NormalizedLiveUpdateKind::Unknown:
+                default:
+                    ++summary.unknown;
+                    break;
+            }
+        }
+
+        return summary;
+    }
+}
 
 AppController::AppController(QApplication& app, QObject* parent)
     : QObject(parent),
@@ -338,14 +387,113 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::knownDevices,
-        this, [this](quint32 requestId, const std::vector<BlockDevice>& blockDevices) {
+            this, [this](quint32 requestId, const std::vector<BlockDevice>& blockDevices) {
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::cout << "GUI: received known devices requestId=" << requestId
-                          << " size=" << blockDevices.size() << "\n";
+                std::cout << "GUI: received known devices requestId=" << requestId
+                              << " size=" << blockDevices.size() << "\n";
 #endif
 
-            handleKnownDevicesUpdated(requestId, blockDevices);
-        });
+                handleKnownDevicesUpdated(requestId, blockDevices);
+            });
+
+    connect(daemonClient_, &DaemonClient::liveUpdateBatchReceived,
+            this, [this](
+                const QString& deviceId,
+                const QString& mountPoint,
+                const std::vector<LiveUpdateEvent>& events
+            ) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                const LiveUpdateBatchSummary summary = summarizeLiveUpdateBatch(events);
+
+                std::cout << "GUI: live update batch received"
+                          << " deviceId=" << deviceId.toStdString()
+                          << " mountPoint=" << mountPoint.toStdString()
+                          << " count=" << events.size()
+                          << " created=" << summary.created
+                          << " deleted=" << summary.deleted
+                          << " movedFrom=" << summary.movedFrom
+                          << " movedTo=" << summary.movedTo
+                          << " metadataChanged=" << summary.metadataChanged
+                          << " selfDeletedOrMoved=" << summary.selfDeletedOrMoved
+                          << " unknown=" << summary.unknown
+                          << "\n";
+
+                qsizetype logged = 0;
+                for (const LiveUpdateEvent& event : events) {
+                    if (logged >= 5) {
+                        break;
+                    }
+
+                    const NormalizedLiveUpdateEvent normalized = normalizeLiveUpdateEvent(event);
+
+                    std::cout << "  normalized kind="
+                              << normalizedLiveUpdateKindToString(normalized.kind).toStdString()
+                              << " name=" << normalized.name.toStdString()
+                              << " parentHandle=" << normalized.parentHandleHex.toStdString()
+                              << " objectHandle=" << normalized.objectHandleHex.toStdString()
+                              << "\n";
+
+                    ++logged;
+                }
+#endif
+                Q_UNUSED(deviceId);
+                Q_UNUSED(mountPoint);
+                Q_UNUSED(events);
+            });
+
+    connect(daemonClient_, &DaemonClient::liveUpdateStatusChanged,
+            this, [this](
+                const QString& deviceId,
+                LiveUpdateStatus status,
+                const QString& reason
+            ) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cout << "GUI: live update status changed"
+                          << " deviceId=" << deviceId.toStdString()
+                          << " status=" << liveUpdateStatusToString(status).toStdString()
+                          << " reason=" << reason.toStdString()
+                          << "\n";
+#endif
+
+                QString deviceText = deviceId;
+                if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
+                    if (blockDevice->mounted && !blockDevice->primaryMountPoint.isEmpty()) {
+                        deviceText = blockDevice->primaryMountPoint;
+                    }
+                    else if (!blockDevice->label.isEmpty()) {
+                        deviceText = blockDevice->label;
+                    }
+                    else if (!blockDevice->devNode.isEmpty()) {
+                        deviceText = blockDevice->devNode;
+                    }
+                }
+
+                switch (status) {
+                    case LiveUpdateStatus::Watching:
+                        requestWindowStatusMessage(
+                            QStringLiteral("Live updates active for %1").arg(deviceText),
+                            3000
+                        );
+                        break;
+
+                    case LiveUpdateStatus::NotWatching:
+                        requestWindowStatusMessage(
+                            QStringLiteral("Live updates stopped for %1").arg(deviceText),
+                            5000
+                        );
+                        break;
+
+                    case LiveUpdateStatus::StaleNeedsRescan:
+                        requestWindowStatusMessage(
+                            QStringLiteral("Index may be stale for %1: %2")
+                                .arg(deviceText, reason),
+                            10000
+                        );
+                        break;
+                }
+
+                requestRefreshAllWindows();
+            });
 
     // Primary instance opens its first window on startup.
     openNewWindow();

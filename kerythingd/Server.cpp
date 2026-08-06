@@ -54,6 +54,26 @@ Server::Server(QObject* parent)
     lastKnownDevices_ = BlockDeviceHelper::listKnownDevices();
 
     liveUpdateManager_ = new LiveUpdateManager(this);
+
+    connect(liveUpdateManager_, &LiveUpdateManager::liveUpdateStatusChanged,
+            this, [this](
+                const QString& deviceId,
+                LiveUpdateStatus status,
+                const QString& reason
+            ) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cout << "Live update status changed deviceId="
+                          << deviceId.toStdString()
+                          << " status="
+                          << liveUpdateStatusToString(status).toStdString()
+                          << " reason="
+                          << reason.toStdString()
+                          << "\n";
+#endif
+
+                broadcastLiveUpdateStatusChanged(deviceId, status, reason);
+            });
+
     connect(liveUpdateManager_, &LiveUpdateManager::deviceNeedsRescan,
             this, [](const QString& deviceId, const QString& reason) {
                 std::cerr << "Live update stream became unreliable deviceId="
@@ -61,6 +81,15 @@ Server::Server(QObject* parent)
                           << " reason="
                           << reason.toStdString()
                           << "\n";
+            });
+
+    connect(liveUpdateManager_, &LiveUpdateManager::eventsReady,
+            this, [this](
+                const QString& deviceId,
+                const QString& mountPoint,
+                const std::vector<LiveUpdateEvent>& events
+            ) {
+                broadcastLiveUpdateBatch(deviceId, mountPoint, events);
             });
 
     liveUpdateManager_->setKnownDevices(lastKnownDevices_);
@@ -275,6 +304,16 @@ void Server::addClientConnection(QLocalSocket* socket)
     connection->sendReady();
     connection->sendKnownDevices(0, lastKnownDevices_);
 
+    if (liveUpdateManager_) {
+        for (const LiveUpdateStatusSnapshot& snapshot : liveUpdateManager_->currentStatusSnapshots()) {
+            connection->sendLiveUpdateStatusChanged(
+                snapshot.deviceId,
+                snapshot.status,
+                snapshot.reason
+            );
+        }
+    }
+
     clients_.push_back(connection);
 }
 
@@ -414,6 +453,38 @@ void Server::broadcastKnownDevices(const std::vector<BlockDevice>& devices)
     for (ClientConnection* client : clients_) {
         if (client) {
             client->sendKnownDevices(0, devices);
+        }
+    }
+}
+
+void Server::broadcastLiveUpdateBatch(
+    const QString& deviceId,
+    const QString& mountPoint,
+    const std::vector<LiveUpdateEvent>& events)
+{
+    if (events.empty()) {
+        return;
+    }
+
+    for (ClientConnection* client : clients_) {
+        if (client) {
+            client->sendLiveUpdateBatch(deviceId, mountPoint, events);
+        }
+    }
+}
+
+void Server::broadcastLiveUpdateStatusChanged(
+    const QString& deviceId,
+    LiveUpdateStatus status,
+    const QString& reason)
+{
+    if (deviceId.isEmpty()) {
+        return;
+    }
+
+    for (ClientConnection* client : clients_) {
+        if (client) {
+            client->sendLiveUpdateStatusChanged(deviceId, status, reason);
         }
     }
 }

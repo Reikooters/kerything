@@ -309,6 +309,14 @@ void DaemonClient::handleMessage(const Protocol::MessageHeader& header, const QB
             handleKnownDevices(header, payload);
             break;
 
+        case Protocol::MessageType::LiveUpdateBatch:
+            handleLiveUpdateBatch(header, payload);
+            break;
+
+        case Protocol::MessageType::LiveUpdateStatusChanged:
+            handleLiveUpdateStatusChanged(header, payload);
+            break;
+
         case Protocol::MessageType::Error:
             handleErrorMessage(header, payload);
             break;
@@ -566,6 +574,50 @@ void DaemonClient::handleKnownDevices(const Protocol::MessageHeader& header, con
 #endif
 
     Q_EMIT knownDevices(header.requestId, *blockDevices);
+}
+
+void DaemonClient::handleLiveUpdateBatch(const Protocol::MessageHeader&, const QByteArray& payload)
+{
+    const auto parsed = Protocol::parseLiveUpdateBatchPayload(payload);
+
+    if (!parsed) {
+        std::cerr << "Malformed LiveUpdateBatch payload\n";
+        return;
+    }
+
+    const auto& [deviceId, mountPoint, events] = *parsed;
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "GUI: received live update batch"
+              << " deviceId=" << deviceId.toStdString()
+              << " mountPoint=" << mountPoint.toStdString()
+              << " count=" << events.size()
+              << "\n";
+#endif
+
+    Q_EMIT liveUpdateBatchReceived(deviceId, mountPoint, events);
+}
+
+void DaemonClient::handleLiveUpdateStatusChanged(const Protocol::MessageHeader&, const QByteArray& payload)
+{
+    const auto parsed = Protocol::parseLiveUpdateStatusChangedPayload(payload);
+
+    if (!parsed) {
+        std::cerr << "Malformed LiveUpdateStatusChanged payload\n";
+        return;
+    }
+
+    const auto& [deviceId, status, reason] = *parsed;
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "GUI: received live update status"
+              << " deviceId=" << deviceId.toStdString()
+              << " status=" << liveUpdateStatusToString(status).toStdString()
+              << " reason=" << reason.toStdString()
+              << "\n";
+#endif
+
+    Q_EMIT liveUpdateStatusChanged(deviceId, status, reason);
 }
 
 void DaemonClient::handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload)

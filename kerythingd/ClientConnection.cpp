@@ -338,6 +338,30 @@ void ClientConnection::sendKnownDevices(
     );
 }
 
+void ClientConnection::sendLiveUpdateBatch(
+    const QString& deviceId,
+    const QString& mountPoint,
+    const std::vector<LiveUpdateEvent>& events)
+{
+    sendFrame(
+        Protocol::MessageType::LiveUpdateBatch,
+        0,
+        Protocol::makeLiveUpdateBatchPayload(deviceId, mountPoint, events)
+    );
+}
+
+void ClientConnection::sendLiveUpdateStatusChanged(
+    const QString& deviceId,
+    LiveUpdateStatus status,
+    const QString& reason)
+{
+    sendFrame(
+        Protocol::MessageType::LiveUpdateStatusChanged,
+        0,
+        Protocol::makeLiveUpdateStatusChangedPayload(deviceId, status, reason)
+    );
+}
+
 void ClientConnection::sendError(quint32 requestId, const QString& errorText)
 {
     QByteArray payload;

@@ -9,9 +9,11 @@
 #include <QtCore/QString>
 
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include "BlockDevice.h"
+#include "LiveUpdateEvent.h"
 
 namespace Protocol {
 
@@ -32,6 +34,8 @@ enum class MessageType : quint16 {
     ScanCancelled = 9,
     ListKnownDevices = 10,
     KnownDevices = 11,
+    LiveUpdateBatch = 12,
+    LiveUpdateStatusChanged = 13,
     Error = 99
 };
 
@@ -178,6 +182,138 @@ inline QByteArray makeScanDevicePayload(const QString& deviceId)
     out.setVersion(QDataStream::Qt_6_0);
     out << deviceId;
     return payload;
+}
+
+inline QByteArray makeLiveUpdateBatchPayload(
+    const QString& deviceId,
+    const QString& mountPoint,
+    const std::vector<LiveUpdateEvent>& events)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << deviceId
+        << mountPoint
+        << static_cast<quint32>(events.size());
+
+    for (const LiveUpdateEvent& event : events) {
+        out << event.mask
+            << static_cast<quint32>(event.infos.size());
+
+        for (const LiveUpdateEventInfo& info : event.infos) {
+            out << info.infoType
+                << info.fsidHex
+                << info.handleHex
+                << info.name;
+        }
+    }
+
+    return payload;
+}
+
+inline std::optional<std::tuple<QString, QString, std::vector<LiveUpdateEvent>>>
+parseLiveUpdateBatchPayload(const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    QString deviceId;
+    QString mountPoint;
+    quint32 eventCount = 0;
+
+    in >> deviceId
+       >> mountPoint
+       >> eventCount;
+
+    if (in.status() != QDataStream::Ok) {
+        return std::nullopt;
+    }
+
+    std::vector<LiveUpdateEvent> events;
+    events.reserve(eventCount);
+
+    for (quint32 i = 0; i < eventCount; ++i) {
+        LiveUpdateEvent event;
+        quint32 infoCount = 0;
+
+        in >> event.mask
+           >> infoCount;
+
+        if (in.status() != QDataStream::Ok) {
+            return std::nullopt;
+        }
+
+        event.infos.reserve(infoCount);
+
+        for (quint32 j = 0; j < infoCount; ++j) {
+            LiveUpdateEventInfo info;
+
+            in >> info.infoType
+               >> info.fsidHex
+               >> info.handleHex
+               >> info.name;
+
+            if (in.status() != QDataStream::Ok) {
+                return std::nullopt;
+            }
+
+            event.infos.push_back(std::move(info));
+        }
+
+        events.push_back(std::move(event));
+    }
+
+    return std::make_tuple(std::move(deviceId), std::move(mountPoint), std::move(events));
+}
+
+inline QByteArray makeLiveUpdateStatusChangedPayload(
+    const QString& deviceId,
+    LiveUpdateStatus status,
+    const QString& reason)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << deviceId
+        << static_cast<quint8>(status)
+        << reason;
+
+    return payload;
+}
+
+inline std::optional<std::tuple<QString, LiveUpdateStatus, QString>>
+parseLiveUpdateStatusChangedPayload(const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    QString deviceId;
+    quint8 rawStatus = 0;
+    QString reason;
+
+    in >> deviceId
+       >> rawStatus
+       >> reason;
+
+    if (in.status() != QDataStream::Ok) {
+        return std::nullopt;
+    }
+
+    if (rawStatus > static_cast<quint8>(LiveUpdateStatus::StaleNeedsRescan)) {
+        return std::nullopt;
+    }
+
+    return std::make_tuple(
+        std::move(deviceId),
+        static_cast<LiveUpdateStatus>(rawStatus),
+        std::move(reason)
+    );
 }
 
 } // namespace Protocol

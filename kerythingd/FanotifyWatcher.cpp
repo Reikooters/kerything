@@ -318,12 +318,12 @@ void FanotifyWatcher::captureEvent(const fanotify_event_metadata* metadata)
 
     const ParsedFanotifyInfo parsedInfo = parseFanotifyInfoRecords(metadata);
 
-    PendingEvent pending;
+    LiveUpdateEvent pending;
     pending.mask = metadata->mask;
     pending.infos.reserve(static_cast<std::size_t>(parsedInfo.nameInfos.size()));
 
     for (const FanotifyNameInfo& info : parsedInfo.nameInfos) {
-        PendingInfo pendingInfo;
+        LiveUpdateEventInfo pendingInfo;
         pendingInfo.infoType = info.infoType;
         pendingInfo.fsidHex = info.fsidHex;
         pendingInfo.handleHex = info.handleHex;
@@ -349,62 +349,13 @@ void FanotifyWatcher::flushPendingEvents()
         return;
     }
 
-    logPendingBatch();
+    Q_EMIT eventsReady(
+        deviceId_,
+        mountPoint_,
+        std::move(pendingEvents_)
+    );
+
     pendingEvents_.clear();
-}
-
-void FanotifyWatcher::logPendingBatch()
-{
-    std::cout << "fanotify batch: deviceId="
-              << deviceId_.toStdString()
-              << " mountPoint="
-              << mountPoint_.toStdString()
-              << " count="
-              << pendingEvents_.size()
-              << "\n";
-
-    for (const PendingEvent& event : pendingEvents_) {
-        std::cout << "  event mask="
-                  << maskToString(event.mask).toStdString();
-
-        for (const PendingInfo& info : event.infos) {
-            std::cout << " infoType="
-                      << info.infoType.toStdString()
-                      << " fsid="
-                      << info.fsidHex.toStdString()
-                      << " handle="
-                      << info.handleHex.toStdString();
-
-            if (!info.name.isEmpty()) {
-                std::cout << " name="
-                          << info.name.toStdString();
-            }
-        }
-
-        std::cout << "\n";
-    }
-}
-
-QString FanotifyWatcher::maskToString(quint64 mask)
-{
-    QStringList parts;
-
-    if (mask & FAN_CREATE) parts << QStringLiteral("CREATE");
-    if (mask & FAN_DELETE) parts << QStringLiteral("DELETE");
-    if (mask & FAN_MOVED_FROM) parts << QStringLiteral("MOVED_FROM");
-    if (mask & FAN_MOVED_TO) parts << QStringLiteral("MOVED_TO");
-    if (mask & FAN_RENAME) parts << QStringLiteral("RENAME");
-    if (mask & FAN_CLOSE_WRITE) parts << QStringLiteral("CLOSE_WRITE");
-    if (mask & FAN_ATTRIB) parts << QStringLiteral("ATTRIB");
-    if (mask & FAN_DELETE_SELF) parts << QStringLiteral("DELETE_SELF");
-    if (mask & FAN_MOVE_SELF) parts << QStringLiteral("MOVE_SELF");
-    if (mask & FAN_Q_OVERFLOW) parts << QStringLiteral("Q_OVERFLOW");
-
-    if (parts.isEmpty()) {
-        return QStringLiteral("0x%1").arg(mask, 0, 16);
-    }
-
-    return parts.join(QStringLiteral("|"));
 }
 
 void FanotifyWatcher::closeFanotifyFd()

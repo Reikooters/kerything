@@ -45,6 +45,16 @@ private Q_SLOTS:
 
 private:
     void broadcastKnownDevices(const std::vector<BlockDevice>& devices);
+    void broadcastLiveUpdateBatch(
+        const QString& deviceId,
+        const QString& mountPoint,
+        const std::vector<LiveUpdateEvent>& events
+    );
+    void broadcastLiveUpdateStatusChanged(
+        const QString& deviceId,
+        LiveUpdateStatus status,
+        const QString& reason
+    );
 
     QLocalServer server_;
     QSocketNotifier* systemdSocketNotifier_ = nullptr;

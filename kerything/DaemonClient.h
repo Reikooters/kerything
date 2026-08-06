@@ -14,6 +14,7 @@
 
 #include "BlockDevice.h"
 #include "FileRecord.h"
+#include "LiveUpdateEvent.h"
 
 class AppController;
 
@@ -53,6 +54,16 @@ Q_SIGNALS:
     void scanCancelled(quint32 requestId, const QString& deviceId);
     void scanFailed(quint32 requestId, const QString& errorText);
     void knownDevices(quint32 requestId, const std::vector<BlockDevice>& blockDevices);
+    void liveUpdateBatchReceived(
+        const QString& deviceId,
+        const QString& mountPoint,
+        const std::vector<LiveUpdateEvent>& events
+    );
+    void liveUpdateStatusChanged(
+        const QString& deviceId,
+        LiveUpdateStatus status,
+        const QString& reason
+    );
 
 private Q_SLOTS:
     void tryConnect();
@@ -82,6 +93,8 @@ private:
     void handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleKnownDevices(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleLiveUpdateBatch(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleLiveUpdateStatusChanged(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleErrorMessage(const Protocol::MessageHeader& header, const QByteArray& payload);
 
     AppController* controller_ = nullptr;

@@ -11,6 +11,8 @@
 
 #include <vector>
 
+#include "../shared/LiveUpdateEvent.h"
+
 class FanotifyWatcher final : public QObject {
     Q_OBJECT
 
@@ -29,31 +31,18 @@ public:
     [[nodiscard]] QString deviceId() const;
     [[nodiscard]] QString mountPoint() const;
 
-    Q_SIGNALS:
-        void overflow(QString deviceId);
+Q_SIGNALS:
+    void overflow(QString deviceId);
     void fatalError(QString deviceId, QString errorText);
+    void eventsReady(QString deviceId, QString mountPoint, std::vector<LiveUpdateEvent> events);
 
 private Q_SLOTS:
     void onActivated();
     void flushPendingEvents();
 
 private:
-    struct PendingInfo {
-        QString infoType;
-        QString fsidHex;
-        QString handleHex;
-        QString name;
-    };
-
-    struct PendingEvent {
-        quint64 mask = 0;
-        std::vector<PendingInfo> infos;
-    };
-
-    static QString maskToString(quint64 mask);
     void drainEvents();
     void captureEvent(const struct fanotify_event_metadata* metadata);
-    void logPendingBatch();
     void closeFanotifyFd();
 
     QString deviceId_;
@@ -61,7 +50,7 @@ private:
     int fanotifyFd_ = -1;
     QSocketNotifier* notifier_ = nullptr;
     QTimer batchTimer_;
-    std::vector<PendingEvent> pendingEvents_;
+    std::vector<LiveUpdateEvent> pendingEvents_;
 };
 
 #endif // KERYTHINGD_FANOTIFYWATCHER_H

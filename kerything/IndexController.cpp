@@ -382,6 +382,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     std::vector<LiveUpdateOperation> pendingUpserts;
     pendingUpserts.reserve(operations.size());
 
+    bool trigramIndexNeedsSort = false;
+
     for (const LiveUpdateOperation& operation : operations) {
         if (operation.kind == LiveUpdateOperationKind::Upsert) {
             pendingUpserts.push_back(operation);
@@ -487,6 +489,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                         )) {
                         consumedUpserts[matchingUpsertIdx] = 1;
                         movedAny = true;
+                        trigramIndexNeedsSort = true;
                         ++result.upserted;
                         continue;
                     }
@@ -536,6 +539,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 case UpsertApplyResult::Applied:
                     ++result.upserted;
                     madeProgress = true;
+                    trigramIndexNeedsSort = true;
                     break;
 
                 case UpsertApplyResult::MissingParent:
@@ -559,6 +563,10 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 
         pendingUpserts = std::move(stillPending);
         consumedUpserts.assign(pendingUpserts.size(), 0);
+    }
+
+    if (trigramIndexNeedsSort) {
+        sortLiveUpdateTrigramIndex(*targetIndex);
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -709,20 +717,20 @@ void IndexController::updateFileRecordMetadataFromLiveUpdateOperation(
     record.flags = fileRecordFlagsFromLiveUpdateOperation(operation);
 }
 
-void IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx)
+bool IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx)
 {
     if (recordIdx >= deviceIndex.fileRecords.size()) {
-        return;
+        return false;
     }
 
     const FileRecord& record = deviceIndex.fileRecords[recordIdx];
 
     if (record.nameOffset + record.nameLen > deviceIndex.lowercaseStringPool.size()) {
-        return;
+        return false;
     }
 
     if (record.nameLen < 3) {
-        return;
+        return false;
     }
 
     const std::string_view name(
@@ -742,6 +750,10 @@ void IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t
         uniqueTrigrams.insert(trigram);
     }
 
+    if (uniqueTrigrams.empty()) {
+        return false;
+    }
+
     deviceIndex.flatIndex.reserve(deviceIndex.flatIndex.size() + uniqueTrigrams.size());
 
     for (const uint32_t trigram : uniqueTrigrams) {
@@ -751,7 +763,27 @@ void IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t
         });
     }
 
+    return true;
+}
+
+void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)
+{
+    if (deviceIndex.flatIndex.size() < 2) {
+        return;
+    }
+
     std::sort(std::execution::par, deviceIndex.flatIndex.begin(), deviceIndex.flatIndex.end());
+
+    auto last = std::unique(
+        std::execution::par,
+        deviceIndex.flatIndex.begin(),
+        deviceIndex.flatIndex.end(),
+        [](const auto& a, const auto& b) {
+            return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
+        }
+    );
+
+    deviceIndex.flatIndex.erase(last, deviceIndex.flatIndex.end());
 }
 
 bool IndexController::appendRecordFromLiveUpdateOperation(

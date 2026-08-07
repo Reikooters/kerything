@@ -546,7 +546,8 @@ private:
         FileRecord& record,
         const LiveUpdateOperation& operation
     );
-    static void appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx);
+    static bool appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx);
+    static void sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex);
     static bool appendRecordFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation

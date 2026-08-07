@@ -550,6 +550,11 @@ private:
         DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation
     );
+    static bool updateRecordIdentityFromLiveUpdateOperation(
+        DeviceIndex& deviceIndex,
+        uint32_t recordIdx,
+        const LiveUpdateOperation& operation
+    );
     static UpsertApplyResult applyUpsertOperation(
         DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation

@@ -42,6 +42,86 @@ namespace {
         return nullptr;
     }
 
+    LiveUpdateOperation deleteOperationFromDirectoryEntryEvent(
+        const FanotifyHandleResolver& resolver,
+        const LiveUpdateEvent& event,
+        const QString& fallbackReason)
+    {
+        const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
+
+        LiveUpdateOperation operation;
+        operation.kind = LiveUpdateOperationKind::DeleteEntry;
+
+        if (!entryInfo) {
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = fallbackReason;
+            return operation;
+        }
+
+        operation.name = entryInfo->name;
+
+        const ResolvedFanotifyHandle parent =
+            resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
+
+        if (parent.ok) {
+            operation.parentInode = parent.inode;
+        }
+        else {
+            operation.reason = QStringLiteral("parent inode could not be resolved: %1")
+                .arg(parent.errorText);
+        }
+
+        return operation;
+    }
+
+    LiveUpdateOperation upsertOperationFromDirectoryEntryEvent(
+        const FanotifyHandleResolver& resolver,
+        const LiveUpdateEvent& event,
+        const QString& fallbackReason)
+    {
+        const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
+
+        LiveUpdateOperation operation;
+        operation.kind = LiveUpdateOperationKind::Upsert;
+
+        if (!entryInfo) {
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = fallbackReason;
+            return operation;
+        }
+
+        operation.name = entryInfo->name;
+
+        const ResolvedFanotifyHandle child =
+            resolver.resolveChildByParentHandleAndName(
+                entryInfo->handleHex,
+                entryInfo->handleType,
+                entryInfo->name
+            );
+
+        if (!child.ok) {
+            operation.kind = LiveUpdateOperationKind::Ignored;
+            operation.reason = QStringLiteral("entry no longer exists: %1")
+                .arg(child.errorText);
+            return operation;
+        }
+
+        const ResolvedFanotifyHandle parent =
+            resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
+
+        if (parent.ok) {
+            operation.parentInode = parent.inode;
+        }
+
+        operation.inode = child.inode;
+        operation.size = child.size;
+        operation.modificationTime = child.modificationTime;
+        operation.isDirectory = child.isDirectory;
+        operation.isSymlink = child.isSymlink;
+
+        return operation;
+    }
+
     LiveUpdateOperation operationFromEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event)
@@ -53,11 +133,20 @@ namespace {
             return operation;
         }
 
-        if (event.mask & (FAN_MOVED_FROM | FAN_MOVED_TO)) {
-            LiveUpdateOperation operation;
-            operation.kind = LiveUpdateOperationKind::NeedsRescan;
-            operation.reason = QStringLiteral("move or rename events are not supported yet");
-            return operation;
+        if (event.mask & FAN_MOVED_FROM) {
+            return deleteOperationFromDirectoryEntryEvent(
+                resolver,
+                event,
+                QStringLiteral("move-from event has no directory entry info")
+            );
+        }
+
+        if (event.mask & FAN_MOVED_TO) {
+            return upsertOperationFromDirectoryEntryEvent(
+                resolver,
+                event,
+                QStringLiteral("move-to event has no directory entry info")
+            );
         }
 
         if (event.mask & (FAN_DELETE_SELF | FAN_MOVE_SELF)) {
@@ -68,75 +157,19 @@ namespace {
         }
 
         if (event.mask & FAN_DELETE) {
-            const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
-
-            LiveUpdateOperation operation;
-            operation.kind = LiveUpdateOperationKind::DeleteEntry;
-
-            if (!entryInfo) {
-                operation.kind = LiveUpdateOperationKind::NeedsRescan;
-                operation.reason = QStringLiteral("delete event has no directory entry info");
-                return operation;
-            }
-
-            operation.name = entryInfo->name;
-
-            const ResolvedFanotifyHandle parent =
-                resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
-
-            if (parent.ok) {
-                operation.parentInode = parent.inode;
-            }
-            else {
-                operation.reason = QStringLiteral("parent inode could not be resolved: %1")
-                    .arg(parent.errorText);
-            }
-
-            return operation;
+            return deleteOperationFromDirectoryEntryEvent(
+                resolver,
+                event,
+                QStringLiteral("delete event has no directory entry info")
+            );
         }
 
         if (event.mask & FAN_CREATE) {
-            const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
-
-            LiveUpdateOperation operation;
-            operation.kind = LiveUpdateOperationKind::Upsert;
-
-            if (!entryInfo) {
-                operation.kind = LiveUpdateOperationKind::NeedsRescan;
-                operation.reason = QStringLiteral("create event has no directory entry info");
-                return operation;
-            }
-
-            operation.name = entryInfo->name;
-
-            const ResolvedFanotifyHandle child =
-                resolver.resolveChildByParentHandleAndName(
-                    entryInfo->handleHex,
-                    entryInfo->handleType,
-                    entryInfo->name
-                );
-
-            if (!child.ok) {
-                operation.kind = LiveUpdateOperationKind::Ignored;
-                operation.reason = QStringLiteral("created entry no longer exists: %1")
-                    .arg(child.errorText);
-                return operation;
-            }
-
-            const ResolvedFanotifyHandle parent =
-                resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
-
-            if (parent.ok) {
-                operation.parentInode = parent.inode;
-            }
-
-            operation.inode = child.inode;
-            operation.size = child.size;
-            operation.modificationTime = child.modificationTime;
-            operation.isDirectory = child.isDirectory;
-            operation.isSymlink = child.isSymlink;
-
-            return operation;
+            return upsertOperationFromDirectoryEntryEvent(
+                resolver,
+                event,
+                QStringLiteral("create event has no directory entry info")
+            );
         }
 
         if (event.mask & (FAN_CLOSE_WRITE | FAN_ATTRIB | FAN_MODIFY)) {

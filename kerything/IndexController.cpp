@@ -385,6 +385,13 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     for (const LiveUpdateOperation& operation : operations) {
         if (operation.kind == LiveUpdateOperationKind::Upsert) {
             pendingUpserts.push_back(operation);
+        }
+    }
+
+    std::vector<uint8_t> consumedUpserts(pendingUpserts.size(), 0);
+
+    for (const LiveUpdateOperation& operation : operations) {
+        if (operation.kind == LiveUpdateOperationKind::Upsert) {
             continue;
         }
 
@@ -438,6 +445,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 static_cast<std::size_t>(nameUtf8.size())
             );
 
+            bool movedAny = false;
+
             for (uint32_t recordIdx = 0; recordIdx < targetIndex->fileRecords.size(); ++recordIdx) {
                 if (targetIndex->isDeletedRecord(recordIdx)) {
                     continue;
@@ -453,6 +462,36 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     continue;
                 }
 
+                std::size_t matchingUpsertIdx = pendingUpserts.size();
+
+                for (std::size_t upsertIdx = 0; upsertIdx < pendingUpserts.size(); ++upsertIdx) {
+                    if (consumedUpserts[upsertIdx] != 0) {
+                        continue;
+                    }
+
+                    const LiveUpdateOperation& pendingUpsert = pendingUpserts[upsertIdx];
+
+                    if (pendingUpsert.inode == record.fsIndex) {
+                        matchingUpsertIdx = upsertIdx;
+                        break;
+                    }
+                }
+
+                if (matchingUpsertIdx != pendingUpserts.size()) {
+                    const LiveUpdateOperation& pendingUpsert = pendingUpserts[matchingUpsertIdx];
+
+                    if (updateRecordIdentityFromLiveUpdateOperation(
+                            *targetIndex,
+                            recordIdx,
+                            pendingUpsert
+                        )) {
+                        consumedUpserts[matchingUpsertIdx] = 1;
+                        movedAny = true;
+                        ++result.upserted;
+                        continue;
+                    }
+                }
+
                 deletedCount += targetIndex->markDeletedRecordTree(recordIdx);
             }
 
@@ -463,7 +502,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 // metadata updates, parent lookup, or future live-update matching.
                 targetIndex->rebuildFsIndexMaps();
             }
-            else {
+            else if (!movedAny) {
                 ++result.missingEntry;
             }
 
@@ -478,7 +517,13 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         std::vector<LiveUpdateOperation> stillPending;
         stillPending.reserve(pendingUpserts.size());
 
-        for (const LiveUpdateOperation& operation : pendingUpserts) {
+        for (std::size_t upsertIdx = 0; upsertIdx < pendingUpserts.size(); ++upsertIdx) {
+            if (consumedUpserts[upsertIdx] != 0) {
+                continue;
+            }
+
+            const LiveUpdateOperation& operation = pendingUpserts[upsertIdx];
+
             const UpsertApplyResult upsertResult =
                 applyUpsertOperation(*targetIndex, operation);
 
@@ -508,6 +553,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
 
         pendingUpserts = std::move(stillPending);
+        consumedUpserts.assign(pendingUpserts.size(), 0);
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -765,6 +811,71 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         deviceIndex.directoryFsIndexToRecordIdx[record.fsIndex] = recordIdx;
     }
 
+    appendTrigramsForRecord(deviceIndex, recordIdx);
+
+    return true;
+}
+
+bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
+    DeviceIndex& deviceIndex,
+    uint32_t recordIdx,
+    const LiveUpdateOperation& operation)
+{
+    if (recordIdx >= deviceIndex.fileRecords.size()) {
+        return false;
+    }
+
+    if (operation.inode == 0 || operation.parentInode == 0 || operation.name.isEmpty()) {
+        return false;
+    }
+
+    FileRecord& record = deviceIndex.fileRecords[recordIdx];
+
+    if (record.fsIndex != operation.inode) {
+        return false;
+    }
+
+    uint32_t parentRecordIdx = 0xFFFFFFFF;
+
+    if (operation.parentInode != operation.inode) {
+        const auto parentIt = deviceIndex.directoryFsIndexToRecordIdx.find(operation.parentInode);
+        if (parentIt == deviceIndex.directoryFsIndexToRecordIdx.end()) {
+            return false;
+        }
+
+        parentRecordIdx = parentIt->second;
+    }
+
+    const QByteArray nameUtf8 = operation.name.toUtf8();
+    if (nameUtf8.isEmpty()) {
+        return false;
+    }
+
+    const uint32_t nameOffset = static_cast<uint32_t>(deviceIndex.stringPool.size());
+    const uint32_t nameLen = static_cast<uint32_t>(nameUtf8.size());
+
+    deviceIndex.stringPool.insert(
+        deviceIndex.stringPool.end(),
+        nameUtf8.begin(),
+        nameUtf8.end()
+    );
+
+    deviceIndex.lowercaseStringPool.reserve(
+        deviceIndex.lowercaseStringPool.size() + static_cast<std::size_t>(nameUtf8.size())
+    );
+
+    for (const unsigned char c : nameUtf8) {
+        deviceIndex.lowercaseStringPool.push_back(
+            (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 32) : static_cast<char>(c)
+        );
+    }
+
+    record.parentFsIndex = operation.parentInode;
+    record.parentRecordIdx = parentRecordIdx;
+    record.nameOffset = nameOffset;
+    record.nameLen = nameLen;
+
+    updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
     appendTrigramsForRecord(deviceIndex, recordIdx);
 
     return true;

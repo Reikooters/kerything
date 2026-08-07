@@ -531,11 +531,27 @@ Q_SIGNALS:
     void deviceRemoved(quint64 indexId);
 
 private:
+    enum class UpsertApplyResult : quint8 {
+        Applied,
+        MissingParent,
+        Invalid,
+        NotUpsert
+    };
+
     bool removeDeviceByIndexIdUnlocked(quint64 indexId);
     static bool matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query);
     static quint8 fileRecordFlagsFromLiveUpdateOperation(const LiveUpdateOperation& operation);
     static void updateFileRecordMetadataFromLiveUpdateOperation(
         FileRecord& record,
+        const LiveUpdateOperation& operation
+    );
+    static void appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx);
+    static bool appendRecordFromLiveUpdateOperation(
+        DeviceIndex& deviceIndex,
+        const LiveUpdateOperation& operation
+    );
+    static UpsertApplyResult applyUpsertOperation(
+        DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation
     );
 

@@ -476,14 +476,18 @@ void MainWindow::refreshLiveMetadata()
 {
     liveMetadataRefreshDirty_ = false;
 
-    const int sortColumn = tableView_->horizontalHeader()->sortIndicatorSection();
-
-    if (sortColumn == 2 || sortColumn == 3) {
-        refresh();
+    if (!model_ || !tableView_ || model_->rowCount() <= 0) {
         return;
     }
 
-    if (!model_ || !tableView_ || model_->rowCount() <= 0) {
+    const int sortColumn = tableView_->horizontalHeader()->sortIndicatorSection();
+    const Qt::SortOrder sortOrder = tableView_->horizontalHeader()->sortIndicatorOrder();
+
+    if (sortColumn == 2 || sortColumn == 3) {
+        // Metadata-only updates can affect Size and Modified Date ordering, but
+        // they do not affect search membership. Re-sort the existing result set
+        // instead of doing a full refresh/search.
+        model_->sort(sortColumn, sortOrder);
         return;
     }
 

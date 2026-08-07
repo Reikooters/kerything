@@ -814,14 +814,22 @@ void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)
         return;
     }
 
-    std::sort(
-        std::execution::par,
-        deviceIndex.liveDeltaFlatIndex.begin(),
-        deviceIndex.liveDeltaFlatIndex.end()
-    );
+    static constexpr std::size_t ParallelSortThreshold = 500;
+
+    if (deviceIndex.liveDeltaFlatIndex.size() >= ParallelSortThreshold) {
+        std::sort(
+            std::execution::par,
+            deviceIndex.liveDeltaFlatIndex.begin(),
+            deviceIndex.liveDeltaFlatIndex.end()
+        );
+    } else {
+        std::sort(
+            deviceIndex.liveDeltaFlatIndex.begin(),
+            deviceIndex.liveDeltaFlatIndex.end()
+        );
+    }
 
     auto last = std::unique(
-        std::execution::par,
         deviceIndex.liveDeltaFlatIndex.begin(),
         deviceIndex.liveDeltaFlatIndex.end(),
         [](const auto& a, const auto& b) {
@@ -1325,6 +1333,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         return results;
     }
 
+    static constexpr std::size_t ParallelSortThreshold = 500;
+
     auto handleLess = [](const RecordHandle& a, const RecordHandle& b) {
         if (a.indexId != b.indexId) {
             return a.indexId < b.indexId;
@@ -1340,6 +1350,23 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
 
     std::vector<size_t> resultsOrder(results.size());
     std::iota(resultsOrder.begin(), resultsOrder.end(), size_t{0});
+
+    auto sortOrderIndices = [&](auto&& comparator) {
+        if (resultsOrder.size() >= ParallelSortThreshold) {
+            std::sort(
+                std::execution::par,
+                resultsOrder.begin(),
+                resultsOrder.end(),
+                std::forward<decltype(comparator)>(comparator)
+            );
+        } else {
+            std::sort(
+                resultsOrder.begin(),
+                resultsOrder.end(),
+                std::forward<decltype(comparator)>(comparator)
+            );
+        }
+    };
 
     if (column == 0) { // Name column
         struct NameKey {
@@ -1397,12 +1424,11 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         };
 
         if (sortOrder == Qt::AscendingOrder) {
-            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(), lessByIndex);
+            sortOrderIndices(lessByIndex);
         } else {
-            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(),
-                      [&](size_t lhs, size_t rhs) {
-                          return lessByIndex(rhs, lhs);
-                      });
+            sortOrderIndices([&](size_t lhs, size_t rhs) {
+                return lessByIndex(rhs, lhs);
+            });
         }
     } else if (column == 1) { // Path column
         struct PathKey {
@@ -1463,12 +1489,11 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         };
 
         if (sortOrder == Qt::AscendingOrder) {
-            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(), lessByIndex);
+            sortOrderIndices(lessByIndex);
         } else {
-            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(),
-                      [&](size_t lhs, size_t rhs) {
-                          return lessByIndex(rhs, lhs);
-                      });
+            sortOrderIndices([&](size_t lhs, size_t rhs) {
+                return lessByIndex(rhs, lhs);
+            });
         }
     } else if (column == 2 || column == 3) { // Size or Modification time column
         std::vector<quint64> numericKeys(results.size());
@@ -1509,14 +1534,14 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             return handleLess(handles[lhs], handles[rhs]);
         };
 
-        // Sort using parallel execution policy to leverage multiple CPU cores via TBB
+        // Sort using parallel execution only for large result sets. For smaller
+        // repeated live-refresh sorts, TBB scheduling/yield overhead can dominate.
         if (sortOrder == Qt::AscendingOrder) {
-            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(), lessByIndex);
+            sortOrderIndices(lessByIndex);
         } else {
-            std::sort(std::execution::par, resultsOrder.begin(), resultsOrder.end(),
-                      [&](size_t lhs, size_t rhs) {
-                          return lessByIndex(rhs, lhs);
-                      });
+            sortOrderIndices([&](size_t lhs, size_t rhs) {
+                return lessByIndex(rhs, lhs);
+            });
         }
     } else {
         return results;

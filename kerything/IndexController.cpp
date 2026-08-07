@@ -380,7 +380,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     }
 
     for (const LiveUpdateOperation& operation : operations) {
-        if (operation.kind == LiveUpdateOperationKind::MetadataChanged) {
+        if (operation.kind == LiveUpdateOperationKind::MetadataChanged ||
+            operation.kind == LiveUpdateOperationKind::Upsert) {
             if (operation.inode == 0) {
                 ++result.missingInode;
                 continue;
@@ -390,9 +391,17 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 targetIndex->recordIndicesForFsIndex(operation.inode);
 
             if (!recordIndices || recordIndices->empty()) {
-                ++result.missingInode;
+                if (operation.kind == LiveUpdateOperationKind::Upsert) {
+                    ++result.unsupported;
+                }
+                else {
+                    ++result.missingInode;
+                }
+
                 continue;
             }
+
+            bool updatedAny = false;
 
             for (const uint32_t recordIdx : *recordIndices) {
                 if (recordIdx >= targetIndex->fileRecords.size() ||
@@ -401,11 +410,22 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 }
 
                 FileRecord& record = targetIndex->fileRecords[recordIdx];
-                record.size = operation.size;
-                record.modificationTime = operation.modificationTime;
+                updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
+                updatedAny = true;
             }
 
-            ++result.metadataChanged;
+            if (updatedAny) {
+                if (operation.kind == LiveUpdateOperationKind::Upsert) {
+                    ++result.upserted;
+                }
+                else {
+                    ++result.metadataChanged;
+                }
+            }
+            else {
+                ++result.missingInode;
+            }
+
             continue;
         }
 
@@ -461,10 +481,12 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     std::cout << "IndexController: applied live update operations"
               << " deviceId=" << deviceId.toStdString()
               << " metadataChanged=" << result.metadataChanged
+              << " upserted=" << result.upserted
               << " deleted=" << result.deleted
               << " unsupported=" << result.unsupported
               << " missingDevice=" << result.missingDevice
               << " missingInode=" << result.missingInode
+              << " missingParent=" << result.missingParent
               << " missingEntry=" << result.missingEntry
               << "\n";
 #endif
@@ -575,6 +597,31 @@ bool IndexController::matchesQueryRecordType(const FileRecord& record, const Par
     }
 
     return true;
+}
+
+quint8 IndexController::fileRecordFlagsFromLiveUpdateOperation(
+    const LiveUpdateOperation& operation)
+{
+    quint8 flags = 0;
+
+    if (operation.isDirectory) {
+        flags |= FileRecord_IsDir;
+    }
+
+    if (operation.isSymlink) {
+        flags |= FileRecord_IsSymlink;
+    }
+
+    return flags;
+}
+
+void IndexController::updateFileRecordMetadataFromLiveUpdateOperation(
+    FileRecord& record,
+    const LiveUpdateOperation& operation)
+{
+    record.size = operation.size;
+    record.modificationTime = operation.modificationTime;
+    record.flags = fileRecordFlagsFromLiveUpdateOperation(operation);
 }
 
 IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string_view query)

@@ -22,6 +22,7 @@ namespace {
         resolved.modificationTime = static_cast<qint64>(st.st_mtim.tv_sec);
         resolved.mode = static_cast<quint32>(st.st_mode);
         resolved.isDirectory = S_ISDIR(st.st_mode);
+        resolved.isSymlink = S_ISLNK(st.st_mode);
         return resolved;
     }
 

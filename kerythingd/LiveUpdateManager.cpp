@@ -134,6 +134,7 @@ namespace {
             operation.size = child.size;
             operation.modificationTime = child.modificationTime;
             operation.isDirectory = child.isDirectory;
+            operation.isSymlink = child.isSymlink;
 
             return operation;
         }
@@ -164,6 +165,7 @@ namespace {
             operation.size = object.size;
             operation.modificationTime = object.modificationTime;
             operation.isDirectory = object.isDirectory;
+            operation.isSymlink = object.isSymlink;
 
             return operation;
         }
@@ -195,7 +197,8 @@ namespace {
             operation.kind == LiveUpdateOperationKind::Upsert) {
             std::cout << " size=" << operation.size
                       << " mtime=" << operation.modificationTime
-                      << " isDirectory=" << (operation.isDirectory ? "true" : "false");
+                      << " isDirectory=" << (operation.isDirectory ? "true" : "false")
+                      << " isSymlink=" << (operation.isSymlink ? "true" : "false");
         }
 
         if (!operation.reason.isEmpty()) {

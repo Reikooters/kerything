@@ -62,6 +62,7 @@ struct LiveUpdateOperation {
     quint64 size = 0;
     qint64 modificationTime = 0;
     bool isDirectory = false;
+    bool isSymlink = false;
 
     QString reason;
 };

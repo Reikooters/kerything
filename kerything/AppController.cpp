@@ -528,7 +528,8 @@ bool AppController::start() {
                         operation.kind == LiveUpdateOperationKind::Upsert) {
                         std::cout << " size=" << operation.size
                                   << " mtime=" << operation.modificationTime
-                                  << " isDirectory=" << (operation.isDirectory ? "true" : "false");
+                                  << " isDirectory=" << (operation.isDirectory ? "true" : "false")
+                                  << " isSymlink=" << (operation.isSymlink ? "true" : "false");
                     }
 
                     if (!operation.reason.isEmpty()) {
@@ -548,24 +549,28 @@ bool AppController::start() {
                 const IndexController::LiveUpdateApplyResult result =
                     indexController_->applyLiveUpdateOperations(deviceId, operations);
 
-                if (result.metadataChanged > 0 || result.deleted > 0) {
+                if (result.metadataChanged > 0 || result.upserted > 0 || result.deleted > 0) {
                     requestRefreshAllWindows();
                 }
 
 #ifdef KERYTHING_ENABLE_LOGGING
                 if (result.metadataChanged > 0 ||
+                    result.upserted > 0 ||
                     result.deleted > 0 ||
                     result.unsupported > 0 ||
                     result.missingDevice > 0 ||
                     result.missingInode > 0 ||
+                    result.missingParent > 0 ||
                     result.missingEntry > 0) {
                     std::cout << "GUI: applied live update operation batch"
                               << " deviceId=" << deviceId.toStdString()
                               << " metadataChanged=" << result.metadataChanged
+                              << " upserted=" << result.upserted
                               << " deleted=" << result.deleted
                               << " unsupported=" << result.unsupported
                               << " missingDevice=" << result.missingDevice
                               << " missingInode=" << result.missingInode
+                              << " missingParent=" << result.missingParent
                               << " missingEntry=" << result.missingEntry
                               << "\n";
                 }

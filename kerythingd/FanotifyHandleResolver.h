@@ -15,6 +15,7 @@ struct ResolvedFanotifyHandle {
     qint64 modificationTime = 0;
     quint32 mode = 0;
     bool isDirectory = false;
+    bool isSymlink = false;
 
     QString errorText;
 };

@@ -341,6 +341,7 @@ inline QByteArray makeLiveUpdateOperationBatchPayload(
             << operation.size
             << operation.modificationTime
             << operation.isDirectory
+            << operation.isSymlink
             << operation.reason;
     }
 
@@ -380,6 +381,7 @@ parseLiveUpdateOperationBatchPayload(const QByteArray& payload)
            >> operation.size
            >> operation.modificationTime
            >> operation.isDirectory
+           >> operation.isSymlink
            >> operation.reason;
 
         if (in.status() != QDataStream::Ok) {

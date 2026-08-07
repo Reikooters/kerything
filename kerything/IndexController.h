@@ -456,10 +456,12 @@ public:
 
     struct LiveUpdateApplyResult {
         qsizetype metadataChanged = 0;
+        qsizetype upserted = 0;
         qsizetype deleted = 0;
         qsizetype unsupported = 0;
         qsizetype missingDevice = 0;
         qsizetype missingInode = 0;
+        qsizetype missingParent = 0;
         qsizetype missingEntry = 0;
     };
 
@@ -531,6 +533,11 @@ Q_SIGNALS:
 private:
     bool removeDeviceByIndexIdUnlocked(quint64 indexId);
     static bool matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query);
+    static quint8 fileRecordFlagsFromLiveUpdateOperation(const LiveUpdateOperation& operation);
+    static void updateFileRecordMetadataFromLiveUpdateOperation(
+        FileRecord& record,
+        const LiveUpdateOperation& operation
+    );
 
     quint64 nextIndexId_ = 1;
 

@@ -415,7 +415,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 continue;
             }
 
-            bool deletedAny = false;
+            qsizetype deletedCount = 0;
             const QByteArray nameUtf8 = operation.name.toUtf8();
             const std::string_view operationName(
                 nameUtf8.constData(),
@@ -437,29 +437,15 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     continue;
                 }
 
-                targetIndex->markDeletedRecord(recordIdx);
-                deletedAny = true;
-
-                if ((record.flags & FileRecord_IsDir) != 0) {
-                    targetIndex->directoryFsIndexToRecordIdx.erase(record.fsIndex);
-                }
-
-                if (auto it = targetIndex->fsIndexToRecordIndices.find(record.fsIndex);
-                    it != targetIndex->fsIndexToRecordIndices.end()) {
-                    auto& indices = it->second;
-                    indices.erase(
-                        std::remove(indices.begin(), indices.end(), recordIdx),
-                        indices.end()
-                    );
-
-                    if (indices.empty()) {
-                        targetIndex->fsIndexToRecordIndices.erase(it);
-                    }
-                }
+                deletedCount += targetIndex->markDeletedRecordTree(recordIdx);
             }
 
-            if (deletedAny) {
-                ++result.deleted;
+            if (deletedCount > 0) {
+                result.deleted += deletedCount;
+
+                // Rebuild inode maps so deleted records no longer participate in
+                // metadata updates, parent lookup, or future live-update matching.
+                targetIndex->rebuildFsIndexMaps();
             }
             else {
                 ++result.missingEntry;

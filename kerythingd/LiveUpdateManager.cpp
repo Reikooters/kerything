@@ -210,6 +210,7 @@ namespace {
     {
         QSet<quint64> upsertInodes;
         bool hasDeleteEntry = false;
+        bool hasResolvedDeleteEntry = false;
 
         for (const LiveUpdateOperation& operation : operations) {
             if (operation.kind == LiveUpdateOperationKind::Upsert && operation.inode != 0) {
@@ -217,6 +218,10 @@ namespace {
             }
             else if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
                 hasDeleteEntry = true;
+
+                if (operation.parentInode != 0) {
+                    hasResolvedDeleteEntry = true;
+                }
             }
         }
 
@@ -237,6 +242,12 @@ namespace {
             if (operation.kind == LiveUpdateOperationKind::NeedsRescan &&
                 hasDeleteEntry &&
                 operation.reason == QStringLiteral("object was deleted or moved")) {
+                continue;
+            }
+
+            if (operation.kind == LiveUpdateOperationKind::DeleteEntry &&
+                operation.parentInode == 0 &&
+                hasResolvedDeleteEntry) {
                 continue;
             }
 

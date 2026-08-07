@@ -93,6 +93,52 @@ public:
             }
         }
 
+        [[nodiscard]] qsizetype markDeletedRecordTree(uint32_t rootRecordIdx)
+        {
+            if (rootRecordIdx >= fileRecords.size()) {
+                return 0;
+            }
+
+            if (deletedRecordBitmap.size() < fileRecords.size()) {
+                deletedRecordBitmap.resize(fileRecords.size(), 0);
+            }
+
+            qsizetype deletedCount = 0;
+            std::vector<uint32_t> stack;
+            stack.push_back(rootRecordIdx);
+
+            while (!stack.empty()) {
+                const uint32_t currentRecordIdx = stack.back();
+                stack.pop_back();
+
+                if (currentRecordIdx >= fileRecords.size()) {
+                    continue;
+                }
+
+                if (isDeletedRecord(currentRecordIdx)) {
+                    continue;
+                }
+
+                deletedRecordBitmap[currentRecordIdx] = 1;
+                ++deletedCount;
+
+                for (uint32_t childRecordIdx = 0;
+                     childRecordIdx < static_cast<uint32_t>(fileRecords.size());
+                     ++childRecordIdx) {
+                    if (isDeletedRecord(childRecordIdx)) {
+                        continue;
+                    }
+
+                    const FileRecord& childRecord = fileRecords[childRecordIdx];
+                    if (childRecord.parentRecordIdx == currentRecordIdx) {
+                        stack.push_back(childRecordIdx);
+                    }
+                }
+            }
+
+            return deletedCount;
+        }
+
         [[nodiscard]] std::string_view recordName(uint32_t recordIdx) const
         {
             if (recordIdx >= fileRecords.size()) {

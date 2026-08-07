@@ -458,6 +458,7 @@ public:
         qsizetype metadataChanged = 0;
         qsizetype upserted = 0;
         qsizetype deleted = 0;
+        qsizetype needsRescan = 0;
         qsizetype unsupported = 0;
         qsizetype missingDevice = 0;
         qsizetype missingInode = 0;

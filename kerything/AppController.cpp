@@ -553,10 +553,32 @@ bool AppController::start() {
                     requestRefreshAllWindows();
                 }
 
+                if (result.needsRescan > 0 || result.missingParent > 0 || result.unsupported > 0) {
+                    QString deviceText = deviceId;
+                    if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
+                        if (blockDevice->mounted && !blockDevice->primaryMountPoint.isEmpty()) {
+                            deviceText = blockDevice->primaryMountPoint;
+                        }
+                        else if (!blockDevice->label.isEmpty()) {
+                            deviceText = blockDevice->label;
+                        }
+                        else if (!blockDevice->devNode.isEmpty()) {
+                            deviceText = blockDevice->devNode;
+                        }
+                    }
+
+                    requestWindowStatusMessage(
+                        QStringLiteral("Index may be stale for %1: live update could not be applied safely")
+                            .arg(deviceText),
+                        10000
+                    );
+                }
+
 #ifdef KERYTHING_ENABLE_LOGGING
                 if (result.metadataChanged > 0 ||
                     result.upserted > 0 ||
                     result.deleted > 0 ||
+                    result.needsRescan > 0 ||
                     result.unsupported > 0 ||
                     result.missingDevice > 0 ||
                     result.missingInode > 0 ||
@@ -567,6 +589,7 @@ bool AppController::start() {
                               << " metadataChanged=" << result.metadataChanged
                               << " upserted=" << result.upserted
                               << " deleted=" << result.deleted
+                              << " needsRescan=" << result.needsRescan
                               << " unsupported=" << result.unsupported
                               << " missingDevice=" << result.missingDevice
                               << " missingInode=" << result.missingInode

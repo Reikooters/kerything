@@ -508,6 +508,23 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
 
                 for (const LiveUpdateOperation& operation : operations) {
                     logOperation(operation);
+
+                    if (operation.kind == LiveUpdateOperationKind::NeedsRescan) {
+                        Q_EMIT liveUpdateStatusChanged(
+                            deviceId,
+                            LiveUpdateStatus::StaleNeedsRescan,
+                            operation.reason.isEmpty()
+                                ? QStringLiteral("live update operation requires rescan")
+                                : operation.reason
+                        );
+
+                        Q_EMIT deviceNeedsRescan(
+                            deviceId,
+                            operation.reason.isEmpty()
+                                ? QStringLiteral("live update operation requires rescan")
+                                : operation.reason
+                        );
+                    }
                 }
 
                 Q_EMIT operationsReady(

@@ -89,7 +89,13 @@ Server::Server(QObject* parent)
                 const QString& mountPoint,
                 const std::vector<LiveUpdateEvent>& events
             ) {
+#ifdef KERYTHING_ENABLE_LOGGING
                 broadcastLiveUpdateBatch(deviceId, mountPoint, events);
+#else
+                Q_UNUSED(deviceId);
+                Q_UNUSED(mountPoint);
+                Q_UNUSED(events);
+#endif
             });
 
     connect(liveUpdateManager_, &LiveUpdateManager::operationsReady,

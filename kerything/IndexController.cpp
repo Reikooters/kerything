@@ -509,6 +509,11 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             continue;
         }
 
+        if (operation.kind == LiveUpdateOperationKind::NeedsRescan) {
+            ++result.needsRescan;
+            continue;
+        }
+
         ++result.unsupported;
     }
 
@@ -562,6 +567,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " metadataChanged=" << result.metadataChanged
               << " upserted=" << result.upserted
               << " deleted=" << result.deleted
+              << " needsRescan=" << result.needsRescan
               << " unsupported=" << result.unsupported
               << " missingDevice=" << result.missingDevice
               << " missingInode=" << result.missingInode

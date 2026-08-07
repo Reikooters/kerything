@@ -71,6 +71,17 @@ AppController::AppController(QApplication& app, QObject* parent)
     // so Qt cleans it up automatically with the controller.
     instanceServer_ = new SingleInstanceServer(QStringLiteral("kerything.single_instance_server"), this);
 
+    // Debounce/rate-limit live update refreshes to avoid excessive full
+    // search/sort refreshes when a busy filesystem such as "/" is watched.
+    //
+    // This is intentionally a leading-edge throttle rather than a pure
+    // trailing-edge debounce: on a continuously busy OS drive, a pure debounce
+    // could postpone visible live updates forever.
+    liveUpdateRefreshTimer_.setSingleShot(true);
+    liveUpdateRefreshTimer_.setInterval(1000);
+    connect(&liveUpdateRefreshTimer_, &QTimer::timeout,
+            this, &AppController::requestRefreshAllWindows);
+
     // When another launch asks the primary instance to open a window, route that
     // request into application logic here.
     connect(instanceServer_, &SingleInstanceServer::requestOpenWindow,
@@ -491,8 +502,6 @@ bool AppController::start() {
                         );
                         break;
                 }
-
-                requestRefreshAllWindows();
             });
 
     connect(daemonClient_, &DaemonClient::liveUpdateOperationBatchReceived,
@@ -550,7 +559,7 @@ bool AppController::start() {
                     indexController_->applyLiveUpdateOperations(deviceId, operations);
 
                 if (result.metadataChanged > 0 || result.upserted > 0 || result.deleted > 0) {
-                    requestRefreshAllWindows();
+                    scheduleLiveUpdateRefresh();
                 }
 
                 if (result.needsRescan > 0 || result.missingParent > 0 || result.unsupported > 0) {
@@ -705,12 +714,19 @@ void AppController::requestRefreshAllWindows() {
     // Remove dead entries first so iteration is safe and clean.
     cleanupWindows();
 
-    // Refresh every live window. QPointer becomes null automatically if a window
-    // has already been destroyed.
+    // Refresh every live, visible, non-minimized window. QPointer becomes null
+    // automatically if a window has already been destroyed.
     for (auto& window : windows_) {
-        if (window) {
+        if (window && window->isVisible() && !window->isMinimized()) {
             window->refresh();
         }
+    }
+}
+
+void AppController::scheduleLiveUpdateRefresh()
+{
+    if (!liveUpdateRefreshTimer_.isActive()) {
+        liveUpdateRefreshTimer_.start();
     }
 }
 

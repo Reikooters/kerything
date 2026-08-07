@@ -9,6 +9,7 @@
 #include <QList>
 #include <QHash>
 #include <QSet>
+#include <QTimer>
 
 #include "DaemonClient.h"
 #include "DevicePreferenceChange.h"
@@ -64,6 +65,7 @@ private:
     void maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
     QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
+    void scheduleLiveUpdateRefresh();
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
@@ -84,6 +86,7 @@ private:
 
     QPointer<PreferencesDialog> preferencesDialog_;
     QList<QPointer<MainWindow>> windows_;
+    QTimer liveUpdateRefreshTimer_;
 };
 
 #endif // KERYTHING_APPCONTROLLER_H

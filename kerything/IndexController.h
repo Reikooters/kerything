@@ -76,6 +76,12 @@ public:
         // A single sorted vector of all trigram-record pairs
         std::vector<TrigramEntry> flatIndex;
 
+        // Trigrams added by live updates after the last full scan.
+        //
+        // Keeping these separate avoids re-sorting the full trigram index for
+        // every create/rename event on busy filesystems.
+        std::vector<TrigramEntry> liveDeltaFlatIndex;
+
         [[nodiscard]] bool isDeletedRecord(uint32_t recordIdx) const noexcept
         {
             return recordIdx < deletedRecordBitmap.size() &&
@@ -297,6 +303,9 @@ public:
 #ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Building Flat Trigram Index in parallel..." << std::endl;
 #endif
+
+            // Clear live delta trigram index.
+            liveDeltaFlatIndex.clear();
 
             // 1. Calculate how many trigrams we'll have in total to avoid reallocations
             // (Roughly: sum of all filename lengths - 2)
@@ -546,7 +555,11 @@ private:
         FileRecord& record,
         const LiveUpdateOperation& operation
     );
-    static bool appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx);
+    static bool appendTrigramsForRecord(
+        DeviceIndex& deviceIndex,
+        uint32_t recordIdx,
+        std::vector<TrigramEntry>& targetIndex
+    );
     static void sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex);
     static bool appendRecordFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,

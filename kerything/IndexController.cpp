@@ -9,6 +9,44 @@
 #include <mutex>
 #include <cctype>
 
+namespace {
+    template <typename Fn>
+    void forEachRecordIdxForTrigram(
+        const std::vector<IndexController::TrigramEntry>& index,
+        uint32_t trigram,
+        Fn&& fn)
+    {
+        const auto range = std::equal_range(
+            index.begin(),
+            index.end(),
+            IndexController::TrigramEntry{trigram, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        for (auto it = range.first; it != range.second; ++it) {
+            fn(it->recordIdx);
+        }
+    }
+
+    bool containsTrigram(
+        const std::vector<IndexController::TrigramEntry>& index,
+        uint32_t trigram)
+    {
+        const auto range = std::equal_range(
+            index.begin(),
+            index.end(),
+            IndexController::TrigramEntry{trigram, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        return range.first != range.second;
+    }
+}
+
 IndexController::IndexController(QObject* parent)
     : QObject(parent)
 {
@@ -67,6 +105,7 @@ quint64 IndexController::addDevice(
             deviceIndex.deletedRecordBitmap.clear();
             deviceIndex.lowercaseStringPool.clear();
             deviceIndex.flatIndex.clear();
+            deviceIndex.liveDeltaFlatIndex.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
             deviceIndex.fsIndexToRecordIndices.clear();
             deviceIndex.generation++;
@@ -717,7 +756,10 @@ void IndexController::updateFileRecordMetadataFromLiveUpdateOperation(
     record.flags = fileRecordFlagsFromLiveUpdateOperation(operation);
 }
 
-bool IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t recordIdx)
+bool IndexController::appendTrigramsForRecord(
+    DeviceIndex& deviceIndex,
+    uint32_t recordIdx,
+    std::vector<TrigramEntry>& targetIndex)
 {
     if (recordIdx >= deviceIndex.fileRecords.size()) {
         return false;
@@ -754,10 +796,10 @@ bool IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t
         return false;
     }
 
-    deviceIndex.flatIndex.reserve(deviceIndex.flatIndex.size() + uniqueTrigrams.size());
+    targetIndex.reserve(targetIndex.size() + uniqueTrigrams.size());
 
     for (const uint32_t trigram : uniqueTrigrams) {
-        deviceIndex.flatIndex.push_back({
+        targetIndex.push_back({
             trigram,
             recordIdx
         });
@@ -768,22 +810,26 @@ bool IndexController::appendTrigramsForRecord(DeviceIndex& deviceIndex, uint32_t
 
 void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)
 {
-    if (deviceIndex.flatIndex.size() < 2) {
+    if (deviceIndex.liveDeltaFlatIndex.size() < 2) {
         return;
     }
 
-    std::sort(std::execution::par, deviceIndex.flatIndex.begin(), deviceIndex.flatIndex.end());
+    std::sort(
+        std::execution::par,
+        deviceIndex.liveDeltaFlatIndex.begin(),
+        deviceIndex.liveDeltaFlatIndex.end()
+    );
 
     auto last = std::unique(
         std::execution::par,
-        deviceIndex.flatIndex.begin(),
-        deviceIndex.flatIndex.end(),
+        deviceIndex.liveDeltaFlatIndex.begin(),
+        deviceIndex.liveDeltaFlatIndex.end(),
         [](const auto& a, const auto& b) {
             return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
         }
     );
 
-    deviceIndex.flatIndex.erase(last, deviceIndex.flatIndex.end());
+    deviceIndex.liveDeltaFlatIndex.erase(last, deviceIndex.liveDeltaFlatIndex.end());
 }
 
 bool IndexController::appendRecordFromLiveUpdateOperation(
@@ -849,7 +895,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         deviceIndex.directoryFsIndexToRecordIdx[record.fsIndex] = recordIdx;
     }
 
-    appendTrigramsForRecord(deviceIndex, recordIdx);
+    appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
 
     return true;
 }
@@ -914,7 +960,7 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     record.nameLen = nameLen;
 
     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
-    appendTrigramsForRecord(deviceIndex, recordIdx);
+    appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
 
     return true;
 }
@@ -1153,12 +1199,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                                (static_cast<uint32_t>(std::tolower(kw[i+1])) << 8) |
                                (static_cast<uint32_t>(std::tolower(kw[i+2])));
 
-                // Binary search for the trigram in the flat index
-                auto range = std::equal_range(indexPtr->flatIndex.begin(), indexPtr->flatIndex.end(),
-                                              TrigramEntry{tri, 0},
-                                              [](const auto& a, const auto& b) { return a.trigram < b.trigram; });
+                const bool foundInMainIndex = containsTrigram(indexPtr->flatIndex, tri);
+                const bool foundInLiveDeltaIndex = containsTrigram(indexPtr->liveDeltaFlatIndex, tri);
 
-                if (range.first == range.second) {
+                if (!foundInMainIndex && !foundInLiveDeltaIndex) {
                     // No matches for this trigram on this device.
                     skipDevice = true;
                     break;
@@ -1166,34 +1210,48 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
                 // 3. Intersect candidates (Candidate Filtering)
                 if (firstKeyword) {
-                    // First trigram: populate candidates directly from the range
-                    candidates.reserve(std::distance(range.first, range.second));
+                    forEachRecordIdxForTrigram(indexPtr->flatIndex, tri, [&](uint32_t recordIdx) {
+                        candidates.push_back(recordIdx);
+                    });
 
-                    for (auto it = range.first; it != range.second; ++it) {
-                        candidates.push_back(it->recordIdx);
-                    }
+                    forEachRecordIdxForTrigram(indexPtr->liveDeltaFlatIndex, tri, [&](uint32_t recordIdx) {
+                        candidates.push_back(recordIdx);
+                    });
+
+                    std::sort(candidates.begin(), candidates.end());
+                    candidates.erase(
+                        std::unique(candidates.begin(), candidates.end()),
+                        candidates.end()
+                    );
 
                     firstKeyword = false;
                 } else {
-                    // Subsequent trigrams: intersect existing candidates with the range
+                    std::vector<uint32_t> trigramRecordIndices;
+
+                    forEachRecordIdxForTrigram(indexPtr->flatIndex, tri, [&](uint32_t recordIdx) {
+                        trigramRecordIndices.push_back(recordIdx);
+                    });
+
+                    forEachRecordIdxForTrigram(indexPtr->liveDeltaFlatIndex, tri, [&](uint32_t recordIdx) {
+                        trigramRecordIndices.push_back(recordIdx);
+                    });
+
+                    std::sort(trigramRecordIndices.begin(), trigramRecordIndices.end());
+                    trigramRecordIndices.erase(
+                        std::unique(trigramRecordIndices.begin(), trigramRecordIndices.end()),
+                        trigramRecordIndices.end()
+                    );
+
                     std::vector<uint32_t> nextCandidates;
-                    nextCandidates.reserve(std::min(candidates.size(), static_cast<size_t>(std::distance(range.first, range.second))));
+                    nextCandidates.reserve(std::min(candidates.size(), trigramRecordIndices.size()));
 
-                    // Custom intersection that works between a vector<uint32_t> and a range of TrigramEntry
-                    auto candIt = candidates.begin();
-                    auto rangeIt = range.first;
-
-                    while (candIt != candidates.end() && rangeIt != range.second) {
-                        if (*candIt < rangeIt->recordIdx) {
-                            ++candIt;
-                        } else if (rangeIt->recordIdx < *candIt) {
-                            ++rangeIt;
-                        } else {
-                            nextCandidates.push_back(*candIt);
-                            ++candIt;
-                            ++rangeIt;
-                        }
-                    }
+                    std::set_intersection(
+                        candidates.begin(),
+                        candidates.end(),
+                        trigramRecordIndices.begin(),
+                        trigramRecordIndices.end(),
+                        std::back_inserter(nextCandidates)
+                    );
 
                     candidates = std::move(nextCandidates);
                 }

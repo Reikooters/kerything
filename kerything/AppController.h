@@ -66,6 +66,8 @@ private:
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
     QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
     void scheduleLiveUpdateRefresh();
+    void scheduleLiveMetadataRefresh();
+    void requestLiveMetadataRefreshAllWindows();
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
@@ -87,6 +89,7 @@ private:
     QPointer<PreferencesDialog> preferencesDialog_;
     QList<QPointer<MainWindow>> windows_;
     QTimer liveUpdateRefreshTimer_;
+    QTimer liveMetadataRefreshTimer_;
 };
 
 #endif // KERYTHING_APPCONTROLLER_H

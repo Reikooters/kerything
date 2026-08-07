@@ -82,6 +82,14 @@ AppController::AppController(QApplication& app, QObject* parent)
     connect(&liveUpdateRefreshTimer_, &QTimer::timeout,
             this, &AppController::requestRefreshAllWindows);
 
+    // Metadata-only live updates do not affect filename search membership.
+    // They only need existing visible rows to refresh their displayed metadata
+    // unless a window is currently sorted by size/date.
+    liveMetadataRefreshTimer_.setSingleShot(true);
+    liveMetadataRefreshTimer_.setInterval(1000);
+    connect(&liveMetadataRefreshTimer_, &QTimer::timeout,
+            this, &AppController::requestLiveMetadataRefreshAllWindows);
+
     // When another launch asks the primary instance to open a window, route that
     // request into application logic here.
     connect(instanceServer_, &SingleInstanceServer::requestOpenWindow,
@@ -558,8 +566,11 @@ bool AppController::start() {
                 const IndexController::LiveUpdateApplyResult result =
                     indexController_->applyLiveUpdateOperations(deviceId, operations);
 
-                if (result.metadataChanged > 0 || result.upserted > 0 || result.deleted > 0) {
+                if (result.upserted > 0 || result.deleted > 0) {
                     scheduleLiveUpdateRefresh();
+                }
+                else if (result.metadataChanged > 0) {
+                    scheduleLiveMetadataRefresh();
                 }
 
                 if (result.needsRescan > 0 || result.missingParent > 0 || result.unsupported > 0) {
@@ -714,11 +725,34 @@ void AppController::requestRefreshAllWindows() {
     // Remove dead entries first so iteration is safe and clean.
     cleanupWindows();
 
-    // Refresh every live, visible, non-minimized window. QPointer becomes null
-    // automatically if a window has already been destroyed.
+    // Refresh every live, visible, non-minimized window. Minimized windows are
+    // marked dirty and refreshed once when restored.
     for (auto& window : windows_) {
-        if (window && window->isVisible() && !window->isMinimized()) {
+        if (!window) {
+            continue;
+        }
+
+        if (window->isVisible() && !window->isMinimized()) {
             window->refresh();
+        } else {
+            window->markLiveStructuralRefreshDirty();
+        }
+    }
+}
+
+void AppController::requestLiveMetadataRefreshAllWindows()
+{
+    cleanupWindows();
+
+    for (auto& window : windows_) {
+        if (!window) {
+            continue;
+        }
+
+        if (window->isVisible() && !window->isMinimized()) {
+            window->refreshLiveMetadata();
+        } else {
+            window->markLiveMetadataRefreshDirty();
         }
     }
 }
@@ -727,6 +761,13 @@ void AppController::scheduleLiveUpdateRefresh()
 {
     if (!liveUpdateRefreshTimer_.isActive()) {
         liveUpdateRefreshTimer_.start();
+    }
+}
+
+void AppController::scheduleLiveMetadataRefresh()
+{
+    if (!liveMetadataRefreshTimer_.isActive()) {
+        liveMetadataRefreshTimer_.start();
     }
 }
 

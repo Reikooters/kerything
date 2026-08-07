@@ -285,6 +285,35 @@ void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newR
     endResetModel();
 }
 
+void FileModel::notifyRowsDataChanged(int firstRow, int lastRow)
+{
+    if (searchResults_.empty()) {
+        return;
+    }
+
+    if (firstRow > lastRow) {
+        return;
+    }
+
+    firstRow = std::max(firstRow, 0);
+    lastRow = std::min(lastRow, rowCount() - 1);
+
+    if (firstRow > lastRow) {
+        return;
+    }
+
+    Q_EMIT dataChanged(
+        index(firstRow, 0),
+        index(lastRow, columnCount() - 1),
+        {
+            Qt::DisplayRole,
+            Qt::DecorationRole,
+            Qt::ToolTipRole,
+            Qt::ForegroundRole
+        }
+    );
+}
+
 // const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {
 //     if (!controller_->indexController()) {
 //         return nullptr;

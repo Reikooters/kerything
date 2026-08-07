@@ -36,6 +36,9 @@ public:
     [[nodiscard]] int hoveredRow() const { return hoveredRow_; }
 
     void refresh();
+    void refreshLiveMetadata();
+    void markLiveStructuralRefreshDirty();
+    void markLiveMetadataRefreshDirty();
     void showTemporaryStatus(const QString& text, int timeoutMs);
 
 protected:
@@ -43,6 +46,8 @@ protected:
      * @brief Handles right-click events to show the file context menu.
      */
     void contextMenuEvent(QContextMenuEvent *event) override;
+
+    void changeEvent(QEvent* event) override;
 
     /**
      * @brief Filters events for specific objects in the application.
@@ -156,6 +161,8 @@ private:
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;
     QString activeSearchFilter_;
+    bool liveStructuralRefreshDirty_ = false;
+    bool liveMetadataRefreshDirty_ = false;
 
     int hoveredRow_ = -1;
 };

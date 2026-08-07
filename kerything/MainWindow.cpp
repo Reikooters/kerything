@@ -4,12 +4,14 @@
 #include "MainWindow.h"
 #include "SearchResultTableView.h"
 
+#include <algorithm>
 #include <iostream>
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
 #include <QDesktopServices>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QLabel>
@@ -464,19 +466,80 @@ void MainWindow::updateSearch(const QString &text) {
 }
 
 void MainWindow::refresh() {
-    updateSearch(searchLine_->text());
+    liveStructuralRefreshDirty_ = false;
+    liveMetadataRefreshDirty_ = false;
 
-    // infoLabel_->setText(
-    //     "This window belongs to the primary process.\n"
-    //     "Launching the app again will ask this process to open another window."
-    // );
-    //
-    // counterLabel_->setText(
-    //     QString("Shared counter value: %1\nDaemon connection status: %2\nDaemon ready status: %3")
-    //         .arg(controller_->sharedCounter())
-    //         .arg(controller_->isDaemonConnected() ? "Connected" : "Disconnected")
-    //         .arg(controller_->isDaemonReady() ? "Ready" : "Not Ready")
-    //     );
+    updateSearch(searchLine_->text());
+}
+
+void MainWindow::refreshLiveMetadata()
+{
+    liveMetadataRefreshDirty_ = false;
+
+    const int sortColumn = tableView_->horizontalHeader()->sortIndicatorSection();
+
+    if (sortColumn == 2 || sortColumn == 3) {
+        refresh();
+        return;
+    }
+
+    if (!model_ || !tableView_ || model_->rowCount() <= 0) {
+        return;
+    }
+
+    const QRect visibleRect = tableView_->viewport()->rect();
+    int firstVisibleRow = tableView_->rowAt(visibleRect.top());
+    int lastVisibleRow = tableView_->rowAt(visibleRect.bottom());
+
+    if (firstVisibleRow < 0) {
+        firstVisibleRow = tableView_->indexAt(QPoint(0, 0)).row();
+    }
+
+    if (lastVisibleRow < 0) {
+        lastVisibleRow = tableView_->indexAt(QPoint(0, visibleRect.bottom())).row();
+    }
+
+    if (firstVisibleRow < 0) {
+        firstVisibleRow = 0;
+    }
+
+    if (lastVisibleRow < 0) {
+        lastVisibleRow = std::min(model_->rowCount() - 1, firstVisibleRow + 100);
+    }
+
+    model_->notifyRowsDataChanged(firstVisibleRow, lastVisibleRow);
+}
+
+void MainWindow::markLiveStructuralRefreshDirty()
+{
+    liveStructuralRefreshDirty_ = true;
+}
+
+void MainWindow::markLiveMetadataRefreshDirty()
+{
+    liveMetadataRefreshDirty_ = true;
+}
+
+void MainWindow::changeEvent(QEvent* event)
+{
+    QMainWindow::changeEvent(event);
+
+    if (event->type() != QEvent::WindowStateChange) {
+        return;
+    }
+
+    if (!isVisible() || isMinimized()) {
+        return;
+    }
+
+    if (liveStructuralRefreshDirty_) {
+        refresh();
+        return;
+    }
+
+    if (liveMetadataRefreshDirty_) {
+        refreshLiveMetadata();
+    }
 }
 
 void MainWindow::rebuildFilterMenu()

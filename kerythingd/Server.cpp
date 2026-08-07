@@ -99,13 +99,13 @@ Server::Server(QObject* parent)
             });
 
     connect(liveUpdateManager_, &LiveUpdateManager::operationsReady,
-        this, [this](
-            const QString& deviceId,
-            const QString& mountPoint,
-            const std::vector<LiveUpdateOperation>& operations
-        ) {
-            broadcastLiveUpdateOperationBatch(deviceId, mountPoint, operations);
-        });
+            this, [this](
+                const QString& deviceId,
+                const QString& mountPoint,
+                const std::vector<LiveUpdateOperation>& operations
+            ) {
+                broadcastLiveUpdateOperationBatch(deviceId, mountPoint, operations);
+            });
 
     liveUpdateManager_->setKnownDevices(lastKnownDevices_);
 

@@ -465,17 +465,17 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
     );
 
     connect(watcher, &FanotifyWatcher::overflow,
-        this, [this](const QString& deviceId) {
-            const QString reason = QStringLiteral("fanotify queue overflow");
+            this, [this](const QString& deviceId) {
+                const QString reason = QStringLiteral("fanotify queue overflow");
 
-            Q_EMIT liveUpdateStatusChanged(
-                deviceId,
-                LiveUpdateStatus::StaleNeedsRescan,
-                reason
-            );
+                Q_EMIT liveUpdateStatusChanged(
+                    deviceId,
+                    LiveUpdateStatus::StaleNeedsRescan,
+                    reason
+                );
 
-            Q_EMIT deviceNeedsRescan(deviceId, reason);
-        });
+                Q_EMIT deviceNeedsRescan(deviceId, reason);
+            });
 
     connect(watcher, &FanotifyWatcher::fatalError,
             this, [this](const QString& deviceId, const QString& errorText) {
@@ -494,7 +494,9 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
                 const QString& mountPoint,
                 std::vector<LiveUpdateEvent> events
             ) {
+#ifdef KERYTHING_ENABLE_LOGGING
                 logEventBatch(deviceId, mountPoint, events);
+#endif
 
                 FanotifyHandleResolver resolver(mountPoint);
                 std::vector<LiveUpdateOperation> operations;
@@ -507,7 +509,9 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
                 operations = coalesceOperations(operations);
 
                 for (const LiveUpdateOperation& operation : operations) {
+#ifdef KERYTHING_ENABLE_LOGGING
                     logOperation(operation);
+#endif
 
                     if (operation.kind == LiveUpdateOperationKind::NeedsRescan) {
                         Q_EMIT liveUpdateStatusChanged(
@@ -527,17 +531,23 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
                     }
                 }
 
-                Q_EMIT operationsReady(
-                    deviceId,
-                    mountPoint,
-                    std::move(operations)
-                );
+                if (!operations.empty()) {
+                    Q_EMIT operationsReady(
+                        deviceId,
+                        mountPoint,
+                        std::move(operations)
+                    );
+                }
 
+#ifdef KERYTHING_ENABLE_LOGGING
                 Q_EMIT eventsReady(
                     deviceId,
                     mountPoint,
                     std::move(events)
                 );
+#else
+                Q_UNUSED(events);
+#endif
             });
 
     if (!watcher->start()) {

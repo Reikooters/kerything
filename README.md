@@ -61,6 +61,7 @@ again.
 - **Blazing Fast Indexing:** Uses low level disk partiton scanning to index devices much faster than standard directory crawling.
 - **Offline Indexing:** Supports scanning NTFS and EXT4 partitions even when they are not mounted in Linux.
 - **Instant Search:** Uses trigram indexing for real-time search results as you type.
+- **Live EXT4 Updates:** Tracks mounted EXT4 filesystem changes in real time using Linux `fanotify`, keeping the in-memory index updated for common file operations.
 - **Extension Filters:** Narrow searches by file extension using queries such as `ext:mp4` or `ext:wav;mp3`, or use saved filters from the Filter menu.
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
 - **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning, regular expressions and other complex patterns, Kerything stays lightweight and responsive.
@@ -69,10 +70,18 @@ again.
 - **Drag-and-Drop Support:** Easily copy or attach files by dragging them from the search results into Dolphin or other applications. *(Note: Currently not supported for Flatpak or other sandboxed applications due to portal limitations.)*
 - **Low Overhead:** The index is stored in memory with an emphasis on efficiency. By using string pooling (e.g., storing a folder path only once even if it contains thousands of files), Kerything maintains a surprisingly small memory footprint even for massive partitions.
 
-> [!NOTE]  
-> Live file system updates are not currently supported – simply press F5 within the application to rescan the selected partitions and get an updated index.
-> 
-> Real-time updates using `fanotify` are a planned feature.
+> [!NOTE]
+> Live file system updates are supported for mounted EXT4 filesystems using
+> Linux `fanotify`. Kerything keeps indexed EXT4 devices updated for common
+> operations such as creates, deletes, metadata changes, symlinks, and renames.
+>
+> Live updates currently require the filesystem to be mounted and are provided
+> by the privileged `kerythingd` daemon. NTFS live updates are not currently
+> supported.
+>
+> If the live update stream becomes unreliable, for example due to a fanotify
+> queue overflow or an unsupported edge case, Kerything may mark the index as
+> potentially stale and a full refresh can be performed with F5.
 
 **Native KDE Integration (Optional):**
 
@@ -644,6 +653,105 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now kerythingd.socket
 ```
 
+### Manual live update test checklist
+
+For development, live EXT4 updates can be tested with a mounted EXT4 filesystem,
+including a loop device.
+
+A loop device could be created like so:
+
+```bash
+IMG="$HOME/kerything-test/ext4-test.img"
+MNT="/mnt/kerything-test"
+
+mkdir -p "$(dirname "$IMG")"
+truncate -s 256M "$IMG"
+
+mkfs.ext4 -F -L KERYTEST "$IMG"
+
+LOOPDEV="$(sudo losetup --find --show "$IMG")"
+echo "Loop device: $LOOPDEV"
+
+sudo mkdir -p "$MNT"
+sudo mount "$LOOPDEV" "$MNT"
+
+echo "Mounted at: $MNT"
+findmnt "$MNT"
+```
+
+And later removed with:
+
+```bash
+sudo umount $MNT
+sudo losetup -d $LOOPDEV
+```
+`
+After indexing the mounted device in Kerything, verify:
+
+```bash
+# Create file
+sudo touch /mnt/kerything-test/live-file.txt
+
+# Modify file metadata/content
+sudo sh -c 'echo hello >> /mnt/kerything-test/live-file.txt'
+
+# Rename file
+sudo mv /mnt/kerything-test/live-file.txt /mnt/kerything-test/live-file-renamed.txt
+
+# Delete file
+sudo rm /mnt/kerything-test/live-file-renamed.txt
+
+# Create directory and children
+sudo mkdir /mnt/kerything-test/live-dir
+sudo touch /mnt/kerything-test/live-dir/a.txt
+sudo touch /mnt/kerything-test/live-dir/b.txt
+
+# Rename directory with children
+sudo mv /mnt/kerything-test/live-dir /mnt/kerything-test/live-dir-renamed
+
+# Recursive delete
+sudo rm -r /mnt/kerything-test/live-dir-renamed
+
+# Symlink
+sudo ln -s /mnt/kerything-test /mnt/kerything-test/live-symlink
+sudo rm /mnt/kerything-test/live-symlink
+```
+
+Expected behavior:
+
+- New files and folders appear without pressing F5.
+- Modified size and timestamp update immediately.
+- Renamed files and directories update without losing children.
+- Deleted files and recursive directory contents disappear.
+- Symlinks are shown with symlink icon and metadata.
+- If a live update stream becomes unreliable, Kerything warns that the index may be stale.
+
+### Useful commands while testing
+
+List loop devices:
+
+```bash
+losetup -a
+```
+
+Show block devices:
+
+```bash
+lsblk -f
+```
+
+Watch mount changes:
+
+```bash
+findmnt --poll
+```
+
+Watch udev events:
+
+```bash
+udevadm monitor --kernel --udev --subsystem-match=block
+```
+
 ## Build options
 
 ### KDE integration
@@ -696,7 +804,7 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 
 ## Future Plans
 
-- **Live Updates:** Implementing `fanotify` support for EXT4 partitions to keep the index updated in real-time.
+- **Live Update Expansion:** Extend real-time update support beyond mounted EXT4 filesystems, including additional filesystems and more advanced recovery behavior.
 - **Additional File System Support:** Expanding support to other file systems such as Btrfs.
 
 ## Credits

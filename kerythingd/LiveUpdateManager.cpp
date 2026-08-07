@@ -12,23 +12,6 @@
 #include <linux/fanotify.h>
 
 namespace {
-    struct ParentNameKey {
-        quint64 parentInode = 0;
-        QString name;
-
-        bool operator==(const ParentNameKey& other) const
-        {
-            return parentInode == other.parentInode && name == other.name;
-        }
-    };
-
-    struct ParentNameKeyHash {
-        std::size_t operator()(const ParentNameKey& key) const
-        {
-            return qHashMulti(0, key.parentInode, key.name);
-        }
-    };
-
     const LiveUpdateEventInfo* firstRawInfoOfType(
         const LiveUpdateEvent& event,
         const QString& infoType)

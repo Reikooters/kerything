@@ -548,21 +548,25 @@ bool AppController::start() {
                 const IndexController::LiveUpdateApplyResult result =
                     indexController_->applyLiveUpdateOperations(deviceId, operations);
 
-                if (result.metadataChanged > 0) {
+                if (result.metadataChanged > 0 || result.deleted > 0) {
                     requestRefreshAllWindows();
                 }
 
 #ifdef KERYTHING_ENABLE_LOGGING
                 if (result.metadataChanged > 0 ||
+                    result.deleted > 0 ||
                     result.unsupported > 0 ||
                     result.missingDevice > 0 ||
-                    result.missingInode > 0) {
+                    result.missingInode > 0 ||
+                    result.missingEntry > 0) {
                     std::cout << "GUI: applied live update operation batch"
                               << " deviceId=" << deviceId.toStdString()
                               << " metadataChanged=" << result.metadataChanged
+                              << " deleted=" << result.deleted
                               << " unsupported=" << result.unsupported
                               << " missingDevice=" << result.missingDevice
                               << " missingInode=" << result.missingInode
+                              << " missingEntry=" << result.missingEntry
                               << "\n";
                 }
 #endif

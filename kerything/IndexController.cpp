@@ -3,6 +3,7 @@
 
 #include "IndexController.h"
 
+#include <algorithm>
 #include <iostream>
 #include <shared_mutex>
 #include <mutex>
@@ -63,6 +64,7 @@ quint64 IndexController::addDevice(
             deviceIndex.isReady = false;
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
+            deviceIndex.deletedRecordBitmap.clear();
             deviceIndex.lowercaseStringPool.clear();
             deviceIndex.flatIndex.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
@@ -259,6 +261,7 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     // Insert the new records into the device index.
     // Parent pointers are resolved once after the full scan has completed.
     deviceIndex.fileRecords.insert(deviceIndex.fileRecords.end(), records.begin(), records.end());
+    deviceIndex.deletedRecordBitmap.resize(deviceIndex.fileRecords.size(), 0);
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: The index now contains " << deviceIndex.fileRecords.size()
@@ -377,44 +380,106 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     }
 
     for (const LiveUpdateOperation& operation : operations) {
-        if (operation.kind != LiveUpdateOperationKind::MetadataChanged) {
-            ++result.unsupported;
-            continue;
-        }
-
-        if (operation.inode == 0) {
-            ++result.missingInode;
-            continue;
-        }
-
-        const std::vector<uint32_t>* recordIndices =
-            targetIndex->recordIndicesForFsIndex(operation.inode);
-
-        if (!recordIndices || recordIndices->empty()) {
-            ++result.missingInode;
-            continue;
-        }
-
-        for (const uint32_t recordIdx : *recordIndices) {
-            if (recordIdx >= targetIndex->fileRecords.size()) {
+        if (operation.kind == LiveUpdateOperationKind::MetadataChanged) {
+            if (operation.inode == 0) {
+                ++result.missingInode;
                 continue;
             }
 
-            FileRecord& record = targetIndex->fileRecords[recordIdx];
-            record.size = operation.size;
-            record.modificationTime = operation.modificationTime;
+            const std::vector<uint32_t>* recordIndices =
+                targetIndex->recordIndicesForFsIndex(operation.inode);
+
+            if (!recordIndices || recordIndices->empty()) {
+                ++result.missingInode;
+                continue;
+            }
+
+            for (const uint32_t recordIdx : *recordIndices) {
+                if (recordIdx >= targetIndex->fileRecords.size() ||
+                    targetIndex->isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                FileRecord& record = targetIndex->fileRecords[recordIdx];
+                record.size = operation.size;
+                record.modificationTime = operation.modificationTime;
+            }
+
+            ++result.metadataChanged;
+            continue;
         }
 
-        ++result.metadataChanged;
+        if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
+            if (operation.parentInode == 0 || operation.name.isEmpty()) {
+                ++result.missingEntry;
+                continue;
+            }
+
+            bool deletedAny = false;
+            const QByteArray nameUtf8 = operation.name.toUtf8();
+            const std::string_view operationName(
+                nameUtf8.constData(),
+                static_cast<std::size_t>(nameUtf8.size())
+            );
+
+            for (uint32_t recordIdx = 0; recordIdx < targetIndex->fileRecords.size(); ++recordIdx) {
+                if (targetIndex->isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = targetIndex->fileRecords[recordIdx];
+
+                if (record.parentFsIndex != operation.parentInode) {
+                    continue;
+                }
+
+                if (targetIndex->recordName(recordIdx) != operationName) {
+                    continue;
+                }
+
+                targetIndex->markDeletedRecord(recordIdx);
+                deletedAny = true;
+
+                if ((record.flags & FileRecord_IsDir) != 0) {
+                    targetIndex->directoryFsIndexToRecordIdx.erase(record.fsIndex);
+                }
+
+                if (auto it = targetIndex->fsIndexToRecordIndices.find(record.fsIndex);
+                    it != targetIndex->fsIndexToRecordIndices.end()) {
+                    auto& indices = it->second;
+                    indices.erase(
+                        std::remove(indices.begin(), indices.end(), recordIdx),
+                        indices.end()
+                    );
+
+                    if (indices.empty()) {
+                        targetIndex->fsIndexToRecordIndices.erase(it);
+                    }
+                }
+            }
+
+            if (deletedAny) {
+                ++result.deleted;
+            }
+            else {
+                ++result.missingEntry;
+            }
+
+            continue;
+        }
+
+        ++result.unsupported;
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: applied live update operations"
               << " deviceId=" << deviceId.toStdString()
               << " metadataChanged=" << result.metadataChanged
+              << " deleted=" << result.deleted
               << " unsupported=" << result.unsupported
               << " missingDevice=" << result.missingDevice
               << " missingInode=" << result.missingInode
+              << " missingEntry=" << result.missingEntry
               << "\n";
 #endif
 
@@ -656,6 +721,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
             const auto& index = *indexPtr;
             for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
+                if (index.isDeletedRecord(i)) {
+                    continue;
+                }
+
                 const FileRecord& rec = index.fileRecords[i];
 
                 if (rec.nameOffset + rec.nameLen > index.lowercaseStringPool.size()) {
@@ -770,6 +839,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         // If no trigrams were used (all keywords < 3 chars), we scan everything.
         // Otherwise, we only scan the filtered candidates.
         auto resultCallback = [&](uint32_t recordIdx) {
+            if (indexPtr->isDeletedRecord(recordIdx)) {
+                return;
+            }
+
             const auto& rec = indexPtr->fileRecords[recordIdx];
 
             if (rec.nameOffset + rec.nameLen > indexPtr->lowercaseStringPool.size()) {
@@ -856,7 +929,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
 
                 const auto* device = it->second.get();
                 if (!device || !device->isReady || device->generation != handle.generation
-                    || handle.recordIdx >= device->fileRecords.size()) {
+                    || handle.recordIdx >= device->fileRecords.size()
+                    || device->isDeletedRecord(handle.recordIdx)) {
                     continue;
                 }
 
@@ -918,7 +992,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
 
                 const auto* device = it->second.get();
                 if (!device || !device->isReady || device->generation != handle.generation
-                    || handle.recordIdx >= device->fileRecords.size()) {
+                    || handle.recordIdx >= device->fileRecords.size()
+                    || device->isDeletedRecord(handle.recordIdx)) {
                     continue;
                 }
 
@@ -977,7 +1052,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
 
                 const auto* device = it->second.get();
                 if (!device || !device->isReady || device->generation != handle.generation
-                    || handle.recordIdx >= device->fileRecords.size()) {
+                    || handle.recordIdx >= device->fileRecords.size()
+                    || device->isDeletedRecord(handle.recordIdx)) {
                     continue;
                 }
 

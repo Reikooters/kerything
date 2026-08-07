@@ -66,6 +66,7 @@ public:
 
         std::vector<FileRecord> fileRecords;
         std::vector<char> stringPool;
+        std::vector<uint8_t> deletedRecordBitmap;
         std::unordered_map<uint64_t, uint32_t> directoryFsIndexToRecordIdx;
         std::unordered_map<uint64_t, std::vector<uint32_t>> fsIndexToRecordIndices;
 
@@ -75,6 +76,37 @@ public:
         // A single sorted vector of all trigram-record pairs
         std::vector<TrigramEntry> flatIndex;
 
+        [[nodiscard]] bool isDeletedRecord(uint32_t recordIdx) const noexcept
+        {
+            return recordIdx < deletedRecordBitmap.size() &&
+                   deletedRecordBitmap[recordIdx] != 0;
+        }
+
+        void markDeletedRecord(uint32_t recordIdx)
+        {
+            if (recordIdx >= deletedRecordBitmap.size()) {
+                deletedRecordBitmap.resize(fileRecords.size(), 0);
+            }
+
+            if (recordIdx < deletedRecordBitmap.size()) {
+                deletedRecordBitmap[recordIdx] = 1;
+            }
+        }
+
+        [[nodiscard]] std::string_view recordName(uint32_t recordIdx) const
+        {
+            if (recordIdx >= fileRecords.size()) {
+                return {};
+            }
+
+            const FileRecord& record = fileRecords[recordIdx];
+            if (record.nameOffset + record.nameLen > stringPool.size()) {
+                return {};
+            }
+
+            return std::string_view(&stringPool[record.nameOffset], record.nameLen);
+        }
+
         void rebuildFsIndexMaps() {
             directoryFsIndexToRecordIdx.clear();
             fsIndexToRecordIndices.clear();
@@ -83,6 +115,10 @@ public:
             fsIndexToRecordIndices.reserve(fileRecords.size());
 
             for (uint32_t i = 0; i < fileRecords.size(); ++i) {
+                if (isDeletedRecord(i)) {
+                    continue;
+                }
+
                 const FileRecord& rec = fileRecords[i];
 
                 // Full inode/filesystem-index map.
@@ -374,9 +410,11 @@ public:
 
     struct LiveUpdateApplyResult {
         qsizetype metadataChanged = 0;
+        qsizetype deleted = 0;
         qsizetype unsupported = 0;
         qsizetype missingDevice = 0;
         qsizetype missingInode = 0;
+        qsizetype missingEntry = 0;
     };
 
     const DeviceIndex* deviceIndex(quint64 indexId) const;

@@ -458,6 +458,12 @@ public:
         uint32_t mountPointIdx = 0xFFFFFFFF;
     };
 
+    struct SortScratch {
+        std::vector<uint32_t> resultsOrder;
+        std::vector<RecordHandle> sortedResults;
+        std::vector<quint64> numericKeys;
+    };
+
     struct ParsedSearchQuery {
         std::vector<std::string> keywords;
         std::unordered_set<std::string> extensions;
@@ -502,6 +508,12 @@ public:
     );
     std::vector<RecordHandle> performTrigramSearch(const std::string& query);
     std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;
+    std::vector<RecordHandle> sortSearchResults(
+        std::vector<RecordHandle> results,
+        int column,
+        Qt::SortOrder sortOrder,
+        SortScratch& scratch
+    ) const;
     void resolveParentPointersByRequestId(quint32 requestId);
     void buildLowercaseStringPoolByRequestId(quint32 requestId);
     void sortByNameAscendingParallelByRequestId(quint32 requestId);

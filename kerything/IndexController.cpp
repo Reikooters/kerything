@@ -1475,7 +1475,21 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     return results;
 }
 
-std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const {
+std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
+    std::vector<RecordHandle> results,
+    int column,
+    Qt::SortOrder sortOrder
+) const {
+    SortScratch scratch;
+    return sortSearchResults(std::move(results), column, sortOrder, scratch);
+}
+
+std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
+    std::vector<RecordHandle> results,
+    int column,
+    Qt::SortOrder sortOrder,
+    SortScratch& scratch
+) const {
     if (results.size() < 2) {
         return results;
     }
@@ -1495,8 +1509,10 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         return a.mountPointIdx < b.mountPointIdx;
     };
 
-    std::vector<uint32_t> resultsOrder(results.size());
-    std::iota(resultsOrder.begin(), resultsOrder.end(), uint32_t{0});
+    scratch.resultsOrder.resize(results.size());
+    std::iota(scratch.resultsOrder.begin(), scratch.resultsOrder.end(), uint32_t{0});
+
+    auto& resultsOrder = scratch.resultsOrder;
 
     auto sortOrderIndices = [&](auto&& comparator) {
         if (resultsOrder.size() >= ParallelSortThreshold) {
@@ -1639,7 +1655,10 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             });
         }
     } else if (column == 2 || column == 3) { // Size or Modification time column
-        std::vector<quint64> numericKeys(results.size());
+        scratch.numericKeys.clear();
+        scratch.numericKeys.resize(results.size());
+
+        auto& numericKeys = scratch.numericKeys;
 
         {
             std::shared_lock lock(indexMutex_);
@@ -1657,7 +1676,7 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
                     || handle.recordIdx >= device->fileRecords.size()
                     || device->isDeletedRecord(handle.recordIdx)) {
                     continue;
-                }
+                    }
 
                 const auto& record = device->fileRecords[handle.recordIdx];
                 numericKeys[i] = (column == 2) ? record.size : record.modificationTime;
@@ -1682,14 +1701,14 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         return results;
     }
 
-    std::vector<RecordHandle> sorted;
-    sorted.resize(results.size());
+    scratch.sortedResults.resize(results.size());
 
     for (size_t i = 0; i < resultsOrder.size(); ++i) {
-        sorted[i] = std::move(results[resultsOrder[i]]);
+        scratch.sortedResults[i] = std::move(results[resultsOrder[i]]);
     }
 
-    return sorted;
+    results.swap(scratch.sortedResults);
+    return results;
 }
 
 void IndexController::resolveParentPointersByRequestId(quint32 requestId) {

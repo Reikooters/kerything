@@ -27,6 +27,16 @@ public:
      */
     void setSearchResults(std::vector<IndexController::RecordHandle> newResults);
 
+    /**
+     * @brief Sorts the given results using the model's reusable scratch buffers,
+     * then replaces the current model contents with one model reset.
+     */
+    void setSortedSearchResults(
+        std::vector<IndexController::RecordHandle> newResults,
+        int column,
+        Qt::SortOrder order = Qt::AscendingOrder
+    );
+
     void notifyRowsDataChanged(int firstRow, int lastRow);
 
     /**
@@ -102,6 +112,7 @@ private:
 
     AppController* controller_ = nullptr;
     std::vector<IndexController::RecordHandle> searchResults_;
+    IndexController::SortScratch sortScratch_;
 };
 
 #endif //KERYTHING_FILEMODEL_H

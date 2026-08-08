@@ -285,6 +285,25 @@ void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newR
     endResetModel();
 }
 
+void FileModel::setSortedSearchResults(
+    std::vector<IndexController::RecordHandle> newResults,
+    int column,
+    Qt::SortOrder order
+) {
+    if (controller_ && controller_->indexController() && !newResults.empty()) {
+        newResults = controller_->indexController()->sortSearchResults(
+            std::move(newResults),
+            column,
+            order,
+            sortScratch_
+        );
+    }
+
+    beginResetModel();
+    searchResults_ = std::move(newResults);
+    endResetModel();
+}
+
 void FileModel::notifyRowsDataChanged(int firstRow, int lastRow)
 {
     if (searchResults_.empty()) {
@@ -363,7 +382,8 @@ void FileModel::sort(int column, Qt::SortOrder order) {
     searchResults_ = controller_->indexController()->sortSearchResults(
         std::move(searchResults_),
         column,
-        order
+        order,
+        sortScratch_
     );
 
     endResetModel();

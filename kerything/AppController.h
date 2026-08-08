@@ -62,6 +62,7 @@ private:
     void updateIndexedDeviceRuntimeStates(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] std::optional<BlockDevice> knownDeviceById(const QString& deviceId) const;
     [[nodiscard]] bool isKnownDeviceMounted(const QString& deviceId) const;
+    [[nodiscard]] bool deviceSupportsLiveUpdates(const QString& deviceId) const;
     void maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
     QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
@@ -71,6 +72,7 @@ private:
     void addLiveUpdateIndexedDevice(const QString& deviceId);
     void removeLiveUpdateIndexedDevice(const QString& deviceId);
     [[nodiscard]] bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
+    bool requestScanForDeviceId(const QString& deviceId);
     void syncLiveUpdateDevices();
 
     QApplication& app_;

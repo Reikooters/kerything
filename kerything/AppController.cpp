@@ -1052,7 +1052,19 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
         }
 
         if (change.enabled && change.liveUpdatesEnabledChanged()) {
-            syncLiveUpdateDevices();
+            if (!change.liveUpdatesEnabled) {
+                removeLiveUpdateIndexedDevice(change.deviceId);
+            }
+            else if (deviceSupportsLiveUpdates(change.deviceId)) {
+                if (requestScanForDeviceId(change.deviceId)) {
+                    requestWindowStatusMessage(
+                        QStringLiteral("Refreshing index before enabling live updates…"),
+                        3000
+                    );
+                } else {
+                    syncLiveUpdateDevices();
+                }
+            }
         }
     }
 
@@ -1214,6 +1226,90 @@ bool AppController::isKnownDeviceMounted(const QString& deviceId) const
     return blockDevice && blockDevice->mounted;
 }
 
+bool AppController::deviceSupportsLiveUpdates(const QString& deviceId) const
+{
+    const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId);
+
+    if (blockDevice) {
+        return blockDevice->fsType == QStringLiteral("ext4");
+    }
+
+    const std::optional<IndexedDevicePreference> preference =
+        preferences_.indexedDevicePreference(deviceId);
+
+    return preference && preference->fsType == QStringLiteral("ext4");
+}
+
+bool AppController::requestScanForDeviceId(const QString& deviceId)
+{
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    if (!daemonClient_ || !daemonClient_->isReady()) {
+        requestWindowStatusMessage(
+            QStringLiteral("Cannot refresh index: daemon is not ready."),
+            5000
+        );
+        return false;
+    }
+
+    if (activeScanDeviceIds_.contains(deviceId)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cout << "GUI: skipping requested scan because device is already queued/scanning deviceId="
+                  << deviceId.toStdString()
+                  << "\n";
+#endif
+        return true;
+    }
+
+    const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId);
+    if (!blockDevice) {
+        requestWindowStatusMessage(
+            QStringLiteral("Cannot refresh index: device is no longer known."),
+            5000
+        );
+        return false;
+    }
+
+    if (!preferences_.isDeviceEnabled(deviceId)) {
+        return false;
+    }
+
+    const std::optional<IndexedDevicePreference> preference =
+        preferences_.indexedDevicePreference(deviceId);
+
+    if (!blockDevice->mounted && (!preference || !preference->scanWhenUnmounted)) {
+        requestWindowStatusMessage(
+            QStringLiteral("Cannot refresh index: device is not mounted."),
+            5000
+        );
+        return false;
+    }
+
+    const QByteArray payload = Protocol::makeScanDevicePayload(deviceId);
+
+    quint32 requestId = 0;
+    if (!daemonClient_->sendRequest(Protocol::MessageType::ScanDevice, payload, &requestId)) {
+        std::cerr << "GUI: failed to send ScanDevice request for deviceId="
+                  << deviceId.toStdString()
+                  << "\n";
+        return false;
+    }
+
+    scanRequestDeviceIds_.insert(requestId, deviceId);
+    activeScanDeviceIds_.insert(deviceId);
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "GUI: ScanDevice request sent requestId=" << requestId
+              << " deviceId=" << deviceId.toStdString()
+              << " fsType=" << blockDevice->fsType.toStdString()
+              << "\n";
+#endif
+
+    return true;
+}
+
 bool AppController::validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const {
     const QString expectedDeviceId = scanRequestDeviceIds_.value(requestId);
 
@@ -1281,6 +1377,10 @@ void AppController::removeLiveUpdateIndexedDevice(const QString& deviceId)
 bool AppController::liveUpdatesEnabledForDevice(const QString& deviceId) const
 {
     if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    if (!deviceSupportsLiveUpdates(deviceId)) {
         return false;
     }
 

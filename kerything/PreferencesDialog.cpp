@@ -369,10 +369,31 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         scanWhenUnmountedCheckBox_->setEnabled(true);
         showOfflineResultsCheckBox_->setEnabled(true);
-        liveUpdatesEnabledCheckBox_->setEnabled(true);
+
+        const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
+        liveUpdatesEnabledCheckBox_->setEnabled(liveUpdatesSupported);
+
         scanWhenUnmountedCheckBox_->setChecked(scanWhenUnmountedForDevice(deviceId));
         showOfflineResultsCheckBox_->setChecked(showOfflineResultsForDevice(deviceId));
-        liveUpdatesEnabledCheckBox_->setChecked(liveUpdatesEnabledForDevice(deviceId));
+        liveUpdatesEnabledCheckBox_->setChecked(
+            liveUpdatesSupported && liveUpdatesEnabledForDevice(deviceId)
+        );
+
+        if (liveUpdatesSupported) {
+            liveUpdatesEnabledCheckBox_->setText(
+                QStringLiteral("Watch this device for real-time updates when mounted")
+            );
+            liveUpdatesEnabledCheckBox_->setToolTip(
+                QStringLiteral("Kerything will keep this EXT4 device up to date using fanotify while it is mounted.")
+            );
+        } else {
+            liveUpdatesEnabledCheckBox_->setText(
+                QStringLiteral("Watch this device for real-time updates when mounted (EXT4 only)")
+            );
+            liveUpdatesEnabledCheckBox_->setToolTip(
+                QStringLiteral("Real-time updates currently require EXT4. This device uses a different filesystem.")
+            );
+        }
     };
 
     connect(deviceTable_, &QTableWidget::currentCellChanged, this, updateSelectedDeviceOptions);
@@ -906,6 +927,22 @@ bool PreferencesDialog::liveUpdatesEnabledForDevice(const QString& deviceId) con
     return true;
 }
 
+bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) const
+{
+    const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
+    if (knownDeviceIt != knownDeviceById_.constEnd()) {
+        return knownDeviceIt->fsType == QStringLiteral("ext4");
+    }
+
+    const IndexedDevicePreference preference =
+        originalPreferencesByDeviceId_.value(
+            deviceId,
+            IndexedDevicePreference{ .deviceId = deviceId }
+        );
+
+    return preference.fsType == QStringLiteral("ext4");
+}
+
 std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
 {
     std::vector<SearchFilterPreference> filters;
@@ -1176,7 +1213,11 @@ bool PreferencesDialog::hasDeviceChanges() const
             return true;
         }
 
-        if (item->data(LiveUpdatesEnabledRole).toBool() != original.liveUpdatesEnabled) {
+        const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
+        const bool liveUpdatesEnabled =
+            liveUpdatesSupported && item->data(LiveUpdatesEnabledRole).toBool();
+
+        if (liveUpdatesEnabled != original.liveUpdatesEnabled) {
             return true;
         }
     }
@@ -1265,7 +1306,9 @@ void PreferencesDialog::applyChanges()
         const bool originallyEnabled = original.enabled;
         const bool scanWhenUnmounted = item->data(ScanWhenUnmountedRole).toBool();
         const bool showOfflineResults = item->data(ShowOfflineResultsRole).toBool();
-        const bool liveUpdatesEnabled = item->data(LiveUpdatesEnabledRole).toBool();
+        const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
+        const bool liveUpdatesEnabled =
+            liveUpdatesSupported && item->data(LiveUpdatesEnabledRole).toBool();
 
         const BlockDevice& blockDevice = blockDeviceIt.value();
 
@@ -1303,9 +1346,10 @@ void PreferencesDialog::applyChanges()
                 .wasLiveUpdatesEnabled = original.liveUpdatesEnabled,
                 .liveUpdatesEnabled = liveUpdatesEnabled,
             });
-        }
+            }
 
         item->setData(InitialEnabledRole, enabled);
+        item->setData(LiveUpdatesEnabledRole, liveUpdatesEnabled);
     }
 
     originalPreferencesByDeviceId_.clear();

@@ -69,6 +69,7 @@ private:
     void maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] bool validateScanDeviceId(quint32 requestId, const QString& actualDeviceId, const char* eventName) const;
     QString takeTrackedScanDeviceId(quint32 requestId, const QString& fallbackDeviceId = {});
+    [[nodiscard]] int liveRefreshIntervalMs() const;
     void scheduleLiveUpdateRefresh();
     void scheduleLiveMetadataRefresh();
     void requestLiveMetadataRefreshAllWindows();

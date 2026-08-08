@@ -482,12 +482,19 @@ void MainWindow::updateSearch(const QString &text) {
     }
 
     auto results = controller_->indexController()->performTrigramSearch(effectiveQuery.toStdString());
-    model_->setSearchResults(std::move(results));
     auto end1 = std::chrono::steady_clock::now();
 
     auto start2 = std::chrono::steady_clock::now();
-    int sortCol = tableView_->horizontalHeader()->sortIndicatorSection();
-    model_->sort(sortCol, tableView_->horizontalHeader()->sortIndicatorOrder());
+    const int sortCol = tableView_->horizontalHeader()->sortIndicatorSection();
+    const Qt::SortOrder sortOrder = tableView_->horizontalHeader()->sortIndicatorOrder();
+
+    results = controller_->indexController()->sortSearchResults(
+        std::move(results),
+        sortCol,
+        sortOrder
+    );
+
+    model_->setSearchResults(std::move(results));
     restoreSelectedRecordHandles(selectedHandles, currentHandle);
     auto end2 = std::chrono::steady_clock::now();
 
@@ -496,11 +503,35 @@ void MainWindow::updateSearch(const QString &text) {
     std::chrono::duration<double> elapsed = end2 - start1;
 
     // Update status bar
-    statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort: %4s)")
+    statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort/apply: %4s)")
         .arg(model_->rowCount())
         .arg(elapsed.count(), 0, 'f', 4)
         .arg(elapsed1.count(), 0, 'f', 4)
         .arg(elapsed2.count(), 0, 'f', 4));
+}
+
+int MainWindow::hoveredRow() const {
+    return hoveredRow_;
+}
+
+int MainWindow::resultCount() const
+{
+    return model_ ? model_->rowCount() : 0;
+}
+
+int MainWindow::preferredLiveRefreshIntervalMs() const
+{
+    const int rows = resultCount();
+
+    if (rows >= 2'000'000) {
+        return 2000;
+    }
+
+    if (rows >= 1'000'000) {
+        return 1500;
+    }
+
+    return 1000;
 }
 
 void MainWindow::refresh() {

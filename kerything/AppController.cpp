@@ -763,6 +763,21 @@ void AppController::requestLiveMetadataRefreshAllWindows()
     }
 }
 
+int AppController::liveRefreshIntervalMs() const
+{
+    int intervalMs = 1000;
+
+    for (const auto& window : windows_) {
+        if (!window || !window->isVisible() || window->isMinimized()) {
+            continue;
+        }
+
+        intervalMs = std::max(intervalMs, window->preferredLiveRefreshIntervalMs());
+    }
+
+    return intervalMs;
+}
+
 void AppController::scheduleLiveUpdateRefresh()
 {
     if (!preferences_.autoRefreshResultsForLiveUpdates()) {
@@ -770,8 +785,14 @@ void AppController::scheduleLiveUpdateRefresh()
         return;
     }
 
+    // A structural refresh supersedes any metadata-only refresh.
+    // Avoid doing both if metadata and structural live updates arrive close together.
+    if (liveMetadataRefreshTimer_.isActive()) {
+        liveMetadataRefreshTimer_.stop();
+    }
+
     if (!liveUpdateRefreshTimer_.isActive()) {
-        liveUpdateRefreshTimer_.start();
+        liveUpdateRefreshTimer_.start(liveRefreshIntervalMs());
     }
 }
 
@@ -782,8 +803,14 @@ void AppController::scheduleLiveMetadataRefresh()
         return;
     }
 
+    // If a full structural refresh is already pending, the metadata refresh would
+    // be redundant because the full refresh will update the result set and display.
+    if (liveUpdateRefreshTimer_.isActive()) {
+        return;
+    }
+
     if (!liveMetadataRefreshTimer_.isActive()) {
-        liveMetadataRefreshTimer_.start();
+        liveMetadataRefreshTimer_.start(liveRefreshIntervalMs());
     }
 }
 

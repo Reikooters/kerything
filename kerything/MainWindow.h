@@ -33,7 +33,9 @@ public:
      */
     // void setDatabase(IndexController::DeviceIndex&& database, QString mountPath, QString devicePath, const QString& fsType);
 
-    [[nodiscard]] int hoveredRow() const { return hoveredRow_; }
+    [[nodiscard]] int hoveredRow() const;
+    [[nodiscard]] int resultCount() const;
+    [[nodiscard]] int preferredLiveRefreshIntervalMs() const;
 
     void refresh();
     void refreshLiveMetadata();

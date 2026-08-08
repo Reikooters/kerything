@@ -27,6 +27,8 @@ namespace ScannerHelper {
 
     bool scanDevice(const QString& devNode,
                     const QString& fsType,
+                    const QString& primaryMountPoint,
+                    const QStringList& mountPoints,
                     const FileRecordChunkCallback& onFileRecordChunk,
                     const StringPoolChunkCallback& onStringPoolChunk,
                     const ErrorCallback& onError,

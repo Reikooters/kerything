@@ -48,6 +48,8 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     const bool ok = ScannerHelper::scanDevice(
         jobRef->devNode,
         jobRef->fsType,
+        jobRef->primaryMountPoint,
+        jobRef->mountPoints,
         [this, requestId, jobRef](const std::vector<FileRecord>& fileRecordChunk) -> bool {
             Q_EMIT scanFileRecordChunkReady(requestId, fileRecordChunk);
             return !jobRef->cancelled.load(std::memory_order_relaxed);

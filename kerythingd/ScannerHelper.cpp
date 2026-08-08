@@ -11,7 +11,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <fcntl.h>
+
 #include <QString>
+#include <QStringList>
 #include <QDir>
 #include <QFile>
 
@@ -21,6 +24,101 @@
 #include "scanners/NtfsScannerEngine.h"
 
 namespace ScannerHelper {
+
+namespace {
+    QStringList orderedMountPoints(const QString& primaryMountPoint, const QStringList& mountPoints)
+    {
+        QStringList ordered;
+
+        const QString primary = primaryMountPoint.trimmed();
+        if (!primary.isEmpty()) {
+            ordered << primary;
+        }
+
+        for (const QString& mountPoint : mountPoints) {
+            const QString trimmed = mountPoint.trimmed();
+            if (!trimmed.isEmpty()) {
+                ordered << trimmed;
+            }
+        }
+
+        ordered.removeDuplicates();
+        return ordered;
+    }
+
+    bool syncMountedFilesystem(
+        const QString& primaryMountPoint,
+        const QStringList& mountPoints,
+        const ErrorCallback& onError)
+    {
+        const QStringList candidates = orderedMountPoints(primaryMountPoint, mountPoints);
+
+        if (candidates.isEmpty()) {
+            return true;
+        }
+
+        for (const QString& mountPoint : candidates) {
+            const QByteArray encodedMountPoint = QFile::encodeName(mountPoint);
+            const int fd = ::open(
+                encodedMountPoint.constData(),
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC
+            );
+
+            if (fd < 0) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cerr << "[ScannerHelper] failed to open mount point for syncfs: "
+                          << mountPoint.toStdString()
+                          << ": "
+                          << std::strerror(errno)
+                          << "\n";
+#endif
+                continue;
+            }
+
+            if (::syncfs(fd) != 0) {
+                const QString errorText = QStringLiteral("syncfs failed for mount point %1: %2")
+                    .arg(mountPoint, QString::fromLocal8Bit(std::strerror(errno)));
+
+                ::close(fd);
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cerr << "[ScannerHelper] "
+                          << errorText.toStdString()
+                          << "\n";
+#endif
+
+                if (onError) {
+                    onError(errorText);
+                }
+
+                return false;
+            }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "[ScannerHelper] synced mounted filesystem before raw scan using mount point: "
+                      << mountPoint.toStdString()
+                      << "\n";
+#endif
+
+            ::close(fd);
+            return true;
+        }
+
+        const QString errorText = QStringLiteral("could not open any mount point for syncfs before raw scan");
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cerr << "[ScannerHelper] "
+                  << errorText.toStdString()
+                  << "\n";
+#endif
+
+        if (onError) {
+            onError(errorText);
+        }
+
+        return false;
+    }
+}
 
 bool isAllowedFsType(const QString& fsType)
 {
@@ -91,13 +189,17 @@ std::expected<QString, QString> validateDevNode(const QString& inputPath)
 
 bool scanDevice(const QString& devNode,
                 const QString& fsType,
+                const QString& primaryMountPoint,
+                const QStringList& mountPoints,
                 const FileRecordChunkCallback& onFileRecordChunk,
                 const StringPoolChunkCallback& onStringPoolChunk,
                 const ErrorCallback& onError,
                 const CancelCallback& shouldCancel,
                 const ProgressCallback& onProgress)
 {
-    if (!isAllowedFsType(fsType)) {
+    const QString normalizedFsType = fsType.trimmed().toLower();
+
+    if (!isAllowedFsType(normalizedFsType)) {
         if (onError) {
             onError(QStringLiteral("unsupported fsType '%1'").arg(fsType));
         }
@@ -114,83 +216,31 @@ bool scanDevice(const QString& devNode,
 
     const QString& resolvedPath = *validated;
 
-    if (fsType == "ntfs") {
-        return NtfsScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
-    }
-    if (fsType == "ext4") {
-        return Ext4ScannerEngine::scanDevice(resolvedPath, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
-    }
-    else {
-        return false;
-        //return scanDeviceOther(resolvedPath, fsType, onFileRecordChunk, onStringPoolChunk, onError, shouldCancel, onProgress);
+    syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
+
+    if (normalizedFsType == QStringLiteral("ntfs")) {
+        return NtfsScannerEngine::scanDevice(
+            resolvedPath,
+            onFileRecordChunk,
+            onStringPoolChunk,
+            onError,
+            shouldCancel,
+            onProgress
+        );
     }
 
-    // std::vector<FileRecord> chunk;
-    // chunk.reserve(1024);
-    //
-    // quint64 filesSeen = 0;
-    // quint64 filesEmitted = 0;
-    //
-    // auto flushChunk = [&]() -> bool {
-    //     if (chunk.empty()) {
-    //         return true;
-    //     }
-    //
-    //     if (onChunk && !onChunk(chunk)) {
-    //         return false;
-    //     }
-    //
-    //     filesEmitted += chunk.size();
-    //     chunk.clear();
-    //
-    //     if (onProgress) {
-    //         onProgress(filesSeen, filesEmitted);
-    //     }
-    //
-    //     return true;
-    // };
-    //
-    // // TODO: Replace this with the real filesystem walking logic.
-    // for (int i = 0; i < 50000; ++i) {
-    //     if (shouldCancel && shouldCancel()) {
-    //         if (onError) {
-    //             onError(QStringLiteral("scan cancelled"));
-    //         }
-    //         return false;
-    //     }
-    //
-    //     FileRecord rec;
-    //     rec.path = QStringLiteral("%1/file_%2.txt")
-    //                    .arg(resolvedPath)
-    //                    .arg(i);
-    //     rec.size = static_cast<quint64>(i * 100);
-    //     rec.mtime = static_cast<quint64>(i * 1000);
-    //
-    //     chunk.push_back(std::move(rec));
-    //     ++filesSeen;
-    //
-    //     if (onProgress && (filesSeen % 1024 == 0)) {
-    //         onProgress(filesSeen, filesEmitted);
-    //     }
-    //
-    //     if (chunk.size() >= 1024) {
-    //         if (!flushChunk()) {
-    //             if (onError) {
-    //                 onError(QStringLiteral("scan aborted by receiver"));
-    //             }
-    //             return false;
-    //         }
-    //     }
-    // }
-    //
-    // if (!flushChunk()) {
-    //     if (onError) {
-    //         onError(QStringLiteral("scan aborted by receiver"));
-    //     }
-    //     return false;
-    // }
-    //
-    // return true;
+    if (normalizedFsType == QStringLiteral("ext4")) {
+        return Ext4ScannerEngine::scanDevice(
+            resolvedPath,
+            onFileRecordChunk,
+            onStringPoolChunk,
+            onError,
+            shouldCancel,
+            onProgress
+        );
+    }
+
+    return false;
 }
 
 } // namespace ScannerHelper

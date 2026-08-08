@@ -24,6 +24,29 @@
 
 namespace {
     constexpr int DefaultCheckStateRole = Qt::UserRole + 1;
+
+    bool moveTableSelectionToEdge(QTableWidget* table, QKeyEvent* keyEvent)
+    {
+        if (!table || table->rowCount() <= 0 || keyEvent->modifiers() != Qt::NoModifier) {
+            return false;
+        }
+
+        if (keyEvent->key() != Qt::Key_Home && keyEvent->key() != Qt::Key_End) {
+            return false;
+        }
+
+        const int row = keyEvent->key() == Qt::Key_Home
+            ? 0
+            : table->rowCount() - 1;
+
+        const int column = table->currentColumn() >= 0
+            ? table->currentColumn()
+            : 0;
+
+        table->setCurrentCell(row, column);
+        table->scrollToItem(table->item(row, column), QAbstractItemView::PositionAtCenter);
+        return true;
+    }
 }
 
 DevicePickerDialog::DevicePickerDialog(
@@ -161,7 +184,11 @@ bool DevicePickerDialog::eventFilter(QObject* watched, QEvent* event)
     }
 
     if (watched == table_ && event->type() == QEvent::KeyPress) {
-        const auto* keyEvent = static_cast<QKeyEvent*>(event);
+        auto* keyEvent = dynamic_cast<QKeyEvent*>(event);
+
+        if (moveTableSelectionToEdge(table_, keyEvent)) {
+            return true;
+        }
 
         if (keyEvent->key() == Qt::Key_Space) {
             toggleRowChecked(table_->currentRow());
@@ -170,7 +197,7 @@ bool DevicePickerDialog::eventFilter(QObject* watched, QEvent* event)
     }
 
     if (watched == table_->viewport() && event->type() == QEvent::MouseButtonRelease) {
-        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        const auto* mouseEvent = dynamic_cast<QMouseEvent*>(event);
 
         if (mouseEvent->button() == Qt::LeftButton) {
             const QModelIndex index = table_->indexAt(mouseEvent->pos());

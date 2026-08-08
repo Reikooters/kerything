@@ -37,6 +37,9 @@ public:
     void setCurrentPage(PreferencesDialogPage page);
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);
     void searchFiltersApplied();

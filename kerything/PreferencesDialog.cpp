@@ -13,6 +13,7 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -36,6 +37,29 @@ namespace {
     constexpr int LiveUpdatesEnabledRole = Qt::UserRole + 5;
 
     constexpr int FilterIdRole = Qt::UserRole + 20;
+
+    bool moveTableSelectionToEdge(QTableWidget* table, QKeyEvent* keyEvent)
+    {
+        if (!table || table->rowCount() <= 0 || keyEvent->modifiers() != Qt::NoModifier) {
+            return false;
+        }
+
+        if (keyEvent->key() != Qt::Key_Home && keyEvent->key() != Qt::Key_End) {
+            return false;
+        }
+
+        const int row = keyEvent->key() == Qt::Key_Home
+            ? 0
+            : table->rowCount() - 1;
+
+        const int column = table->currentColumn() >= 0
+            ? table->currentColumn()
+            : 0;
+
+        table->setCurrentCell(row, column);
+        table->scrollToItem(table->item(row, column), QAbstractItemView::PositionAtCenter);
+        return true;
+    }
 }
 
 PreferencesDialog::PreferencesDialog(
@@ -106,6 +130,23 @@ PreferencesDialog::PreferencesDialog(
     }
 
     updateApplyButtonEnabled();
+}
+
+bool PreferencesDialog::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        auto* keyEvent = dynamic_cast<QKeyEvent*>(event);
+
+        if (watched == deviceTable_ && moveTableSelectionToEdge(deviceTable_, keyEvent)) {
+            return true;
+        }
+
+        if (watched == filterTable_ && moveTableSelectionToEdge(filterTable_, keyEvent)) {
+            return true;
+        }
+    }
+
+    return QDialog::eventFilter(watched, event);
 }
 
 void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
@@ -300,6 +341,7 @@ QWidget* PreferencesDialog::createDevicesPage()
     deviceTable_->horizontalHeader()->setSectionResizeMode(DeviceNodeColumn, QHeaderView::ResizeToContents);
     deviceTable_->horizontalHeader()->setSectionResizeMode(DeviceModelColumn, QHeaderView::ResizeToContents);
     installHoverRowHighlight(deviceTable_);
+    deviceTable_->installEventFilter(this);
 
     populateDeviceTable();
 

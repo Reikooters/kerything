@@ -245,7 +245,6 @@ namespace {
         const std::vector<LiveUpdateOperation>& operations)
     {
         QSet<quint64> upsertInodes;
-        bool hasDeleteEntry = false;
         bool hasResolvedDeleteEntry = false;
 
         for (const LiveUpdateOperation& operation : operations) {
@@ -253,8 +252,6 @@ namespace {
                 upsertInodes.insert(operation.inode);
             }
             else if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
-                hasDeleteEntry = true;
-
                 if (operation.parentInode != 0) {
                     hasResolvedDeleteEntry = true;
                 }
@@ -272,12 +269,6 @@ namespace {
             if (operation.kind == LiveUpdateOperationKind::MetadataChanged &&
                 operation.inode != 0 &&
                 upsertInodes.contains(operation.inode)) {
-                continue;
-            }
-
-            if (operation.kind == LiveUpdateOperationKind::NeedsRescan &&
-                hasDeleteEntry &&
-                operation.reason == QStringLiteral("object was deleted or moved")) {
                 continue;
             }
 

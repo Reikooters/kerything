@@ -6,6 +6,7 @@
 
 #include <execution>
 #include <iostream>
+#include <optional>
 #include <QObject>
 #include <QStringList>
 #include <shared_mutex>
@@ -544,6 +545,7 @@ private:
     enum class UpsertApplyResult : quint8 {
         Applied,
         MissingParent,
+        NeedsRescan,
         Invalid,
         NotUpsert
     };
@@ -564,6 +566,12 @@ private:
     static bool appendRecordFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation
+    );
+    static std::optional<uint32_t> findLiveEntryRecord(
+        const DeviceIndex& deviceIndex,
+        quint64 parentInode,
+        const QByteArray& nameUtf8,
+        quint64 inode = 0
     );
     static bool updateRecordIdentityFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,

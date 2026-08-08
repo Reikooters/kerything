@@ -585,6 +585,10 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     stillPending.push_back(operation);
                     break;
 
+                case UpsertApplyResult::NeedsRescan:
+                    ++result.needsRescan;
+                    break;
+
                 case UpsertApplyResult::Invalid:
                     ++result.unsupported;
                     break;
@@ -908,6 +912,48 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     return true;
 }
 
+std::optional<uint32_t> IndexController::findLiveEntryRecord(
+    const DeviceIndex& deviceIndex,
+    quint64 parentInode,
+    const QByteArray& nameUtf8,
+    quint64 inode)
+{
+    if (parentInode == 0 || nameUtf8.isEmpty()) {
+        return std::nullopt;
+    }
+
+    const std::string_view name(
+        nameUtf8.constData(),
+        static_cast<std::size_t>(nameUtf8.size())
+    );
+
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        const FileRecord& record = deviceIndex.fileRecords[recordIdx];
+
+        if (record.parentFsIndex != parentInode) {
+            continue;
+        }
+
+        if (inode != 0 && record.fsIndex != inode) {
+            continue;
+        }
+
+        if (deviceIndex.recordName(recordIdx) != name) {
+            continue;
+        }
+
+        return recordIdx;
+         }
+
+    return std::nullopt;
+}
+
 bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     DeviceIndex& deviceIndex,
     uint32_t recordIdx,
@@ -985,25 +1031,29 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
         return UpsertApplyResult::Invalid;
     }
 
+    const QByteArray nameUtf8 = operation.name.toUtf8();
+    if (nameUtf8.isEmpty()) {
+        return UpsertApplyResult::Invalid;
+    }
+
+    const std::optional<uint32_t> existingSameEntry =
+        findLiveEntryRecord(deviceIndex, operation.parentInode, nameUtf8, operation.inode);
+
+    if (existingSameEntry) {
+        FileRecord& record = deviceIndex.fileRecords[*existingSameEntry];
+        updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
+        return UpsertApplyResult::Applied;
+    }
+
     const std::vector<uint32_t>* recordIndices =
         deviceIndex.recordIndicesForFsIndex(operation.inode);
 
     if (recordIndices && !recordIndices->empty()) {
-        bool updatedAny = false;
-
         for (const uint32_t recordIdx : *recordIndices) {
-            if (recordIdx >= deviceIndex.fileRecords.size() ||
-                deviceIndex.isDeletedRecord(recordIdx)) {
-                continue;
+            if (recordIdx < deviceIndex.fileRecords.size() &&
+                !deviceIndex.isDeletedRecord(recordIdx)) {
+                return UpsertApplyResult::NeedsRescan;
             }
-
-            FileRecord& record = deviceIndex.fileRecords[recordIdx];
-            updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
-            updatedAny = true;
-        }
-
-        if (updatedAny) {
-            return UpsertApplyResult::Applied;
         }
     }
 

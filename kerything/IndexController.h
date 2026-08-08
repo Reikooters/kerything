@@ -15,6 +15,8 @@
 #include "FileRecord.h"
 #include "LiveUpdateEvent.h"
 
+#include <chrono>
+
 class IndexController final : public QObject {
     Q_OBJECT
 
@@ -100,14 +102,55 @@ public:
             }
         }
 
-        [[nodiscard]] qsizetype markDeletedRecordTree(uint32_t rootRecordIdx)
+        [[nodiscard]] qsizetype markDeletedRecordTree(uint32_t rootRecordIdx, bool* deletedDirectory = nullptr)
         {
+            const auto start = std::chrono::steady_clock::now();
+
+            auto logSlowDeleteTree = [&](qsizetype deletedCount) {
+                const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start
+                ).count();
+
+                if (elapsedMs >= 25) {
+                    std::cerr << "markDeletedRecordTree rootRecordIdx="
+                              << rootRecordIdx
+                              << " deletedCount="
+                              << deletedCount
+                              << " fileRecords="
+                              << fileRecords.size()
+                              << " elapsed="
+                              << elapsedMs
+                              << "ms\n";
+                }
+            };
+
+            if (deletedDirectory) {
+                *deletedDirectory = false;
+            }
+
             if (rootRecordIdx >= fileRecords.size()) {
                 return 0;
             }
 
             if (deletedRecordBitmap.size() < fileRecords.size()) {
                 deletedRecordBitmap.resize(fileRecords.size(), 0);
+            }
+
+            if (isDeletedRecord(rootRecordIdx)) {
+                logSlowDeleteTree(0);
+                return 0;
+            }
+
+            const FileRecord& rootRecord = fileRecords[rootRecordIdx];
+
+            if ((rootRecord.flags & FileRecord_IsDir) == 0) {
+                deletedRecordBitmap[rootRecordIdx] = 1;
+                logSlowDeleteTree(1);
+                return 1;
+            }
+
+            if (deletedDirectory) {
+                *deletedDirectory = true;
             }
 
             qsizetype deletedCount = 0;
@@ -126,8 +169,18 @@ public:
                     continue;
                 }
 
+                const FileRecord& currentRecord = fileRecords[currentRecordIdx];
+
                 deletedRecordBitmap[currentRecordIdx] = 1;
                 ++deletedCount;
+
+                if ((currentRecord.flags & FileRecord_IsDir) == 0) {
+                    continue;
+                }
+
+                if (deletedDirectory) {
+                    *deletedDirectory = true;
+                }
 
                 for (uint32_t childRecordIdx = 0;
                      childRecordIdx < static_cast<uint32_t>(fileRecords.size());
@@ -143,6 +196,7 @@ public:
                 }
             }
 
+            logSlowDeleteTree(deletedCount);
             return deletedCount;
         }
 

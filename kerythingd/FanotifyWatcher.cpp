@@ -17,11 +17,23 @@
 
 namespace {
     constexpr size_t EventBufferSize = 256 * 1024;
+    constexpr std::size_t MaxPendingEvents = 4096;
 
     QString bytesToHex(const unsigned char* data, int size)
     {
         QByteArray bytes(reinterpret_cast<const char*>(data), size);
         return QString::fromLatin1(bytes.toHex());
+    }
+
+    const char* boundedStringEnd(const char* begin, const char* end)
+    {
+        for (const char* p = begin; p < end; ++p) {
+            if (*p == '\0') {
+                return p;
+            }
+        }
+
+        return nullptr;
     }
 
     struct FanotifyNameInfo {
@@ -82,8 +94,40 @@ namespace {
                 info->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME ||
                 info->info_type == FAN_EVENT_INFO_TYPE_OLD_DFID_NAME ||
                 info->info_type == FAN_EVENT_INFO_TYPE_NEW_DFID_NAME) {
+                if (info->len < sizeof(fanotify_event_info_fid)) {
+                    parsed.otherInfoTypes << QStringLiteral("%1_TRUNCATED")
+                        .arg(infoTypeName);
+                    break;
+                }
+
                 const auto* fid = reinterpret_cast<const fanotify_event_info_fid*>(info);
+
+                const char* handleHeaderStart = reinterpret_cast<const char*>(fid->handle);
+                const char* handleHeaderEnd = handleHeaderStart + sizeof(struct file_handle);
+
+                if (handleHeaderEnd > infoEnd) {
+                    parsed.otherInfoTypes << QStringLiteral("%1_TRUNCATED_HANDLE")
+                        .arg(infoTypeName);
+                    break;
+                }
+
                 const auto* fileHandle = reinterpret_cast<const struct file_handle*>(fid->handle);
+
+                if (fileHandle->handle_bytes == 0) {
+                    parsed.otherInfoTypes << QStringLiteral("%1_EMPTY_HANDLE")
+                        .arg(infoTypeName);
+                    info = reinterpret_cast<const fanotify_event_info_header*>(infoEnd);
+                    continue;
+                }
+
+                const char* handleDataEnd =
+                    reinterpret_cast<const char*>(fileHandle->f_handle) + fileHandle->handle_bytes;
+
+                if (handleDataEnd > infoEnd) {
+                    parsed.otherInfoTypes << QStringLiteral("%1_TRUNCATED_HANDLE_DATA")
+                        .arg(infoTypeName);
+                    break;
+                }
 
                 FanotifyNameInfo nameInfo;
                 nameInfo.infoType = infoTypeName;
@@ -97,12 +141,15 @@ namespace {
                     fileHandle->handle_bytes
                 );
 
-                const char* nameStart = reinterpret_cast<const char*>(
-                    fileHandle->f_handle + fileHandle->handle_bytes
-                );
+                const char* nameStart = handleDataEnd;
 
                 if (nameStart < infoEnd) {
-                    nameInfo.name = QString::fromUtf8(nameStart);
+                    if (const char* nameEnd = boundedStringEnd(nameStart, infoEnd)) {
+                        nameInfo.name = QString::fromUtf8(nameStart, nameEnd - nameStart);
+                    } else {
+                        parsed.otherInfoTypes << QStringLiteral("%1_UNTERMINATED_NAME")
+                            .arg(infoTypeName);
+                    }
                 }
 
                 parsed.nameInfos << std::move(nameInfo);
@@ -185,6 +232,7 @@ bool FanotifyWatcher::start()
         FAN_MOVED_FROM |
         FAN_MOVED_TO |
         FAN_CLOSE_WRITE |
+        // FAN_MODIFY |
         FAN_ATTRIB |
         FAN_DELETE_SELF |
         FAN_MOVE_SELF |
@@ -338,6 +386,11 @@ void FanotifyWatcher::captureEvent(const fanotify_event_metadata* metadata)
 
     pendingEvents_.push_back(std::move(pending));
 
+    if (pendingEvents_.size() >= MaxPendingEvents) {
+        flushPendingEvents();
+        return;
+    }
+
     if (!batchTimer_.isActive()) {
         batchTimer_.start();
     }
@@ -351,6 +404,10 @@ void FanotifyWatcher::flushPendingEvents()
 {
     if (pendingEvents_.empty()) {
         return;
+    }
+
+    if (batchTimer_.isActive()) {
+        batchTimer_.stop();
     }
 
     Q_EMIT eventsReady(

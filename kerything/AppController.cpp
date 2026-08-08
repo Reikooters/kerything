@@ -743,10 +743,10 @@ void AppController::requestRefreshAllWindows() {
             continue;
         }
 
-        if (window->isVisible() && !window->isMinimized()) {
-            window->refresh();
-        } else {
+        if (window->shouldDeferLiveRefresh()) {
             window->markLiveStructuralRefreshDirty();
+        } else {
+            window->refresh();
         }
     }
 }
@@ -760,10 +760,10 @@ void AppController::requestLiveMetadataRefreshAllWindows()
             continue;
         }
 
-        if (window->isVisible() && !window->isMinimized()) {
-            window->refreshLiveMetadata();
-        } else {
+        if (window->shouldDeferLiveRefresh()) {
             window->markLiveMetadataRefreshDirty();
+        } else {
+            window->refreshLiveMetadata();
         }
     }
 }
@@ -773,7 +773,7 @@ int AppController::liveRefreshIntervalMs() const
     int intervalMs = 1000;
 
     for (const auto& window : windows_) {
-        if (!window || !window->isVisible() || window->isMinimized()) {
+        if (!window || window->shouldDeferLiveRefresh()) {
             continue;
         }
 
@@ -781,6 +781,17 @@ int AppController::liveRefreshIntervalMs() const
     }
 
     return intervalMs;
+}
+
+bool AppController::hasLiveRefreshEligibleWindow() const
+{
+    for (const auto& window : windows_) {
+        if (window && !window->shouldDeferLiveRefresh()) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void AppController::scheduleLiveUpdateRefresh()
@@ -794,6 +805,11 @@ void AppController::scheduleLiveUpdateRefresh()
     // Avoid doing both if metadata and structural live updates arrive close together.
     if (liveMetadataRefreshTimer_.isActive()) {
         liveMetadataRefreshTimer_.stop();
+    }
+
+    if (!hasLiveRefreshEligibleWindow()) {
+        requestRefreshAllWindows();
+        return;
     }
 
     if (!liveUpdateRefreshTimer_.isActive()) {
@@ -811,6 +827,11 @@ void AppController::scheduleLiveMetadataRefresh()
     // If a full structural refresh is already pending, the metadata refresh would
     // be redundant because the full refresh will update the result set and display.
     if (liveUpdateRefreshTimer_.isActive()) {
+        return;
+    }
+
+    if (!hasLiveRefreshEligibleWindow()) {
+        requestLiveMetadataRefreshAllWindows();
         return;
     }
 

@@ -36,6 +36,7 @@ public:
     [[nodiscard]] int hoveredRow() const;
     [[nodiscard]] int resultCount() const;
     [[nodiscard]] int preferredLiveRefreshIntervalMs() const;
+    [[nodiscard]] bool shouldDeferLiveRefresh() const;
 
     void refresh();
     void refreshLiveMetadata();
@@ -50,6 +51,7 @@ protected:
      */
     void contextMenuEvent(QContextMenuEvent *event) override;
 
+    bool event(QEvent* event) override;
     void changeEvent(QEvent* event) override;
 
     /**
@@ -156,6 +158,7 @@ private:
     void rebuildFilterMenu();
     void applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment);
     void updateSearchLineFilterHint();
+    void refreshDirtyLiveUpdatesIfNeeded();
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;

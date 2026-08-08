@@ -28,6 +28,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QWindow>
 
 #ifdef KERYTHING_WITH_KF6
 #include <QMimeDatabase>
@@ -464,6 +465,11 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 }
 
 void MainWindow::updateSearch(const QString &text) {
+    if (shouldDeferLiveRefresh()) {
+        liveStructuralRefreshDirty_ = true;
+        return;
+    }
+
     auto start1 = std::chrono::steady_clock::now();
 
     const std::vector<IndexController::RecordHandle> selectedHandles =
@@ -532,7 +538,36 @@ int MainWindow::preferredLiveRefreshIntervalMs() const
     return 1000;
 }
 
+bool MainWindow::shouldDeferLiveRefresh() const
+{
+    if (!isVisible() ||
+        isMinimized() ||
+        windowState().testFlag(Qt::WindowMinimized)) {
+        return true;
+        }
+
+    const QWindow* nativeWindow = windowHandle();
+
+    if (!nativeWindow) {
+        return false;
+    }
+
+    const QWindow::Visibility visibility = nativeWindow->visibility();
+
+    if (visibility == QWindow::Hidden ||
+        visibility == QWindow::Minimized) {
+        return true;
+        }
+
+    return !nativeWindow->isExposed();
+}
+
 void MainWindow::refresh() {
+    if (shouldDeferLiveRefresh()) {
+        markLiveStructuralRefreshDirty();
+        return;
+    }
+
     liveStructuralRefreshDirty_ = false;
     liveMetadataRefreshDirty_ = false;
 
@@ -541,6 +576,11 @@ void MainWindow::refresh() {
 
 void MainWindow::refreshLiveMetadata()
 {
+    if (shouldDeferLiveRefresh()) {
+        markLiveMetadataRefreshDirty();
+        return;
+    }
+
     liveMetadataRefreshDirty_ = false;
 
     if (!model_ || !tableView_ || model_->rowCount() <= 0) {
@@ -604,6 +644,24 @@ void MainWindow::trimSortScratch()
     }
 }
 
+bool MainWindow::event(QEvent* event)
+{
+    const bool handled = QMainWindow::event(event);
+
+    switch (event->type()) {
+        case QEvent::Show:
+        case QEvent::WindowActivate:
+        case QEvent::Expose:
+            refreshDirtyLiveUpdatesIfNeeded();
+            break;
+
+        default:
+            break;
+    }
+
+    return handled;
+}
+
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
@@ -612,18 +670,7 @@ void MainWindow::changeEvent(QEvent* event)
         return;
     }
 
-    if (!isVisible() || isMinimized()) {
-        return;
-    }
-
-    if (liveStructuralRefreshDirty_) {
-        refresh();
-        return;
-    }
-
-    if (liveMetadataRefreshDirty_) {
-        refreshLiveMetadata();
-    }
+    refreshDirtyLiveUpdatesIfNeeded();
 }
 
 void MainWindow::rebuildFilterMenu()
@@ -759,6 +806,22 @@ void MainWindow::updateSearchLineFilterHint()
             activeSearchFilter_
         )
     );
+}
+
+void MainWindow::refreshDirtyLiveUpdatesIfNeeded()
+{
+    if (shouldDeferLiveRefresh()) {
+        return;
+    }
+
+    if (liveStructuralRefreshDirty_) {
+        refresh();
+        return;
+    }
+
+    if (liveMetadataRefreshDirty_) {
+        refreshLiveMetadata();
+    }
 }
 
 void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)

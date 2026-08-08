@@ -85,6 +85,7 @@ private:
     bool showOfflineResultsForDevice(const QString& deviceId) const;
     bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     bool liveUpdatesSupportedForDevice(const QString& deviceId) const;
+    void toggleDeviceRowChecked(int row);
 
     std::vector<SearchFilterPreference> filtersFromTable() const;
     QString uniqueFilterName(const QString& baseName) const;

@@ -137,12 +137,20 @@ bool PreferencesDialog::eventFilter(QObject* watched, QEvent* event)
     if (event->type() == QEvent::KeyPress) {
         auto* keyEvent = dynamic_cast<QKeyEvent*>(event);
 
-        if (watched == deviceTable_ && moveTableSelectionToEdge(deviceTable_, keyEvent)) {
-            return true;
-        }
+        if (watched == deviceTable_) {
+            if (keyEvent->key() == Qt::Key_Space && keyEvent->modifiers() == Qt::NoModifier) {
+                toggleDeviceRowChecked(deviceTable_->currentRow());
+                return true;
+            }
 
-        if (watched == filterTable_ && moveTableSelectionToEdge(filterTable_, keyEvent)) {
-            return true;
+            if (moveTableSelectionToEdge(deviceTable_, keyEvent)) {
+                return true;
+            }
+        }
+        else if (watched == filterTable_) {
+            if (moveTableSelectionToEdge(filterTable_, keyEvent)) {
+                return true;
+            }
         }
     }
 
@@ -532,6 +540,7 @@ QWidget* PreferencesDialog::createFiltersPage()
     filterTable_->horizontalHeader()->setSectionResizeMode(FilterNameColumn, QHeaderView::ResizeToContents);
     filterTable_->horizontalHeader()->setSectionResizeMode(FilterQueryColumn, QHeaderView::Stretch);
     installHoverRowHighlight(filterTable_);
+    filterTable_->installEventFilter(this);
 
     populateFilterTable();
 
@@ -1027,6 +1036,26 @@ bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) c
         );
 
     return preference.fsType == QStringLiteral("ext4");
+}
+
+void PreferencesDialog::toggleDeviceRowChecked(int row)
+{
+    if (!deviceTable_ || row < 0 || row >= deviceTable_->rowCount()) {
+        return;
+    }
+
+    auto* item = deviceTable_->item(row, DeviceEnabledColumn);
+    if (!item) {
+        return;
+    }
+
+    item->setCheckState(
+        item->checkState() == Qt::Checked
+            ? Qt::Unchecked
+            : Qt::Checked
+    );
+
+    updateApplyButtonEnabled();
 }
 
 std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const

@@ -726,6 +726,95 @@ Expected behavior:
 - Symlinks are shown with symlink icon and metadata.
 - If a live update stream becomes unreliable, Kerything warns that the index may be stale.
 
+#### Same-directory rapid rename
+
+```bash
+sudo touch /mnt/kerything-test/a.txt
+sudo mv /mnt/kerything-test/a.txt /mnt/kerything-test/b.txt
+sudo mv /mnt/kerything-test/b.txt /mnt/kerything-test/c.txt
+```
+
+Expected:
+
+- `a.txt` gone
+- `b.txt` gone
+- `c.txt` present
+
+#### Cross-directory move
+
+```bash
+sudo mkdir -p /mnt/kerything-test/one /mnt/kerything-test/two
+sudo touch /mnt/kerything-test/one/move-me.txt
+sudo mv /mnt/kerything-test/one/move-me.txt /mnt/kerything-test/two/move-me.txt
+```
+
+Expected:
+
+- `one` and `two` directories created
+- `move-me.txt` exists under `two` directory, not under `one` directory
+
+#### Directory move with children
+
+```bash
+sudo mkdir -p /mnt/kerything-test/parent/sub
+sudo touch /mnt/kerything-test/parent/sub/child.txt
+sudo mv /mnt/kerything-test/parent /mnt/kerything-test/parent-renamed
+```
+
+Expected:
+
+- `child.txt` still appears
+- its containing path resolves under `parent-renamed/sub`
+
+#### Hard link behavior
+
+```bash
+sudo touch /mnt/kerything-test/original-hardlink.txt
+sudo ln /mnt/kerything-test/original-hardlink.txt /mnt/kerything-test/second-hardlink.txt
+```
+
+Expected:
+
+- Both `original-hardlink.txt` and `second-hardlink.txt` should appear
+
+```bash
+sudo rm /mnt/kerything-test/second-hardlink.txt
+```
+
+Expected:
+
+- Only `second-hardlink.txt` should disappear
+- `original-hardlink.txt` should remain
+
+```bash
+sudo rm /mnt/kerything-test/second-hardlink.txt
+```
+
+Expected:
+
+- `original-hardlink.txt` should disappear
+
+#### Live file growing
+
+```bash
+sudo sh -c 'for i in $(seq 1 10000); do echo "$i" >> /mnt/kerything-test/live-growing.txt; done'
+```
+
+#### Stress test batching and overflow behavior
+
+Generate many creates/deletes:
+
+```shell script
+sudo mkdir -p /mnt/kerything-test/stress
+sudo sh -c 'for i in $(seq 1 10000); do touch /mnt/kerything-test/stress/file-$i.txt; done'
+sudo sh -c 'for i in $(seq 1 10000); do rm /mnt/kerything-test/stress/file-$i.txt; done'
+```
+
+Expected:
+
+- `stress` folder should appear
+- `file-{number|` files should appear then all disappear
+
 ### Useful commands while testing
 
 List loop devices:

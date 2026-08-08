@@ -817,6 +817,12 @@ Expected:
 
 ### Useful commands while testing
 
+Test CPU utilization:
+
+```bash
+pidstat -p "$(pidof kerything),$(pidof kerythingd)" 1
+```
+
 List loop devices:
 
 ```bash

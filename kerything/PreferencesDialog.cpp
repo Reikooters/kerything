@@ -33,6 +33,7 @@ namespace {
     constexpr int InitialEnabledRole = Qt::UserRole + 2;
     constexpr int ScanWhenUnmountedRole = Qt::UserRole + 3;
     constexpr int ShowOfflineResultsRole = Qt::UserRole + 4;
+    constexpr int LiveUpdatesEnabledRole = Qt::UserRole + 5;
 
     constexpr int FilterIdRole = Qt::UserRole + 20;
 }
@@ -140,6 +141,7 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
         bool enabled = false;
         bool scanWhenUnmounted = true;
         bool showOfflineResults = true;
+        bool liveUpdatesEnabled = true;
     };
 
     QHash<QString, CurrentDeviceState> currentStateByDeviceId;
@@ -167,6 +169,7 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
                 .enabled = item->checkState() == Qt::Checked,
                 .scanWhenUnmounted = item->data(ScanWhenUnmountedRole).toBool(),
                 .showOfflineResults = item->data(ShowOfflineResultsRole).toBool(),
+                .liveUpdatesEnabled = item->data(LiveUpdatesEnabledRole).toBool(),
             });
         }
     }
@@ -202,6 +205,7 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
         item->setCheckState(it->enabled ? Qt::Checked : Qt::Unchecked);
         item->setData(ScanWhenUnmountedRole, it->scanWhenUnmounted);
         item->setData(ShowOfflineResultsRole, it->showOfflineResults);
+        item->setData(LiveUpdatesEnabledRole, it->liveUpdatesEnabled);
     }
 
     int rowToSelect = -1;
@@ -306,14 +310,23 @@ QWidget* PreferencesDialog::createDevicesPage()
         optionsGroup
     );
 
+    liveUpdatesEnabledCheckBox_ = new QCheckBox(
+        QStringLiteral("Watch this device for real-time updates when mounted"),
+        optionsGroup
+    );
+
     optionsLayout->addWidget(selectedDeviceLabel_);
     optionsLayout->addWidget(scanWhenUnmountedCheckBox_);
     optionsLayout->addWidget(showOfflineResultsCheckBox_);
+    optionsLayout->addWidget(liveUpdatesEnabledCheckBox_);
 
     layout->addWidget(optionsGroup);
 
     auto updateSelectedDeviceOptions = [this]() {
-        if (!deviceTable_ || !scanWhenUnmountedCheckBox_ || !showOfflineResultsCheckBox_) {
+        if (!deviceTable_ ||
+            !scanWhenUnmountedCheckBox_ ||
+            !showOfflineResultsCheckBox_ ||
+            !liveUpdatesEnabledCheckBox_) {
             return;
         }
 
@@ -324,13 +337,16 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         const QSignalBlocker scanBlocker(scanWhenUnmountedCheckBox_);
         const QSignalBlocker offlineBlocker(showOfflineResultsCheckBox_);
+        const QSignalBlocker liveUpdatesBlocker(liveUpdatesEnabledCheckBox_);
 
         if (deviceId.isEmpty()) {
             selectedDeviceLabel_->setText(QStringLiteral("No device selected."));
             scanWhenUnmountedCheckBox_->setEnabled(false);
             showOfflineResultsCheckBox_->setEnabled(false);
+            liveUpdatesEnabledCheckBox_->setEnabled(false);
             scanWhenUnmountedCheckBox_->setChecked(false);
             showOfflineResultsCheckBox_->setChecked(false);
+            liveUpdatesEnabledCheckBox_->setChecked(false);
             return;
         }
 
@@ -353,8 +369,10 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         scanWhenUnmountedCheckBox_->setEnabled(true);
         showOfflineResultsCheckBox_->setEnabled(true);
+        liveUpdatesEnabledCheckBox_->setEnabled(true);
         scanWhenUnmountedCheckBox_->setChecked(scanWhenUnmountedForDevice(deviceId));
         showOfflineResultsCheckBox_->setChecked(showOfflineResultsForDevice(deviceId));
+        liveUpdatesEnabledCheckBox_->setChecked(liveUpdatesEnabledForDevice(deviceId));
     };
 
     connect(deviceTable_, &QTableWidget::currentCellChanged, this, updateSelectedDeviceOptions);
@@ -378,6 +396,16 @@ QWidget* PreferencesDialog::createDevicesPage()
         auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
         if (item) {
             item->setData(ShowOfflineResultsRole, checked);
+        }
+
+        updateApplyButtonEnabled();
+    });
+
+    connect(liveUpdatesEnabledCheckBox_, &QCheckBox::toggled, this, [this](bool checked) {
+        const int row = deviceTable_ ? deviceTable_->currentRow() : -1;
+        auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
+        if (item) {
+            item->setData(LiveUpdatesEnabledRole, checked);
         }
 
         updateApplyButtonEnabled();
@@ -726,6 +754,7 @@ void PreferencesDialog::populateDeviceTable()
         enabledItem->setData(InitialEnabledRole, preference.enabled);
         enabledItem->setData(ScanWhenUnmountedRole, preference.scanWhenUnmounted);
         enabledItem->setData(ShowOfflineResultsRole, preference.showOfflineResults);
+        enabledItem->setData(LiveUpdatesEnabledRole, preference.liveUpdatesEnabled);
         deviceTable_->setItem(row, DeviceEnabledColumn, enabledItem);
 
         auto* nameItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayNameForBlockDevice(blockDevice));
@@ -855,6 +884,22 @@ bool PreferencesDialog::showOfflineResultsForDevice(const QString& deviceId) con
         const auto* item = deviceTable_->item(row, DeviceEnabledColumn);
         if (item && item->data(DeviceIdRole).toString() == deviceId) {
             return item->data(ShowOfflineResultsRole).toBool();
+        }
+    }
+
+    return true;
+}
+
+bool PreferencesDialog::liveUpdatesEnabledForDevice(const QString& deviceId) const
+{
+    if (!deviceTable_) {
+        return true;
+    }
+
+    for (int row = 0; row < deviceTable_->rowCount(); ++row) {
+        const auto* item = deviceTable_->item(row, DeviceEnabledColumn);
+        if (item && item->data(DeviceIdRole).toString() == deviceId) {
+            return item->data(LiveUpdatesEnabledRole).toBool();
         }
     }
 
@@ -1130,6 +1175,10 @@ bool PreferencesDialog::hasDeviceChanges() const
         if (item->data(ShowOfflineResultsRole).toBool() != original.showOfflineResults) {
             return true;
         }
+
+        if (item->data(LiveUpdatesEnabledRole).toBool() != original.liveUpdatesEnabled) {
+            return true;
+        }
     }
 
     return false;
@@ -1216,6 +1265,7 @@ void PreferencesDialog::applyChanges()
         const bool originallyEnabled = original.enabled;
         const bool scanWhenUnmounted = item->data(ScanWhenUnmountedRole).toBool();
         const bool showOfflineResults = item->data(ShowOfflineResultsRole).toBool();
+        const bool liveUpdatesEnabled = item->data(LiveUpdatesEnabledRole).toBool();
 
         const BlockDevice& blockDevice = blockDeviceIt.value();
 
@@ -1234,12 +1284,14 @@ void PreferencesDialog::applyChanges()
         preference.lastSeenAt = QDateTime::currentDateTimeUtc();
         preference.scanWhenUnmounted = scanWhenUnmounted;
         preference.showOfflineResults = showOfflineResults;
+        preference.liveUpdatesEnabled = liveUpdatesEnabled;
 
         preferences_.saveIndexedDevicePreference(preference);
 
         if (enabled != original.enabled ||
             scanWhenUnmounted != original.scanWhenUnmounted ||
-            showOfflineResults != original.showOfflineResults) {
+            showOfflineResults != original.showOfflineResults ||
+            liveUpdatesEnabled != original.liveUpdatesEnabled) {
             changes.append(DevicePreferenceChange{
                 .deviceId = deviceId,
                 .wasEnabled = originallyEnabled,
@@ -1248,6 +1300,8 @@ void PreferencesDialog::applyChanges()
                 .scanWhenUnmounted = scanWhenUnmounted,
                 .wasShowOfflineResults = original.showOfflineResults,
                 .showOfflineResults = showOfflineResults,
+                .wasLiveUpdatesEnabled = original.liveUpdatesEnabled,
+                .liveUpdatesEnabled = liveUpdatesEnabled,
             });
         }
 

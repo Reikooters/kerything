@@ -70,6 +70,7 @@ private:
     void requestLiveMetadataRefreshAllWindows();
     void addLiveUpdateIndexedDevice(const QString& deviceId);
     void removeLiveUpdateIndexedDevice(const QString& deviceId);
+    [[nodiscard]] bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     void syncLiveUpdateDevices();
 
     QApplication& app_;

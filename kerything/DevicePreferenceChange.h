@@ -18,6 +18,9 @@ struct DevicePreferenceChange {
     bool wasShowOfflineResults = true;
     bool showOfflineResults = true;
 
+    bool wasLiveUpdatesEnabled = true;
+    bool liveUpdatesEnabled = true;
+
     [[nodiscard]] bool becameEnabled() const noexcept
     {
         return enabled && !wasEnabled;
@@ -36,6 +39,11 @@ struct DevicePreferenceChange {
     [[nodiscard]] bool showOfflineResultsChanged() const noexcept
     {
         return showOfflineResults != wasShowOfflineResults;
+    }
+
+    [[nodiscard]] bool liveUpdatesEnabledChanged() const noexcept
+    {
+        return liveUpdatesEnabled != wasLiveUpdatesEnabled;
     }
 };
 

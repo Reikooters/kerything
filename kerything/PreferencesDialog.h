@@ -77,6 +77,7 @@ private:
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;
     bool showOfflineResultsForDevice(const QString& deviceId) const;
+    bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
 
     std::vector<SearchFilterPreference> filtersFromTable() const;
     QString uniqueFilterName(const QString& baseName) const;
@@ -100,6 +101,7 @@ private:
     QTableWidget* deviceTable_ = nullptr;
     QCheckBox* scanWhenUnmountedCheckBox_ = nullptr;
     QCheckBox* showOfflineResultsCheckBox_ = nullptr;
+    QCheckBox* liveUpdatesEnabledCheckBox_ = nullptr;
     QLabel* selectedDeviceLabel_ = nullptr;
 
     QTableWidget* filterTable_ = nullptr;

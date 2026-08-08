@@ -1050,6 +1050,10 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
                 );
             }
         }
+
+        if (change.enabled && change.liveUpdatesEnabledChanged()) {
+            syncLiveUpdateDevices();
+        }
     }
 
     disabledDeviceIds.removeDuplicates();
@@ -1274,13 +1278,32 @@ void AppController::removeLiveUpdateIndexedDevice(const QString& deviceId)
     syncLiveUpdateDevices();
 }
 
+bool AppController::liveUpdatesEnabledForDevice(const QString& deviceId) const
+{
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    const std::optional<IndexedDevicePreference> preference =
+        preferences_.indexedDevicePreference(deviceId);
+
+    return !preference || preference->liveUpdatesEnabled;
+}
+
 void AppController::syncLiveUpdateDevices()
 {
     if (!daemonClient_ || !daemonClient_->isReady()) {
         return;
     }
 
-    QStringList deviceIds = liveUpdateIndexedDeviceIds_.values();
+    QStringList deviceIds;
+
+    for (const QString& deviceId : liveUpdateIndexedDeviceIds_) {
+        if (liveUpdatesEnabledForDevice(deviceId)) {
+            deviceIds << deviceId;
+        }
+    }
+
     deviceIds.removeDuplicates();
     deviceIds.removeAll(QString{});
 

@@ -133,6 +133,17 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
     }
 }
 
+void PreferencesDialog::setAutoRefreshResultsForLiveUpdates(bool enabled)
+{
+    if (!autoRefreshLiveUpdatesCheckBox_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(autoRefreshLiveUpdatesCheckBox_);
+    autoRefreshLiveUpdatesCheckBox_->setChecked(enabled);
+    updateApplyButtonEnabled();
+}
+
 void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDevices)
 {
     QString selectedDeviceId;
@@ -1311,10 +1322,6 @@ void PreferencesDialog::applyChanges()
         autoRefreshLiveUpdatesCheckBox_
             ? autoRefreshLiveUpdatesCheckBox_->isChecked()
             : preferences_.autoRefreshResultsForLiveUpdates();
-
-    if (autoRefreshChanged) {
-        preferences_.setAutoRefreshResultsForLiveUpdates(autoRefreshEnabled);
-    }
 
     const bool filtersChanged = hasFilterChanges();
 

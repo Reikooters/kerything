@@ -35,6 +35,7 @@ public:
 
     void setKnownDevices(const std::vector<BlockDevice>& knownDevices);
     void setCurrentPage(PreferencesDialogPage page);
+    void setAutoRefreshResultsForLiveUpdates(bool enabled);
 
 Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);

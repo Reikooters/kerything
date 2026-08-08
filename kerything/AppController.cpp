@@ -815,12 +815,18 @@ bool AppController::autoRefreshResultsForLiveUpdates() const
 
 void AppController::setAutoRefreshResultsForLiveUpdates(bool enabled)
 {
-    if (preferences_.autoRefreshResultsForLiveUpdates() == enabled) {
+    const bool wasEnabled = preferences_.autoRefreshResultsForLiveUpdates();
+
+    if (wasEnabled == enabled) {
         return;
     }
 
     preferences_.setAutoRefreshResultsForLiveUpdates(enabled);
     Q_EMIT autoRefreshResultsForLiveUpdatesChanged(enabled);
+
+    if (preferencesDialog_) {
+        preferencesDialog_->setAutoRefreshResultsForLiveUpdates(enabled);
+    }
 
     if (enabled && liveUpdateRefreshPausedDirty_) {
         liveUpdateRefreshPausedDirty_ = false;

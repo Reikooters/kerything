@@ -144,6 +144,12 @@ private:
         qsizetype selectedCount,
         qsizetype openableCount
     );
+    [[nodiscard]] std::vector<IndexController::RecordHandle> captureSelectedRecordHandles() const;
+    [[nodiscard]] std::optional<IndexController::RecordHandle> captureCurrentRecordHandle() const;
+    void restoreSelectedRecordHandles(
+        const std::vector<IndexController::RecordHandle>& selectedHandles,
+        const std::optional<IndexController::RecordHandle>& currentHandle
+    );
     void rebuildFilterMenu();
     void applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment);
     void updateSearchLineFilterHint();

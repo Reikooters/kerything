@@ -14,12 +14,14 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QItemSelection>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QActionGroup>
 #include <QStatusBar>
@@ -434,6 +436,11 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 void MainWindow::updateSearch(const QString &text) {
     auto start1 = std::chrono::steady_clock::now();
 
+    const std::vector<IndexController::RecordHandle> selectedHandles =
+        captureSelectedRecordHandles();
+    const std::optional<IndexController::RecordHandle> currentHandle =
+        captureCurrentRecordHandle();
+
     QString effectiveQuery = text;
 
     if (!activeSearchFilter_.isEmpty()) {
@@ -451,6 +458,7 @@ void MainWindow::updateSearch(const QString &text) {
     auto start2 = std::chrono::steady_clock::now();
     int sortCol = tableView_->horizontalHeader()->sortIndicatorSection();
     model_->sort(sortCol, tableView_->horizontalHeader()->sortIndicatorOrder());
+    restoreSelectedRecordHandles(selectedHandles, currentHandle);
     auto end2 = std::chrono::steady_clock::now();
 
     std::chrono::duration<double> elapsed1 = end1 - start1;
@@ -484,10 +492,16 @@ void MainWindow::refreshLiveMetadata()
     const Qt::SortOrder sortOrder = tableView_->horizontalHeader()->sortIndicatorOrder();
 
     if (sortColumn == 2 || sortColumn == 3) {
+        const std::vector<IndexController::RecordHandle> selectedHandles =
+            captureSelectedRecordHandles();
+        const std::optional<IndexController::RecordHandle> currentHandle =
+            captureCurrentRecordHandle();
+
         // Metadata-only updates can affect Size and Modified Date ordering, but
         // they do not affect search membership. Re-sort the existing result set
         // instead of doing a full refresh/search.
         model_->sort(sortColumn, sortOrder);
+        restoreSelectedRecordHandles(selectedHandles, currentHandle);
         return;
     }
 
@@ -753,6 +767,119 @@ QString MainWindow::actionTextForOpenableCount(
     }
 
     return pluralCountedText.arg(openableCount);
+}
+
+std::vector<IndexController::RecordHandle> MainWindow::captureSelectedRecordHandles() const
+{
+    std::vector<IndexController::RecordHandle> handles;
+
+    if (!tableView_ || !tableView_->selectionModel() || !model_) {
+        return handles;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+    handles.reserve(static_cast<std::size_t>(selectedRows.size()));
+
+    for (const QModelIndex& index : selectedRows) {
+        if (!index.isValid()) {
+            continue;
+        }
+
+        if (std::optional<IndexController::RecordHandle> handle = model_->recordHandleForRow(index.row())) {
+            handles.push_back(*handle);
+        }
+    }
+
+    return handles;
+}
+
+std::optional<IndexController::RecordHandle> MainWindow::captureCurrentRecordHandle() const
+{
+    if (!tableView_ || !model_) {
+        return std::nullopt;
+    }
+
+    const QModelIndex currentIndex = tableView_->currentIndex();
+
+    if (!currentIndex.isValid()) {
+        return std::nullopt;
+    }
+
+    return model_->recordHandleForRow(currentIndex.row());
+}
+
+void MainWindow::restoreSelectedRecordHandles(
+    const std::vector<IndexController::RecordHandle>& selectedHandles,
+    const std::optional<IndexController::RecordHandle>& currentHandle
+) {
+    if (!tableView_ || !tableView_->selectionModel() || !model_) {
+        return;
+    }
+
+    auto* selectionModel = tableView_->selectionModel();
+
+    const int verticalScrollValue = tableView_->verticalScrollBar()
+        ? tableView_->verticalScrollBar()->value()
+        : 0;
+    const int horizontalScrollValue = tableView_->horizontalScrollBar()
+        ? tableView_->horizontalScrollBar()->value()
+        : 0;
+
+    selectionModel->clearSelection();
+
+    if (selectedHandles.empty()) {
+        tableView_->setCurrentIndex(QModelIndex());
+        return;
+    }
+
+    QItemSelection selection;
+
+    for (const IndexController::RecordHandle& handle : selectedHandles) {
+        const int row = model_->rowForRecordHandle(handle);
+
+        if (row < 0) {
+            continue;
+        }
+
+        const QModelIndex left = model_->index(row, 0);
+        const QModelIndex right = model_->index(row, model_->columnCount() - 1);
+
+        if (!left.isValid() || !right.isValid()) {
+            continue;
+        }
+
+        selection.select(left, right);
+    }
+
+    if (selection.isEmpty()) {
+        tableView_->setCurrentIndex(QModelIndex());
+        return;
+    }
+
+    selectionModel->select(selection, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+
+    if (currentHandle) {
+        const int currentRow = model_->rowForRecordHandle(*currentHandle);
+
+        if (currentRow >= 0) {
+            const QModelIndex restoredCurrentIndex = model_->index(currentRow, 0);
+
+            if (restoredCurrentIndex.isValid()) {
+                selectionModel->setCurrentIndex(
+                    restoredCurrentIndex,
+                    QItemSelectionModel::NoUpdate
+                );
+            }
+        }
+    }
+
+    if (tableView_->verticalScrollBar()) {
+        tableView_->verticalScrollBar()->setValue(verticalScrollValue);
+    }
+
+    if (tableView_->horizontalScrollBar()) {
+        tableView_->horizontalScrollBar()->setValue(horizontalScrollValue);
+    }
 }
 
 void MainWindow::showAbout()

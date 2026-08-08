@@ -64,6 +64,16 @@ public:
     [[nodiscard]] qsizetype mountedRowCount(const QModelIndexList& rows) const;
 
     /**
+     * @brief Returns the stable search-result handle for a model row.
+     */
+    [[nodiscard]] std::optional<IndexController::RecordHandle> recordHandleForRow(int row) const;
+
+    /**
+     * @brief Finds the current row for a previously captured search-result handle.
+     */
+    [[nodiscard]] int rowForRecordHandle(const IndexController::RecordHandle& handle) const;
+
+    /**
      * @brief Returns the raw database index for a given model row.
      * Useful for looking up full file details when an item is clicked/opened.
      */

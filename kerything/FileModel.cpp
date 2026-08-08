@@ -558,6 +558,33 @@ qsizetype FileModel::mountedRowCount(const QModelIndexList& rows) const
     return count;
 }
 
+std::optional<IndexController::RecordHandle> FileModel::recordHandleForRow(const int row) const
+{
+    if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
+        return std::nullopt;
+    }
+
+    return searchResults_[row];
+}
+
+int FileModel::rowForRecordHandle(const IndexController::RecordHandle& handle) const
+{
+    const auto sameHandle = [&handle](const IndexController::RecordHandle& candidate) {
+        return candidate.indexId == handle.indexId &&
+               candidate.generation == handle.generation &&
+               candidate.recordIdx == handle.recordIdx &&
+               candidate.mountPointIdx == handle.mountPointIdx;
+    };
+
+    const auto it = std::find_if(searchResults_.cbegin(), searchResults_.cend(), sameHandle);
+
+    if (it == searchResults_.cend()) {
+        return -1;
+    }
+
+    return static_cast<int>(std::distance(searchResults_.cbegin(), it));
+}
+
 uint32_t FileModel::getRecordIndex(int row) const {
     if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
         return 0;

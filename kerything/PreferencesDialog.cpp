@@ -512,7 +512,7 @@ QWidget* PreferencesDialog::createFiltersPage()
             "<h2>Filters</h2>"
             "<p>Create and manage the filter presets shown in the Filter menu. "
             "Filters are saved search shortcuts that are added to your current search text. "
-            "Double-click a filter name or query to change it.</p>"
+            "To edit a filter, double-click a name or query cell, or select a cell and press F2.</p>"
         ),
         page
     );

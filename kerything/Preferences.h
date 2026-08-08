@@ -43,6 +43,10 @@ class Preferences final {
 public:
     Preferences();
 
+    // General
+    [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
+    void setAutoRefreshResultsForLiveUpdates(bool enabled);
+
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;
     [[nodiscard]] bool isDeviceEnabled(const QString& deviceId) const;

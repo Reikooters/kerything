@@ -37,10 +37,13 @@ public:
     [[nodiscard]] bool isDaemonConnected() const noexcept;
     [[nodiscard]] bool isDaemonReady() const noexcept;
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
+    [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
+    void setAutoRefreshResultsForLiveUpdates(bool enabled);
     IndexController* indexController() const noexcept;
 
 Q_SIGNALS:
     void searchFiltersChanged();
+    void autoRefreshResultsForLiveUpdatesChanged(bool enabled);
 
 private Q_SLOTS:
     void onPrimaryRequestedOpenWindow();
@@ -97,6 +100,7 @@ private:
     QList<QPointer<MainWindow>> windows_;
     QTimer liveUpdateRefreshTimer_;
     QTimer liveMetadataRefreshTimer_;
+    bool liveUpdateRefreshPausedDirty_ = false;
 };
 
 #endif // KERYTHING_APPCONTROLLER_H

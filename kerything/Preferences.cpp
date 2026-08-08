@@ -11,6 +11,20 @@ Preferences::Preferences()
     ensureDefaultSearchFilters();
 }
 
+bool Preferences::autoRefreshResultsForLiveUpdates() const
+{
+    return settings_.value(
+        QStringLiteral("liveUpdates/autoRefreshResults"),
+        true
+    ).toBool();
+}
+
+void Preferences::setAutoRefreshResultsForLiveUpdates(bool enabled)
+{
+    settings_.setValue(QStringLiteral("liveUpdates/autoRefreshResults"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::hasAnyIndexedDevicePreferences() const
 {
     return !deviceIds().isEmpty();

@@ -679,6 +679,9 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
             requestRefreshAllWindows();
         });
 
+    connect(dialog, &PreferencesDialog::autoRefreshResultsForLiveUpdatesApplied,
+        this, &AppController::setAutoRefreshResultsForLiveUpdates);
+
     dialog->show();
     dialog->raise();
     dialog->activateWindow();
@@ -762,6 +765,11 @@ void AppController::requestLiveMetadataRefreshAllWindows()
 
 void AppController::scheduleLiveUpdateRefresh()
 {
+    if (!preferences_.autoRefreshResultsForLiveUpdates()) {
+        liveUpdateRefreshPausedDirty_ = true;
+        return;
+    }
+
     if (!liveUpdateRefreshTimer_.isActive()) {
         liveUpdateRefreshTimer_.start();
     }
@@ -769,6 +777,11 @@ void AppController::scheduleLiveUpdateRefresh()
 
 void AppController::scheduleLiveMetadataRefresh()
 {
+    if (!preferences_.autoRefreshResultsForLiveUpdates()) {
+        liveUpdateRefreshPausedDirty_ = true;
+        return;
+    }
+
     if (!liveMetadataRefreshTimer_.isActive()) {
         liveMetadataRefreshTimer_.start();
     }
@@ -793,6 +806,33 @@ bool AppController::isDaemonReady() const noexcept {
 std::vector<SearchFilterPreference> AppController::searchFilters() const
 {
     return preferences_.searchFilters();
+}
+
+bool AppController::autoRefreshResultsForLiveUpdates() const
+{
+    return preferences_.autoRefreshResultsForLiveUpdates();
+}
+
+void AppController::setAutoRefreshResultsForLiveUpdates(bool enabled)
+{
+    if (preferences_.autoRefreshResultsForLiveUpdates() == enabled) {
+        return;
+    }
+
+    preferences_.setAutoRefreshResultsForLiveUpdates(enabled);
+    Q_EMIT autoRefreshResultsForLiveUpdatesChanged(enabled);
+
+    if (enabled && liveUpdateRefreshPausedDirty_) {
+        liveUpdateRefreshPausedDirty_ = false;
+        requestRefreshAllWindows();
+    }
+
+    requestWindowStatusMessage(
+        enabled
+            ? QStringLiteral("Automatic result updates resumed")
+            : QStringLiteral("Automatic result updates paused"),
+        4000
+    );
 }
 
 IndexController* AppController::indexController() const noexcept {

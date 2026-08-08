@@ -39,6 +39,7 @@ public:
 Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);
     void searchFiltersApplied();
+    void autoRefreshResultsForLiveUpdatesApplied(bool enabled);
 
 private:
     enum DeviceColumn {
@@ -72,6 +73,7 @@ private:
     bool hasChanges() const;
     bool hasDeviceChanges() const;
     bool hasFilterChanges() const;
+    bool hasGeneralChanges() const;
     bool validateFilters(QString* errorText = nullptr) const;
 
     QStringList enabledDeviceIdsFromTable() const;
@@ -98,6 +100,8 @@ private:
     QStackedWidget* pages_ = nullptr;
     QDialogButtonBox* buttonBox_ = nullptr;
     QPushButton* applyButton_ = nullptr;
+
+    QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 
     QTableWidget* deviceTable_ = nullptr;
     QCheckBox* scanWhenUnmountedCheckBox_ = nullptr;

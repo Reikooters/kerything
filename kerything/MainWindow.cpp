@@ -313,6 +313,24 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(refreshIndexesAct);
 
+    autoRefreshLiveUpdatesAct_ = new QAction(
+        QStringLiteral("Automatically Refresh Results for Live Updates"),
+        this
+    );
+    autoRefreshLiveUpdatesAct_->setCheckable(true);
+    autoRefreshLiveUpdatesAct_->setChecked(
+        controller_ && controller_->autoRefreshResultsForLiveUpdates()
+    );
+    autoRefreshLiveUpdatesAct_->setStatusTip(
+        QStringLiteral("Refresh and re-sort visible search results as live update events arrive")
+    );
+    connect(autoRefreshLiveUpdatesAct_, &QAction::toggled, this, [this](bool checked) {
+        if (controller_) {
+            controller_->setAutoRefreshResultsForLiveUpdates(checked);
+        }
+    });
+    addAction(autoRefreshLiveUpdatesAct_);
+
     // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
@@ -406,6 +424,8 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Index Menu
     auto* indexMenu = menuBar()->addMenu(QStringLiteral("Index"));
     indexMenu->addAction(refreshIndexesAct);
+    indexMenu->addSeparator();
+    indexMenu->addAction(autoRefreshLiveUpdatesAct_);
 
     // Settings Menu
     auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
@@ -421,6 +441,16 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
             rebuildFilterMenu();
             updateSearch(searchLine_->text());
         });
+
+        connect(controller_, &AppController::autoRefreshResultsForLiveUpdatesChanged,
+                this, [this](bool enabled) {
+                    if (!autoRefreshLiveUpdatesAct_) {
+                        return;
+                    }
+
+                    const QSignalBlocker blocker(autoRefreshLiveUpdatesAct_);
+                    autoRefreshLiveUpdatesAct_->setChecked(enabled);
+                });
     }
 
     updateActionStates();

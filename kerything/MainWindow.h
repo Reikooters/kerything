@@ -155,15 +155,14 @@ private:
     void updateSearchLineFilterHint();
 
     AppController* controller_ = nullptr;
-    // QString fsType_;
-    // QString mountPath_;
-    // QString devicePath_;
     QLineEdit *searchLine_ = nullptr;
     QTableView *tableView_ = nullptr;
     FileModel *model_ = nullptr;
     QLabel *statusLabel_ = nullptr;
     quint64 statusMessageId_ = 0;
     QMenu* filterMenu_ = nullptr;
+    QAction* autoRefreshLiveUpdatesAct_ = nullptr;
+
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;
     QString activeSearchFilter_;

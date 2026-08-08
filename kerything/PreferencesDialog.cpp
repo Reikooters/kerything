@@ -687,13 +687,42 @@ QWidget* PreferencesDialog::createAdvancedPage()
     auto* label = new QLabel(
         QStringLiteral(
             "<h2>Advanced</h2>"
-            "<p>Advanced maintenance actions for Kerything.</p>"
+            "<p>Advanced maintenance actions and application-wide preferences for Kerything.</p>"
         ),
         page
     );
     label->setWordWrap(true);
 
     layout->addWidget(label);
+
+    auto* liveUpdatesGroup = new QGroupBox(QStringLiteral("Live updates"), page);
+    auto* liveUpdatesLayout = new QVBoxLayout(liveUpdatesGroup);
+
+    autoRefreshLiveUpdatesCheckBox_ = new QCheckBox(
+        QStringLiteral("Automatically refresh and re-sort visible search results as live updates arrive"),
+        liveUpdatesGroup
+    );
+    autoRefreshLiveUpdatesCheckBox_->setChecked(preferences_.autoRefreshResultsForLiveUpdates());
+    autoRefreshLiveUpdatesCheckBox_->setToolTip(
+        QStringLiteral(
+            "When disabled, Kerything still keeps the internal index up to date, "
+            "but visible search results are not automatically refreshed or re-sorted until you search again or re-enable this option."
+        )
+    );
+
+    auto* liveUpdatesDescription = new QLabel(
+        QStringLiteral(
+            "Disable this if many filesystem changes are occurring and you want the visible results list to stay still while you browse it. "
+            "The internal index will continue receiving live updates."
+        ),
+        liveUpdatesGroup
+    );
+    liveUpdatesDescription->setWordWrap(true);
+
+    liveUpdatesLayout->addWidget(autoRefreshLiveUpdatesCheckBox_);
+    liveUpdatesLayout->addWidget(liveUpdatesDescription);
+
+    layout->addWidget(liveUpdatesGroup);
 
     auto* firstRunGroup = new QGroupBox(QStringLiteral("First-run setup"), page);
     auto* firstRunLayout = new QVBoxLayout(firstRunGroup);
@@ -739,6 +768,10 @@ QWidget* PreferencesDialog::createAdvancedPage()
             QStringLiteral("First-run setup reset"),
             QStringLiteral("First-run setup has been reset and will appear again the next time Kerything starts.")
         );
+    });
+
+    connect(autoRefreshLiveUpdatesCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
     });
 
     return page;
@@ -1179,7 +1212,17 @@ bool PreferencesDialog::validateFilters(QString* errorText) const
 
 bool PreferencesDialog::hasChanges() const
 {
-    return hasDeviceChanges() || hasFilterChanges();
+    return hasDeviceChanges() || hasFilterChanges() || hasGeneralChanges();
+}
+
+bool PreferencesDialog::hasGeneralChanges() const
+{
+    if (!autoRefreshLiveUpdatesCheckBox_) {
+        return false;
+    }
+
+    return autoRefreshLiveUpdatesCheckBox_->isChecked() !=
+           preferences_.autoRefreshResultsForLiveUpdates();
 }
 
 bool PreferencesDialog::hasDeviceChanges() const
@@ -1263,6 +1306,16 @@ void PreferencesDialog::applyChanges()
         return;
     }
 
+    const bool autoRefreshChanged = hasGeneralChanges();
+    const bool autoRefreshEnabled =
+        autoRefreshLiveUpdatesCheckBox_
+            ? autoRefreshLiveUpdatesCheckBox_->isChecked()
+            : preferences_.autoRefreshResultsForLiveUpdates();
+
+    if (autoRefreshChanged) {
+        preferences_.setAutoRefreshResultsForLiveUpdates(autoRefreshEnabled);
+    }
+
     const bool filtersChanged = hasFilterChanges();
 
     if (filtersChanged) {
@@ -1274,6 +1327,10 @@ void PreferencesDialog::applyChanges()
     if (!deviceTable_) {
         if (filtersChanged) {
             Q_EMIT searchFiltersApplied();
+        }
+
+        if (autoRefreshChanged) {
+            Q_EMIT autoRefreshResultsForLiveUpdatesApplied(autoRefreshEnabled);
         }
 
         updateApplyButtonEnabled();
@@ -1363,6 +1420,10 @@ void PreferencesDialog::applyChanges()
 
     if (filtersChanged) {
         Q_EMIT searchFiltersApplied();
+    }
+
+    if (autoRefreshChanged) {
+        Q_EMIT autoRefreshResultsForLiveUpdatesApplied(autoRefreshEnabled);
     }
 
     if (!changes.isEmpty()) {

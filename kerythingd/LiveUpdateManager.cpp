@@ -245,11 +245,16 @@ namespace {
         const std::vector<LiveUpdateOperation>& operations)
     {
         QSet<quint64> upsertInodes;
+        QSet<quint64> metadataInodesToKeep;
         bool hasResolvedDeleteEntry = false;
 
         for (const LiveUpdateOperation& operation : operations) {
             if (operation.kind == LiveUpdateOperationKind::Upsert && operation.inode != 0) {
                 upsertInodes.insert(operation.inode);
+            }
+            else if (operation.kind == LiveUpdateOperationKind::MetadataChanged &&
+                     operation.inode != 0) {
+                metadataInodesToKeep.insert(operation.inode);
             }
             else if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
                 if (operation.parentInode != 0) {
@@ -258,24 +263,38 @@ namespace {
             }
         }
 
-        std::vector<LiveUpdateOperation> coalesced;
-        coalesced.reserve(operations.size());
+        std::vector<LiveUpdateOperation> coalescedReverse;
+        coalescedReverse.reserve(operations.size());
 
-        for (const LiveUpdateOperation& operation : operations) {
+        /*
+         * Walk backwards so the last metadata snapshot for each inode wins.
+         * This is important with FAN_MODIFY, where a busy writer can produce many
+         * metadata events for the same file in one fanotify batch.
+         */
+        QSet<quint64> emittedMetadataInodes;
+
+        for (auto it = operations.rbegin(); it != operations.rend(); ++it) {
+            const LiveUpdateOperation& operation = *it;
+
             if (operation.kind == LiveUpdateOperationKind::Ignored) {
                 continue;
             }
 
-            if (operation.kind == LiveUpdateOperationKind::MetadataChanged &&
-                operation.inode != 0 &&
-                upsertInodes.contains(operation.inode)) {
-                continue;
-            }
+            if (operation.kind == LiveUpdateOperationKind::MetadataChanged) {
+                if (operation.inode == 0) {
+                    continue;
+                }
 
-            if (operation.kind == LiveUpdateOperationKind::NeedsRescan &&
-                operation.inode != 0 &&
-                upsertInodes.contains(operation.inode) &&
-                operation.reason == QStringLiteral("object was deleted or moved")) {
+                if (upsertInodes.contains(operation.inode)) {
+                    continue;
+                }
+
+                if (emittedMetadataInodes.contains(operation.inode)) {
+                    continue;
+                }
+
+                emittedMetadataInodes.insert(operation.inode);
+                coalescedReverse.push_back(operation);
                 continue;
             }
 
@@ -285,7 +304,14 @@ namespace {
                 continue;
             }
 
-            coalesced.push_back(operation);
+            coalescedReverse.push_back(operation);
+        }
+
+        std::vector<LiveUpdateOperation> coalesced;
+        coalesced.reserve(coalescedReverse.size());
+
+        for (auto it = coalescedReverse.rbegin(); it != coalescedReverse.rend(); ++it) {
+            coalesced.push_back(std::move(*it));
         }
 
         return coalesced;

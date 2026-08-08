@@ -245,16 +245,11 @@ namespace {
         const std::vector<LiveUpdateOperation>& operations)
     {
         QSet<quint64> upsertInodes;
-        QSet<quint64> metadataInodesToKeep;
         bool hasResolvedDeleteEntry = false;
 
         for (const LiveUpdateOperation& operation : operations) {
             if (operation.kind == LiveUpdateOperationKind::Upsert && operation.inode != 0) {
                 upsertInodes.insert(operation.inode);
-            }
-            else if (operation.kind == LiveUpdateOperationKind::MetadataChanged &&
-                     operation.inode != 0) {
-                metadataInodesToKeep.insert(operation.inode);
             }
             else if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
                 if (operation.parentInode != 0) {

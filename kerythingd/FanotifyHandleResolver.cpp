@@ -39,21 +39,33 @@ FanotifyHandleResolver::FanotifyHandleResolver(QString mountPoint)
 {
 }
 
+FanotifyHandleResolver::~FanotifyHandleResolver()
+{
+    if (mountFd_ >= 0) {
+        ::close(mountFd_);
+        mountFd_ = -1;
+    }
+}
+
 int FanotifyHandleResolver::openMountFd(QString* errorText) const
 {
+    if (mountFd_ >= 0) {
+        return mountFd_;
+    }
+
     const QByteArray mountPointNative = QFile::encodeName(mountPoint_);
 
-    const int fd = ::open(
+    mountFd_ = ::open(
         mountPointNative.constData(),
         O_RDONLY | O_DIRECTORY | O_CLOEXEC
     );
 
-    if (fd < 0 && errorText) {
+    if (mountFd_ < 0 && errorText) {
         *errorText = QStringLiteral("failed to open mount point %1: %2")
             .arg(mountPoint_, QString::fromLocal8Bit(std::strerror(errno)));
     }
 
-    return fd;
+    return mountFd_;
 }
 
 int FanotifyHandleResolver::openHandle(
@@ -104,11 +116,7 @@ int FanotifyHandleResolver::openHandle(
         O_RDONLY | O_CLOEXEC
     );
 
-    const int savedErrno = errno;
-    ::close(mountFd);
-
     if (fd < 0 && errorText) {
-        errno = savedErrno;
         *errorText = QStringLiteral("open_by_handle_at failed for %1: %2")
             .arg(mountPoint_, QString::fromLocal8Bit(std::strerror(errno)));
     }

@@ -23,6 +23,7 @@ struct ResolvedFanotifyHandle {
 class FanotifyHandleResolver {
 public:
     explicit FanotifyHandleResolver(QString mountPoint);
+    ~FanotifyHandleResolver();
 
     [[nodiscard]] ResolvedFanotifyHandle resolveObjectHandle(
         const QString& handleHex,
@@ -44,6 +45,7 @@ private:
     ) const;
 
     QString mountPoint_;
+    mutable int mountFd_ = -1;
 };
 
 #endif // KERYTHINGD_FANOTIFYHANDLERESOLVER_H

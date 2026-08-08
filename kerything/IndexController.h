@@ -562,6 +562,8 @@ private:
         uint32_t recordIdx,
         std::vector<TrigramEntry>& targetIndex
     );
+    static bool shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
+    static void rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
     static void sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex);
     static bool appendRecordFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,

@@ -609,6 +609,10 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         sortLiveUpdateTrigramIndex(*targetIndex);
     }
 
+    if (shouldRebuildTrigramIndexAfterLiveUpdates(*targetIndex)) {
+        rebuildTrigramIndexAfterLiveUpdates(*targetIndex);
+    }
+
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: applied live update operations"
               << " deviceId=" << deviceId.toStdString()
@@ -807,6 +811,103 @@ bool IndexController::appendTrigramsForRecord(
     }
 
     return true;
+}
+
+bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
+{
+    if (deviceIndex.liveDeltaFlatIndex.empty()) {
+        return false;
+    }
+
+    static constexpr std::size_t LiveDeltaRebuildMinEntries = 100'000;
+    static constexpr std::size_t LiveDeltaRebuildRatioDivisor = 10;
+
+    if (deviceIndex.liveDeltaFlatIndex.size() < LiveDeltaRebuildMinEntries) {
+        return false;
+    }
+
+    if (deviceIndex.flatIndex.empty()) {
+        return true;
+    }
+
+    return deviceIndex.liveDeltaFlatIndex.size() >=
+           deviceIndex.flatIndex.size() / LiveDeltaRebuildRatioDivisor;
+}
+
+void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
+{
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Rebuilding trigram index after live updates"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " flatIndex=" << deviceIndex.flatIndex.size()
+              << " liveDeltaFlatIndex=" << deviceIndex.liveDeltaFlatIndex.size()
+              << "\n";
+#endif
+
+    std::vector<TrigramEntry> rebuiltIndex;
+
+    std::size_t estimatedTrigrams = 0;
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        const FileRecord& record = deviceIndex.fileRecords[recordIdx];
+        if (record.nameLen >= 3 &&
+            record.nameOffset + record.nameLen <= deviceIndex.lowercaseStringPool.size()) {
+            estimatedTrigrams += record.nameLen - 2;
+        }
+    }
+
+    rebuiltIndex.reserve(estimatedTrigrams);
+
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        appendTrigramsForRecord(deviceIndex, recordIdx, rebuiltIndex);
+    }
+
+    static constexpr std::size_t ParallelSortThreshold = 500;
+
+    if (rebuiltIndex.size() >= ParallelSortThreshold) {
+        std::sort(
+            std::execution::par,
+            rebuiltIndex.begin(),
+            rebuiltIndex.end()
+        );
+    } else {
+        std::sort(
+            rebuiltIndex.begin(),
+            rebuiltIndex.end()
+        );
+    }
+
+    auto last = std::unique(
+        rebuiltIndex.begin(),
+        rebuiltIndex.end(),
+        [](const auto& a, const auto& b) {
+            return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
+        }
+    );
+
+    rebuiltIndex.erase(last, rebuiltIndex.end());
+    rebuiltIndex.shrink_to_fit();
+
+    deviceIndex.flatIndex = std::move(rebuiltIndex);
+    deviceIndex.liveDeltaFlatIndex.clear();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Finished rebuilding trigram index after live updates"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " flatIndex=" << deviceIndex.flatIndex.size()
+              << "\n";
+#endif
 }
 
 void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)

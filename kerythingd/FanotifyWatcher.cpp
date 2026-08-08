@@ -232,7 +232,7 @@ bool FanotifyWatcher::start()
         FAN_MOVED_FROM |
         FAN_MOVED_TO |
         FAN_CLOSE_WRITE |
-        // FAN_MODIFY |
+        FAN_MODIFY |
         FAN_ATTRIB |
         FAN_DELETE_SELF |
         FAN_MOVE_SELF |

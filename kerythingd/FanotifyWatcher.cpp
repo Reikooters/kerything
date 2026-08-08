@@ -91,7 +91,7 @@ namespace {
                     reinterpret_cast<const unsigned char*>(&fid->fsid),
                     sizeof(fid->fsid)
                 );
-                nameInfo.handleType = fileHandle->handle_type;nameInfo.handleType = fileHandle->handle_type;
+                nameInfo.handleType = fileHandle->handle_type;
                 nameInfo.handleHex = bytesToHex(
                     reinterpret_cast<const unsigned char*>(fileHandle->f_handle),
                     fileHandle->handle_bytes

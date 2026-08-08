@@ -1495,8 +1495,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
         return a.mountPointIdx < b.mountPointIdx;
     };
 
-    std::vector<size_t> resultsOrder(results.size());
-    std::iota(resultsOrder.begin(), resultsOrder.end(), size_t{0});
+    std::vector<uint32_t> resultsOrder(results.size());
+    std::iota(resultsOrder.begin(), resultsOrder.end(), uint32_t{0});
 
     auto sortOrderIndices = [&](auto&& comparator) {
         if (resultsOrder.size() >= ParallelSortThreshold) {
@@ -1518,7 +1518,6 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
     if (column == 0) { // Name column
         struct NameKey {
             std::string_view nameKey;
-            RecordHandle handle{};
             bool valid = false;
         };
 
@@ -1530,7 +1529,6 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto& handle = results[i];
                 auto& key = keys[i];
-                key.handle = handle;
 
                 const auto it = indexByIndexId_.find(handle.indexId);
                 if (it == indexByIndexId_.end()) {
@@ -1555,32 +1553,31 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             }
         }
 
-        auto lessByIndex = [&](size_t lhs, size_t rhs) {
+        auto lessByIndex = [&](uint32_t lhs, uint32_t rhs) {
             const auto& a = keys[lhs];
             const auto& b = keys[rhs];
 
             if (!a.valid || !b.valid) {
-                return handleLess(a.handle, b.handle);
+                return handleLess(results[lhs], results[rhs]);
             }
 
             if (a.nameKey != b.nameKey) {
                 return a.nameKey < b.nameKey;
             }
 
-            return handleLess(a.handle, b.handle);
+            return handleLess(results[lhs], results[rhs]);
         };
 
         if (sortOrder == Qt::AscendingOrder) {
             sortOrderIndices(lessByIndex);
         } else {
-            sortOrderIndices([&](size_t lhs, size_t rhs) {
+            sortOrderIndices([&](uint32_t lhs, uint32_t rhs) {
                 return lessByIndex(rhs, lhs);
             });
         }
     } else if (column == 1) { // Path column
         struct PathKey {
             std::string pathKey;
-            RecordHandle handle{};
             bool valid = false;
         };
 
@@ -1592,7 +1589,6 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto& handle = results[i];
                 auto& key = keys[i];
-                key.handle = handle;
 
                 const auto it = indexByIndexId_.find(handle.indexId);
                 if (it == indexByIndexId_.end()) {
@@ -1620,38 +1616,36 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             }
         }
 
-        auto lessByIndex = [&](size_t lhs, size_t rhs) {
+        auto lessByIndex = [&](uint32_t lhs, uint32_t rhs) {
             const auto& a = keys[lhs];
             const auto& b = keys[rhs];
 
             if (!a.valid || !b.valid) {
-                return handleLess(a.handle, b.handle);
+                return handleLess(results[lhs], results[rhs]);
             }
 
             if (a.pathKey != b.pathKey) {
                 return a.pathKey < b.pathKey;
             }
 
-            return handleLess(a.handle, b.handle);
+            return handleLess(results[lhs], results[rhs]);
         };
 
         if (sortOrder == Qt::AscendingOrder) {
             sortOrderIndices(lessByIndex);
         } else {
-            sortOrderIndices([&](size_t lhs, size_t rhs) {
+            sortOrderIndices([&](uint32_t lhs, uint32_t rhs) {
                 return lessByIndex(rhs, lhs);
             });
         }
     } else if (column == 2 || column == 3) { // Size or Modification time column
         std::vector<quint64> numericKeys(results.size());
-        std::vector<RecordHandle> handles(results.size());
 
         {
             std::shared_lock lock(indexMutex_);
 
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto& handle = results[i];
-                handles[i] = handle;
 
                 const auto it = indexByIndexId_.find(handle.indexId);
                 if (it == indexByIndexId_.end()) {
@@ -1670,26 +1664,20 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(st
             }
         }
 
-        auto lessByIndex = [&](size_t lhs, size_t rhs) {
+        auto lessByIndex = [&](uint32_t lhs, uint32_t rhs) {
             const auto aKey = numericKeys[lhs];
             const auto bKey = numericKeys[rhs];
 
             if (aKey != bKey) {
-                return aKey < bKey;
+                return sortOrder == Qt::AscendingOrder
+                    ? aKey < bKey
+                    : aKey > bKey;
             }
 
-            return handleLess(handles[lhs], handles[rhs]);
+            return handleLess(results[lhs], results[rhs]);
         };
 
-        // Sort using parallel execution only for large result sets. For smaller
-        // repeated live-refresh sorts, TBB scheduling/yield overhead can dominate.
-        if (sortOrder == Qt::AscendingOrder) {
-            sortOrderIndices(lessByIndex);
-        } else {
-            sortOrderIndices([&](size_t lhs, size_t rhs) {
-                return lessByIndex(rhs, lhs);
-            });
-        }
+        sortOrderIndices(lessByIndex);
     } else {
         return results;
     }

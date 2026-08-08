@@ -311,7 +311,7 @@ QWidget* PreferencesDialog::createDevicesPage()
     );
 
     liveUpdatesEnabledCheckBox_ = new QCheckBox(
-        QStringLiteral("Watch this device for real-time updates when mounted"),
+        QStringLiteral("Watch this device for live updates when mounted"),
         optionsGroup
     );
 
@@ -381,17 +381,17 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         if (liveUpdatesSupported) {
             liveUpdatesEnabledCheckBox_->setText(
-                QStringLiteral("Watch this device for real-time updates when mounted")
+                QStringLiteral("Watch this device for live updates when mounted")
             );
             liveUpdatesEnabledCheckBox_->setToolTip(
                 QStringLiteral("Kerything will keep this EXT4 device up to date using fanotify while it is mounted.")
             );
         } else {
             liveUpdatesEnabledCheckBox_->setText(
-                QStringLiteral("Watch this device for real-time updates when mounted (EXT4 only)")
+                QStringLiteral("Watch this device for live updates when mounted (EXT4 only)")
             );
             liveUpdatesEnabledCheckBox_->setToolTip(
-                QStringLiteral("Real-time updates currently require EXT4. This device uses a different filesystem.")
+                QStringLiteral("Live updates currently require EXT4. This device uses a different filesystem.")
             );
         }
     };

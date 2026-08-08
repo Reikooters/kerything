@@ -227,7 +227,7 @@ The following keyboard shortcuts are available in Kerything:
 > 
 > To do this, follow the uninstallation instructions in the [v1-legacy](https://github.com/Reikooters/kerything/tree/v1-legacy) branch.
 > 
-> The project was rewritten to provide a better base with which features like real-time updates can be implemented onto.
+> The project was rewritten to provide a better base with which features like live updates can be implemented onto.
 
 Kerything can be installed in two main ways:
 
@@ -804,7 +804,7 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 
 ## Future Plans
 
-- **Live Update Expansion:** Extend real-time update support beyond mounted EXT4 filesystems, including additional filesystems and more advanced recovery behavior.
+- **Live Update Expansion:** Extend live update support beyond mounted EXT4 filesystems, including additional filesystems and more advanced recovery behavior.
 - **Additional File System Support:** Expanding support to other file systems such as Btrfs.
 
 ## Credits

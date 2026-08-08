@@ -590,9 +590,6 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     break;
 
                 case UpsertApplyResult::Invalid:
-                    ++result.unsupported;
-                    break;
-
                 case UpsertApplyResult::NotUpsert:
                     ++result.unsupported;
                     break;
@@ -949,7 +946,7 @@ std::optional<uint32_t> IndexController::findLiveEntryRecord(
         }
 
         return recordIdx;
-         }
+    }
 
     return std::nullopt;
 }
@@ -1045,17 +1042,16 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
         return UpsertApplyResult::Applied;
     }
 
-    const std::vector<uint32_t>* recordIndices =
-        deviceIndex.recordIndicesForFsIndex(operation.inode);
-
-    if (recordIndices && !recordIndices->empty()) {
-        for (const uint32_t recordIdx : *recordIndices) {
-            if (recordIdx < deviceIndex.fileRecords.size() &&
-                !deviceIndex.isDeletedRecord(recordIdx)) {
-                return UpsertApplyResult::NeedsRescan;
-            }
-        }
-    }
+    /*
+     * If the inode already exists but this exact parent/name pair does not, this
+     * is usually a new directory entry for the same inode, for example a hard link.
+     *
+     * Paired renames/moves are handled earlier by DeleteEntry matching a pending
+     * Upsert with the same inode and updating that existing record's identity.
+     * Reaching this point means this Upsert is not consumed by a matching delete,
+     * so appending a second FileRecord is the safest representation for EXT4 hard
+     * links and avoids false stale-index warnings.
+     */
 
     /*
      * New non-root entries need their parent directory to exist in the index

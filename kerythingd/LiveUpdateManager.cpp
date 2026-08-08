@@ -151,8 +151,8 @@ namespace {
 
         if (event.mask & (FAN_DELETE_SELF | FAN_MOVE_SELF)) {
             LiveUpdateOperation operation;
-            operation.kind = LiveUpdateOperationKind::NeedsRescan;
-            operation.reason = QStringLiteral("object was deleted or moved");
+            operation.kind = LiveUpdateOperationKind::Ignored;
+            operation.reason = QStringLiteral("redundant self delete/move notification");
             return operation;
         }
 
@@ -269,6 +269,13 @@ namespace {
             if (operation.kind == LiveUpdateOperationKind::MetadataChanged &&
                 operation.inode != 0 &&
                 upsertInodes.contains(operation.inode)) {
+                continue;
+            }
+
+            if (operation.kind == LiveUpdateOperationKind::NeedsRescan &&
+                operation.inode != 0 &&
+                upsertInodes.contains(operation.inode) &&
+                operation.reason == QStringLiteral("object was deleted or moved")) {
                 continue;
             }
 

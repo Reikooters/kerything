@@ -333,6 +333,11 @@ void FileModel::notifyRowsDataChanged(int firstRow, int lastRow)
     );
 }
 
+void FileModel::trimSortScratch()
+{
+    sortScratch_.clearAndRelease();
+}
+
 // const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {
 //     if (!controller_->indexController()) {
 //         return nullptr;

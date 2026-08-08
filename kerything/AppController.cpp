@@ -149,6 +149,7 @@ bool AppController::start() {
     connect(indexController_, &IndexController::deviceRemoved,
         this, [this](quint64 indexId) {
             Q_UNUSED(indexId);
+            trimSortScratchAllWindows();
             requestRefreshAllWindows();
         });
 
@@ -179,6 +180,8 @@ bool AppController::start() {
                 scanRequestDeviceIds_.clear();
                 activeScanDeviceIds_.clear();
                 manualRefreshKnownDeviceRequestIds_.clear();
+
+                trimSortScratchAllWindows();
 
                 // Update UI: backend not available
                 requestRefreshAllWindows();
@@ -697,6 +700,8 @@ void AppController::refreshIndexes()
         return;
     }
 
+    trimSortScratchAllWindows();
+
     quint32 requestId = 0;
     if (!requestKnownDevices(&requestId)) {
         requestWindowStatusMessage(
@@ -891,6 +896,17 @@ void AppController::cleanupWindows() {
             it = windows_.erase(it);
         } else {
             ++it;
+        }
+    }
+}
+
+void AppController::trimSortScratchAllWindows()
+{
+    cleanupWindows();
+
+    for (auto& window : windows_) {
+        if (window) {
+            window->trimSortScratch();
         }
     }
 }

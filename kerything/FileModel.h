@@ -37,7 +37,26 @@ public:
         Qt::SortOrder order = Qt::AscendingOrder
     );
 
+    /**
+     * @brief Notifies the view that the data in the specified rows has changed.
+     *
+     * This method emits the `dataChanged` signal for the given range of rows,
+     * ensuring the view updates the display for those rows. The method also
+     * ensures that the range indices are clamped to valid bounds and that
+     * notifications are only sent for meaningful ranges.
+     *
+     * @param firstRow The index of the first row to mark as changed.
+     * @param lastRow The index of the last row to mark as changed.
+     */
     void notifyRowsDataChanged(int firstRow, int lastRow);
+
+    /**
+     * @brief Releases reusable sort scratch buffers retained for large result sets.
+     *
+     * Useful after rescans or device removals, where the maximum possible result
+     * count may have permanently decreased.
+     */
+    void trimSortScratch();
 
     /**
      * @brief Sorts the search results based on the specified column and order.

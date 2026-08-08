@@ -488,13 +488,11 @@ void MainWindow::updateSearch(const QString &text) {
     const int sortCol = tableView_->horizontalHeader()->sortIndicatorSection();
     const Qt::SortOrder sortOrder = tableView_->horizontalHeader()->sortIndicatorOrder();
 
-    results = controller_->indexController()->sortSearchResults(
+    model_->setSortedSearchResults(
         std::move(results),
         sortCol,
         sortOrder
     );
-
-    model_->setSearchResults(std::move(results));
     restoreSelectedRecordHandles(selectedHandles, currentHandle);
     auto end2 = std::chrono::steady_clock::now();
 
@@ -503,7 +501,7 @@ void MainWindow::updateSearch(const QString &text) {
     std::chrono::duration<double> elapsed = end2 - start1;
 
     // Update status bar
-    statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort/apply: %4s)")
+    statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort: %4s)")
         .arg(model_->rowCount())
         .arg(elapsed.count(), 0, 'f', 4)
         .arg(elapsed1.count(), 0, 'f', 4)
@@ -597,6 +595,13 @@ void MainWindow::markLiveStructuralRefreshDirty()
 void MainWindow::markLiveMetadataRefreshDirty()
 {
     liveMetadataRefreshDirty_ = true;
+}
+
+void MainWindow::trimSortScratch()
+{
+    if (model_) {
+        model_->trimSortScratch();
+    }
 }
 
 void MainWindow::changeEvent(QEvent* event)

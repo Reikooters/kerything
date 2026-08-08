@@ -462,6 +462,13 @@ public:
         std::vector<uint32_t> resultsOrder;
         std::vector<RecordHandle> sortedResults;
         std::vector<quint64> numericKeys;
+
+        void clearAndRelease()
+        {
+            std::vector<uint32_t>{}.swap(resultsOrder);
+            std::vector<RecordHandle>{}.swap(sortedResults);
+            std::vector<quint64>{}.swap(numericKeys);
+        }
     };
 
     struct ParsedSearchQuery {

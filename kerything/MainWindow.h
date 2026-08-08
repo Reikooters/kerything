@@ -41,6 +41,7 @@ public:
     void refreshLiveMetadata();
     void markLiveStructuralRefreshDirty();
     void markLiveMetadataRefreshDirty();
+    void trimSortScratch();
     void showTemporaryStatus(const QString& text, int timeoutMs);
 
 protected:

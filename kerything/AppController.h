@@ -51,6 +51,7 @@ private Q_SLOTS:
 
 private:
     void cleanupWindows();
+    void trimSortScratchAllWindows();
     void updateOpenPreferencesDialog();
     bool requestKnownDevices(quint32* requestIdOut = nullptr);
     void handleKnownDevicesUpdated(quint32 requestId, const std::vector<BlockDevice>& blockDevices);

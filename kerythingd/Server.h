@@ -6,6 +6,7 @@
 
 #include <QLocalServer>
 #include <QObject>
+#include <QSet>
 #include <QSocketNotifier>
 #include <QTimer>
 
@@ -60,6 +61,9 @@ private:
         const QString& mountPoint,
         const std::vector<LiveUpdateOperation>& operations
     );
+    void updateLiveUpdateWatchers();
+    [[nodiscard]] QSet<QString> requestedLiveUpdateDeviceIds() const;
+    [[nodiscard]] std::vector<BlockDevice> liveUpdateRequestedKnownDevices() const;
 
     QLocalServer server_;
     QSocketNotifier* systemdSocketNotifier_ = nullptr;

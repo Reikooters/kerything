@@ -149,6 +149,10 @@ void ClientConnection::handleFrame(const Protocol::MessageHeader& header, const 
             handleListKnownDevices(header.requestId);
             break;
 
+        case Protocol::MessageType::SetLiveUpdateDevices:
+            handleSetLiveUpdateDevices(payload);
+            break;
+
         default:
             sendError(header.requestId, QStringLiteral("unknown request type"));
             break;
@@ -210,6 +214,40 @@ void ClientConnection::handleListKnownDevices(quint32 requestId)
 {
     const auto devices = BlockDeviceHelper::listKnownDevices();
     sendKnownDevices(requestId, devices);
+}
+
+void ClientConnection::handleSetLiveUpdateDevices(const QByteArray& payload)
+{
+    const std::optional<QStringList> parsed =
+        Protocol::parseSetLiveUpdateDevicesPayload(payload);
+
+    if (!parsed) {
+        sendError(0, QStringLiteral("malformed SetLiveUpdateDevices payload"));
+        return;
+    }
+
+    liveUpdateDeviceIds_ = *parsed;
+    liveUpdateDeviceIds_.removeDuplicates();
+    liveUpdateDeviceIds_.removeAll(QString{});
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "Client live update device subscription changed count="
+              << liveUpdateDeviceIds_.size()
+              << "\n";
+
+    for (const QString& deviceId : liveUpdateDeviceIds_) {
+        std::cout << "  liveUpdateDeviceId="
+                  << deviceId.toStdString()
+                  << "\n";
+    }
+#endif
+
+    Q_EMIT liveUpdateDevicesChanged();
+}
+
+QStringList ClientConnection::liveUpdateDeviceIds() const
+{
+    return liveUpdateDeviceIds_;
 }
 
 void ClientConnection::sendReady()

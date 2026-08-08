@@ -163,6 +163,8 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::daemonReady,
             this, [this]() {
+                syncLiveUpdateDevices();
+
                 // Update UI: daemon is ready
                 requestRefreshAllWindows();
             });
@@ -354,6 +356,7 @@ bool AppController::start() {
                 // Mark device indexed in preferences so we persist the lastIndexedAt
                 if (deviceIdMatches) {
                     preferences_.markDeviceIndexed(deviceId);
+                    addLiveUpdateIndexedDevice(deviceId);
                 }
 
                 // Update indexed device runtime state again after scan completion,
@@ -1055,6 +1058,7 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
 
     for (const QString& disabledDeviceId : disabledDeviceIds) {
         cancelActiveScansForDevice(disabledDeviceId, true);
+        removeLiveUpdateIndexedDevice(disabledDeviceId);
 
 #ifdef KERYTHING_ENABLE_LOGGING
         std::cout << "GUI: disabled indexed device deviceId="
@@ -1117,6 +1121,7 @@ void AppController::cancelActiveScansForDevice(const QString& deviceId, bool rem
 
     if (removeDeviceIndex) {
         indexController_->removeDeviceByDeviceId(deviceId);
+        removeLiveUpdateIndexedDevice(deviceId);
     }
 }
 
@@ -1240,4 +1245,46 @@ QString AppController::takeTrackedScanDeviceId(quint32 requestId, const QString&
     }
 
     return deviceId;
+}
+
+void AppController::addLiveUpdateIndexedDevice(const QString& deviceId)
+{
+    if (deviceId.isEmpty()) {
+        return;
+    }
+
+    if (liveUpdateIndexedDeviceIds_.contains(deviceId)) {
+        return;
+    }
+
+    liveUpdateIndexedDeviceIds_.insert(deviceId);
+    syncLiveUpdateDevices();
+}
+
+void AppController::removeLiveUpdateIndexedDevice(const QString& deviceId)
+{
+    if (deviceId.isEmpty()) {
+        return;
+    }
+
+    if (liveUpdateIndexedDeviceIds_.remove(deviceId) == 0) {
+        return;
+    }
+
+    syncLiveUpdateDevices();
+}
+
+void AppController::syncLiveUpdateDevices()
+{
+    if (!daemonClient_ || !daemonClient_->isReady()) {
+        return;
+    }
+
+    QStringList deviceIds = liveUpdateIndexedDeviceIds_.values();
+    deviceIds.removeDuplicates();
+    deviceIds.removeAll(QString{});
+
+    if (!daemonClient_->setLiveUpdateDevices(deviceIds)) {
+        std::cerr << "GUI: failed to send live update device subscription\n";
+    }
 }

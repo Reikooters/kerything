@@ -7,6 +7,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDataStream>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 
 #include <optional>
 #include <tuple>
@@ -37,6 +38,7 @@ enum class MessageType : quint16 {
     LiveUpdateBatch = 12,
     LiveUpdateStatusChanged = 13,
     LiveUpdateOperationBatch = 14,
+    SetLiveUpdateDevices = 15,
     Error = 99
 };
 
@@ -183,6 +185,36 @@ inline QByteArray makeScanDevicePayload(const QString& deviceId)
     out.setVersion(QDataStream::Qt_6_0);
     out << deviceId;
     return payload;
+}
+
+inline QByteArray makeSetLiveUpdateDevicesPayload(const QStringList& deviceIds)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << deviceIds;
+    return payload;
+}
+
+inline std::optional<QStringList> parseSetLiveUpdateDevicesPayload(const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    QStringList deviceIds;
+    in >> deviceIds;
+
+    if (in.status() != QDataStream::Ok) {
+        return std::nullopt;
+    }
+
+    deviceIds.removeDuplicates();
+    deviceIds.removeAll(QString{});
+
+    return deviceIds;
 }
 
 inline QByteArray makeLiveUpdateBatchPayload(

@@ -10,6 +10,7 @@
 #include <QLocalSocket>
 #include <QObject>
 #include <QQueue>
+#include <QStringList>
 #include <QTimer>
 
 #include "BlockDevice.h"
@@ -30,6 +31,7 @@ public:
 
     bool sendRequest(Protocol::MessageType type, const QByteArray& payload, quint32* requestIdOut = nullptr);
     bool cancelRequest(quint32 requestId);
+    bool setLiveUpdateDevices(const QStringList& deviceIds);
 
 Q_SIGNALS:
     void connectedChanged(bool connected);

@@ -107,7 +107,7 @@ Server::Server(QObject* parent)
                 broadcastLiveUpdateOperationBatch(deviceId, mountPoint, operations);
             });
 
-    liveUpdateManager_->setKnownDevices(lastKnownDevices_);
+    updateLiveUpdateWatchers();
 
     deviceChangeMonitor_ = new DeviceChangeMonitor(this);
     connect(deviceChangeMonitor_, &DeviceChangeMonitor::devicesMayHaveChanged,
@@ -316,6 +316,9 @@ void Server::addClientConnection(QLocalSocket* socket)
     connect(connection, &ClientConnection::disconnected,
             this, &Server::onClientDisconnected);
 
+    connect(connection, &ClientConnection::liveUpdateDevicesChanged,
+            this, &Server::updateLiveUpdateWatchers);
+
     connection->sendReady();
     connection->sendKnownDevices(0, lastKnownDevices_);
 
@@ -399,6 +402,7 @@ void Server::onClientDisconnected(ClientConnection* connection)
 
     std::cout << "Client disconnected\n";
 
+    updateLiveUpdateWatchers();
     startIdleShutdownTimerIfIdle();
 }
 
@@ -450,9 +454,7 @@ void Server::refreshKnownDevices()
 
     lastKnownDevices_ = devices;
 
-    if (liveUpdateManager_) {
-        liveUpdateManager_->setKnownDevices(lastKnownDevices_);
-    }
+    updateLiveUpdateWatchers();
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Known devices changed; broadcasting count="
@@ -518,4 +520,48 @@ void Server::broadcastLiveUpdateOperationBatch(
             client->sendLiveUpdateOperationBatch(deviceId, mountPoint, operations);
         }
     }
+}
+
+QSet<QString> Server::requestedLiveUpdateDeviceIds() const
+{
+    QSet<QString> requested;
+
+    for (const ClientConnection* client : clients_) {
+        if (!client) {
+            continue;
+        }
+
+        for (const QString& deviceId : client->liveUpdateDeviceIds()) {
+            if (!deviceId.isEmpty()) {
+                requested.insert(deviceId);
+            }
+        }
+    }
+
+    return requested;
+}
+
+std::vector<BlockDevice> Server::liveUpdateRequestedKnownDevices() const
+{
+    const QSet<QString> requested = requestedLiveUpdateDeviceIds();
+
+    std::vector<BlockDevice> devices;
+    devices.reserve(lastKnownDevices_.size());
+
+    for (const BlockDevice& device : lastKnownDevices_) {
+        if (requested.contains(device.deviceId)) {
+            devices.push_back(device);
+        }
+    }
+
+    return devices;
+}
+
+void Server::updateLiveUpdateWatchers()
+{
+    if (!liveUpdateManager_) {
+        return;
+    }
+
+    liveUpdateManager_->setKnownDevices(liveUpdateRequestedKnownDevices());
 }

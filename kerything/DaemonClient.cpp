@@ -120,6 +120,18 @@ bool DaemonClient::cancelRequest(quint32 requestId)
     return socket_.write(bytes) == bytes.size();
 }
 
+bool DaemonClient::setLiveUpdateDevices(const QStringList& deviceIds)
+{
+    QStringList normalized = deviceIds;
+    normalized.removeDuplicates();
+    normalized.removeAll(QString{});
+
+    return sendRequest(
+        Protocol::MessageType::SetLiveUpdateDevices,
+        Protocol::makeSetLiveUpdateDevicesPayload(normalized)
+    );
+}
+
 void DaemonClient::tryConnect()
 {
     if (shuttingDown_) {

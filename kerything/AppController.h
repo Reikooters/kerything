@@ -68,6 +68,9 @@ private:
     void scheduleLiveUpdateRefresh();
     void scheduleLiveMetadataRefresh();
     void requestLiveMetadataRefreshAllWindows();
+    void addLiveUpdateIndexedDevice(const QString& deviceId);
+    void removeLiveUpdateIndexedDevice(const QString& deviceId);
+    void syncLiveUpdateDevices();
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
@@ -82,6 +85,7 @@ private:
     QSet<QString> activeScanDeviceIds_;
 
     QSet<quint32> manualRefreshKnownDeviceRequestIds_;
+    QSet<QString> liveUpdateIndexedDeviceIds_;
 
     std::vector<BlockDevice> knownDevices_;
     bool hasReceivedKnownDevices_ = false;

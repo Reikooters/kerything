@@ -59,8 +59,11 @@ public:
     );
     void sendError(quint32 requestId, const QString& errorText);
 
+    [[nodiscard]] QStringList liveUpdateDeviceIds() const;
+
 Q_SIGNALS:
     void disconnected(ClientConnection* connection);
+    void liveUpdateDevicesChanged();
 
 private Q_SLOTS:
     void onReadyRead();
@@ -71,6 +74,7 @@ private:
     void handleScanDevice(quint32 requestId, const QByteArray& payload);
     void handleCancelRequest(quint32 requestId);
     void handleListKnownDevices(quint32 requestId);
+    void handleSetLiveUpdateDevices(const QByteArray& payload);
 
     bool sendFrame(Protocol::MessageType type, quint32 requestId, const QByteArray& payload) const;
     QByteArray encodeFrame(Protocol::MessageType type, quint32 requestId, const QByteArray& payload) const;
@@ -83,6 +87,7 @@ private:
     ScannerWorker* scannerWorker_ = nullptr;
 
     QHash<quint32, std::shared_ptr<ScanJob>> activeJobs_;
+    QStringList liveUpdateDeviceIds_;
     bool shuttingDown_ = false;
 };
 

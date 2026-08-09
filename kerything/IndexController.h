@@ -111,6 +111,7 @@ public:
                     std::chrono::steady_clock::now() - start
                 ).count();
 
+#ifdef KERYTHING_ENABLE_LOGGING
                 if (elapsedMs >= 25) {
                     std::cerr << "markDeletedRecordTree rootRecordIdx="
                               << rootRecordIdx
@@ -122,6 +123,7 @@ public:
                               << elapsedMs
                               << "ms\n";
                 }
+#endif
             };
 
             if (deletedDirectory) {

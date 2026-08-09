@@ -38,12 +38,14 @@ namespace {
         {
             const qint64 elapsedMs = elapsedMsSince(start_);
 
+#ifdef KERYTHING_ENABLE_LOGGING
             if (elapsedMs >= thresholdMs_) {
                 std::cerr << label_.toStdString()
                           << " took "
                           << elapsedMs
                           << "ms\n";
             }
+#endif
         }
 
     private:
@@ -486,6 +488,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "live batch #" << liveBatchDebugId
               << " start deviceId=" << deviceId.toStdString()
               << " operations=" << operations.size()
@@ -495,6 +498,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " needsRescan=" << operationNeedsRescan
               << " other=" << operationOther
               << "\n";
+#endif
 
     if (deviceId.isEmpty() || operations.empty()) {
         return result;
@@ -514,10 +518,12 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     if (!targetIndex || !targetIndex->isReady) {
         result.missingDevice = static_cast<qsizetype>(operations.size());
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "live batch #" << liveBatchDebugId
                   << " end missing device elapsed="
                   << elapsedMsSince(batchStart)
                   << "ms\n";
+#endif
 
         return result;
     }
@@ -544,10 +550,12 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "live batch #" << liveBatchDebugId
               << " delete parents=" << deleteParentInodes.size()
               << " deleteEntryOperationCount=" << deleteEntryOperationCount
               << "\n";
+#endif
 
     QHash<QByteArray, uint32_t> liveEntryRecordByParentAndName;
 
@@ -592,12 +600,14 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             ++insertedRecords;
         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "live batch #" << liveBatchDebugId
                   << " delete lookup scannedRecords=" << scannedRecords
                   << " parentMatchedRecords=" << parentMatchedRecords
                   << " insertedRecords=" << insertedRecords
                   << " mapSize=" << liveEntryRecordByParentAndName.size()
                   << "\n";
+#endif
     }
 
     std::vector<LiveUpdateOperation> pendingUpserts;
@@ -661,6 +671,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             targetIndex->fsIndexToRecordIndices.size() + pendingUpserts.size()
         );
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "live batch #" << liveBatchDebugId
                   << " reserved upsert storage"
                   << " pendingUpserts=" << pendingUpserts.size()
@@ -675,6 +686,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                   << "/"
                   << targetIndex->stringPool.capacity()
                   << "\n";
+#endif
     }
 
     std::vector<uint8_t> consumedUpserts(pendingUpserts.size(), 0);
@@ -700,10 +712,12 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "live batch #" << liveBatchDebugId
               << " pendingUpserts=" << pendingUpserts.size()
               << " pendingUpsertInodes=" << pendingUpsertIndicesByInode.size()
               << "\n";
+#endif
 
     bool fsIndexMapsNeedRebuild = false;
 
@@ -884,6 +898,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "live batch #" << liveBatchDebugId
               << " non-upsert summary"
               << " deleteLookupsFound=" << deleteLookupsFound
@@ -891,6 +906,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " markDeletedTreeCalls=" << markDeletedTreeCalls
               << " markDeletedTreeTotalDeleted=" << markDeletedTreeTotalDeleted
               << "\n";
+#endif
 
     if (fsIndexMapsNeedRebuild) {
         PhaseTimer timer(
@@ -961,6 +977,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 }
             }
 
+#ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "live batch #" << liveBatchDebugId
                       << " upsert pass " << upsertPass
                       << " input=" << pendingUpserts.size()
@@ -970,6 +987,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                       << " unsupported=" << passUnsupported
                       << " elapsed=" << elapsedMsSince(passStart)
                       << "ms\n";
+#endif
 
             if (!madeProgress) {
                 result.missingParent += static_cast<qsizetype>(stillPending.size());
@@ -1012,7 +1030,6 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " missingParent=" << result.missingParent
               << " missingEntry=" << result.missingEntry
               << "\n";
-#endif
 
     std::cerr << "live batch #" << liveBatchDebugId
           << " end elapsed=" << elapsedMsSince(batchStart)
@@ -1027,6 +1044,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
           << " missingParent=" << result.missingParent
           << " missingEntry=" << result.missingEntry
           << "\n";
+#endif
 
     return result;
 }
@@ -1417,6 +1435,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
 
     const qint64 elapsedMs = elapsedMsSince(appendStart);
 
+#ifdef KERYTHING_ENABLE_LOGGING
     if (elapsedMs >= 25 ||
         oldFileRecordCapacity != deviceIndex.fileRecords.capacity() ||
         oldStringPoolCapacity != deviceIndex.stringPool.capacity() ||
@@ -1448,6 +1467,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
                   << deviceIndex.liveDeltaFlatIndex.capacity()
                   << "\n";
     }
+#endif
 
     return true;
 }
@@ -1591,6 +1611,7 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
     auto logSlowUpsert = [&](const char* outcome) {
         const qint64 elapsedMs = elapsedMsSince(upsertStart);
 
+#ifdef KERYTHING_ENABLE_LOGGING
         if (elapsedMs >= 25) {
             std::cerr << "applyUpsertOperation"
                       << " outcome=" << outcome
@@ -1601,6 +1622,7 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
                       << " elapsed=" << elapsedMs
                       << "ms\n";
         }
+#endif
     };
 
     if (operation.kind != LiveUpdateOperationKind::Upsert) {

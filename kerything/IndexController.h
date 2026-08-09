@@ -608,7 +608,8 @@ public:
     static ParsedSearchQuery parseSearchQuery(std::string_view query);
     static std::string normalizeExtensionToken(std::string_view extension);
     static std::string_view finalExtension(std::string_view lowercaseFileName);
-    static bool matchesExtensionFilter(
+    static bool matchesFileExtensionFilter(
+        const FileRecord& record,
         std::string_view lowercaseFileName,
         const std::unordered_set<std::string>& extensions
     );

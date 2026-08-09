@@ -1129,12 +1129,19 @@ std::string_view IndexController::finalExtension(std::string_view lowercaseFileN
     return lowercaseFileName.substr(dotPos + 1);
 }
 
-bool IndexController::matchesExtensionFilter(
+bool IndexController::matchesFileExtensionFilter(
+    const FileRecord& record,
     std::string_view lowercaseFileName,
     const std::unordered_set<std::string>& extensions
 ) {
     if (extensions.empty()) {
         return true;
+    }
+
+    // Extension filters apply to files only. A directory named "Videos.mp4"
+    // should not match ext:mp4.
+    if ((record.flags & FileRecord_IsDir) != 0) {
+        return false;
     }
 
     const std::string_view extension = finalExtension(lowercaseFileName);
@@ -1830,7 +1837,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     continue;
                 }
 
-                if (!matchesExtensionFilter(name, extensionFilter)) {
+                if (!matchesFileExtensionFilter(rec, name, extensionFilter)) {
                     continue;
                 }
 
@@ -1957,7 +1964,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 return;
             }
 
-            if (!matchesExtensionFilter(name, extensionFilter)) {
+            if (!matchesFileExtensionFilter(rec, name, extensionFilter)) {
                 return;
             }
 

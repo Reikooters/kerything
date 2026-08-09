@@ -276,7 +276,7 @@ If you already have Kerything installed, see [Upgrading](#upgrading) first.
 
 ```bash
 # Clone the repository
-git clone --branch v2.1.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v2.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -318,7 +318,7 @@ sudo pacman -S --needed \
   kxmlgui
 
 # Clone the repository
-git clone --branch v2.1.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v2.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -358,7 +358,7 @@ sudo pacman -S --needed \
   systemd-libs
 
 # Clone the repository
-git clone --branch v2.1.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v2.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything
@@ -406,7 +406,7 @@ Clone the repo:
 
 ```bash
 # Clone the repository
-git clone --branch v2.1.0 --depth 1 https://github.com/Reikooters/kerything.git
+git clone --branch v2.2.0 --depth 1 https://github.com/Reikooters/kerything.git
 
 # Enter the source code directory
 cd kerything

@@ -1132,7 +1132,7 @@ std::string_view IndexController::finalExtension(std::string_view lowercaseFileN
 bool IndexController::matchesFileExtensionFilter(
     const FileRecord& record,
     std::string_view lowercaseFileName,
-    const std::unordered_set<std::string>& extensions
+    const ExtensionSet& extensions
 ) {
     if (extensions.empty()) {
         return true;
@@ -1149,7 +1149,12 @@ bool IndexController::matchesFileExtensionFilter(
         return false;
     }
 
-    return extensions.contains(std::string(extension));
+    // If only single extension being filtered, we can avoid the set lookup.
+    if (extensions.size() == 1) {
+        return extension == *extensions.begin();
+    }
+
+    return extensions.contains(extension);
 }
 
 bool IndexController::matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query)
@@ -1791,7 +1796,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
     const std::vector<std::string>& keywords = parsedQuery.keywords;
-    const std::unordered_set<std::string>& extensionFilter = parsedQuery.extensions;
+    const ExtensionSet& extensionFilter = parsedQuery.extensions;
 
     // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {

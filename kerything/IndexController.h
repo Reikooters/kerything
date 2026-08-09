@@ -10,6 +10,8 @@
 #include <QObject>
 #include <QStringList>
 #include <shared_mutex>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include "FileRecord.h"
@@ -22,6 +24,40 @@ class IndexController final : public QObject {
 
 public:
     explicit IndexController(QObject* parent = nullptr);
+
+    struct TransparentStringHash {
+        using is_transparent = void;
+
+        [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept
+        {
+            return std::hash<std::string_view>{}(value);
+        }
+
+        [[nodiscard]] std::size_t operator()(const std::string& value) const noexcept
+        {
+            return std::hash<std::string_view>{}(value);
+        }
+
+        [[nodiscard]] std::size_t operator()(const char* value) const noexcept
+        {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+
+    struct TransparentStringEqual {
+        using is_transparent = void;
+
+        [[nodiscard]] bool operator()(std::string_view lhs, std::string_view rhs) const noexcept
+        {
+            return lhs == rhs;
+        }
+    };
+
+    using ExtensionSet = std::unordered_set<
+        std::string,
+        TransparentStringHash,
+        TransparentStringEqual
+    >;
 
     struct TrigramEntry {
         uint32_t trigram;
@@ -529,7 +565,7 @@ public:
 
     struct ParsedSearchQuery {
         std::vector<std::string> keywords;
-        std::unordered_set<std::string> extensions;
+        ExtensionSet extensions;
         bool foldersOnly = false;
     };
 
@@ -611,7 +647,7 @@ public:
     static bool matchesFileExtensionFilter(
         const FileRecord& record,
         std::string_view lowercaseFileName,
-        const std::unordered_set<std::string>& extensions
+        const ExtensionSet& extensions
     );
 
 Q_SIGNALS:

@@ -1157,15 +1157,6 @@ bool IndexController::matchesFileExtensionFilter(
     return extensions.contains(extension);
 }
 
-bool IndexController::matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query)
-{
-    if (query.foldersOnly && (record.flags & FileRecord_IsDir) == 0) {
-        return false;
-    }
-
-    return true;
-}
-
 quint8 IndexController::fileRecordFlagsFromLiveUpdateOperation(
     const LiveUpdateOperation& operation)
 {
@@ -1708,6 +1699,13 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
     );
 
     auto consumeExtensionList = [&parsed](std::string_view extensionList) {
+        const std::size_t estimatedTokenCount =
+            1 + static_cast<std::size_t>(
+                std::count(extensionList.begin(), extensionList.end(), ';')
+            );
+
+        parsed.extensions.reserve(parsed.extensions.size() + estimatedTokenCount);
+
         std::size_t start = 0;
 
         while (start <= extensionList.size()) {
@@ -1797,6 +1795,13 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
     const std::vector<std::string>& keywords = parsedQuery.keywords;
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
+    const bool hasExtensionFilter = !extensionFilter.empty();
+    const bool foldersOnly = parsedQuery.foldersOnly;
+
+    // Extension filters are file-only, so this combination can never match.
+    if (foldersOnly && hasExtensionFilter) {
+        return results;
+    }
 
     // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {
@@ -1828,6 +1833,17 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 }
 
                 const FileRecord& rec = index.fileRecords[i];
+                const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+                if (foldersOnly && !isDirectory) {
+                    continue;
+                }
+
+                // Extension filters apply to files only. Reject directories before
+                // touching the string pool or scanning the name for a final extension.
+                if (hasExtensionFilter && isDirectory) {
+                    continue;
+                }
 
                 if (rec.nameOffset + rec.nameLen > index.lowercaseStringPool.size()) {
                     continue;
@@ -1838,11 +1854,8 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     rec.nameLen
                 );
 
-                if (!matchesQueryRecordType(rec, parsedQuery)) {
-                    continue;
-                }
-
-                if (!matchesFileExtensionFilter(rec, name, extensionFilter)) {
+                if (hasExtensionFilter &&
+                    !matchesFileExtensionFilter(rec, name, extensionFilter)) {
                     continue;
                 }
 
@@ -1873,9 +1886,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             // Generate all trigrams for this keyword and intersect them
             for (size_t i = 0; i <= kw.length() - 3; ++i) {
                 trigramsUsed = true;
-                uint32_t tri = (static_cast<uint32_t>(std::tolower(kw[i])) << 16) |
-                               (static_cast<uint32_t>(std::tolower(kw[i+1])) << 8) |
-                               (static_cast<uint32_t>(std::tolower(kw[i+2])));
+                uint32_t tri =
+                    (static_cast<uint32_t>(static_cast<unsigned char>(kw[i])) << 16) |
+                    (static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 1])) << 8) |
+                    static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 2]));
 
                 const bool foundInMainIndex = containsTrigram(indexPtr->flatIndex, tri);
                 const bool foundInLiveDeltaIndex = containsTrigram(indexPtr->liveDeltaFlatIndex, tri);
@@ -1958,18 +1972,29 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             }
 
             const auto& rec = indexPtr->fileRecords[recordIdx];
+            const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+            if (foldersOnly && !isDirectory) {
+                return;
+            }
+
+            // Extension filters apply to files only. Reject directories before
+            // touching the string pool or scanning the name for a final extension.
+            if (hasExtensionFilter && isDirectory) {
+                return;
+            }
 
             if (rec.nameOffset + rec.nameLen > indexPtr->lowercaseStringPool.size()) {
                 return;
             }
 
-            std::string_view name(&indexPtr->lowercaseStringPool[rec.nameOffset], rec.nameLen);
+            const std::string_view name(
+                &indexPtr->lowercaseStringPool[rec.nameOffset],
+                rec.nameLen
+            );
 
-            if (!matchesQueryRecordType(rec, parsedQuery)) {
-                return;
-            }
-
-            if (!matchesFileExtensionFilter(rec, name, extensionFilter)) {
+            if (hasExtensionFilter &&
+                !matchesFileExtensionFilter(rec, name, extensionFilter)) {
                 return;
             }
 

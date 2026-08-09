@@ -663,7 +663,6 @@ private:
     };
 
     bool removeDeviceByIndexIdUnlocked(quint64 indexId);
-    static bool matchesQueryRecordType(const FileRecord& record, const ParsedSearchQuery& query);
     static quint8 fileRecordFlagsFromLiveUpdateOperation(const LiveUpdateOperation& operation);
     static void updateFileRecordMetadataFromLiveUpdateOperation(
         FileRecord& record,

@@ -2,7 +2,7 @@
 # Copyright (C) 2026  Reikooters <https://github.com/Reikooters>
 
 pkgname=kerything
-pkgver=2.2.0
+pkgver=2.2.1
 pkgrel=1
 pkgdesc='Fast Linux block device file scanner and search application using trigrams'
 arch=('x86_64')

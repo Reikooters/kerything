@@ -226,8 +226,6 @@ The following keyboard shortcuts are available in Kerything:
 > you will need to uninstall it first before installing Kerything v2.
 > 
 > To do this, follow the uninstallation instructions in the [v1-legacy](https://github.com/Reikooters/kerything/tree/v1-legacy) branch.
-> 
-> The project was rewritten to provide a better base with which features like live updates can be implemented onto.
 
 Kerything can be installed in two main ways:
 

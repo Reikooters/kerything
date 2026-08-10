@@ -683,7 +683,7 @@ And later removed with:
 sudo umount $MNT
 sudo losetup -d $LOOPDEV
 ```
-`
+
 After indexing the mounted device in Kerything, verify:
 
 ```bash
@@ -802,7 +802,7 @@ sudo sh -c 'for i in $(seq 1 10000); do echo "$i" >> /mnt/kerything-test/live-gr
 
 Generate many creates/deletes:
 
-```shell script
+```bash
 sudo mkdir -p /mnt/kerything-test/stress
 sudo sh -c 'for i in $(seq 1 10000); do touch /mnt/kerything-test/stress/file-$i.txt; done'
 sudo sh -c 'for i in $(seq 1 10000); do rm /mnt/kerything-test/stress/file-$i.txt; done'
@@ -812,6 +812,26 @@ Expected:
 
 - `stress` folder should appear
 - `file-{number|` files should appear then all disappear
+
+#### Stress test creating and deleting a folder with many files
+
+> [!WARNING]
+> This test writes to your home directory.
+
+```bash
+TESTROOT="$HOME/kerything-delete-test"
+rm -rf "$TESTROOT"
+mkdir -p "$TESTROOT/wide"
+
+for i in $(seq 1 10000); do
+: > "$TESTROOT/wide/file-$i.tmp"
+done
+
+sync
+sleep 5
+
+time rm -rf "$TESTROOT/wide"
+```
 
 ### Useful commands while testing
 

@@ -824,7 +824,7 @@ rm -rf "$TESTROOT"
 mkdir -p "$TESTROOT/wide"
 
 for i in $(seq 1 10000); do
-: > "$TESTROOT/wide/file-$i.tmp"
+  : > "$TESTROOT/wide/file-$i.tmp"
 done
 
 sync

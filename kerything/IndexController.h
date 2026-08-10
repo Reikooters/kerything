@@ -134,6 +134,11 @@ public:
             TransparentStringEqual
         > recordsByExtension;
 
+        // Number of live-update extension-index changes since the last clean
+        // rebuild. This counts appended entries and tombstoned records that may
+        // have left stale references behind.
+        std::size_t extensionIndexLiveDeltaEntries = 0;
+
         [[nodiscard]] bool isDeletedRecord(uint32_t recordIdx) const noexcept
         {
             return recordIdx < deletedRecordBitmap.size() &&
@@ -524,6 +529,8 @@ public:
                 addRecordToExtensionIndex(recordIdx);
             }
 
+            extensionIndexLiveDeltaEntries = 0;
+
 #ifdef KERYTHING_ENABLE_LOGGING
             std::size_t indexedRecords = 0;
             for (const auto& [extension, records] : recordsByExtension) {
@@ -790,13 +797,16 @@ private:
         uint32_t recordIdx,
         std::vector<TrigramEntry>& targetIndex
     );
+    static bool shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
+    static void rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
+    static void sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex);
     static void addRecordToExtensionIndexIfApplicable(
         DeviceIndex& deviceIndex,
         uint32_t recordIdx
     );
-    static bool shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
-    static void rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
-    static void sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex);
+    static std::size_t extensionIndexEntryCount(const DeviceIndex& deviceIndex);
+    static bool shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
+    static void rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
     static bool appendRecordFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation

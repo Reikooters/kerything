@@ -167,6 +167,7 @@ quint64 IndexController::addDevice(
             deviceIndex.flatIndex.clear();
             deviceIndex.liveDeltaFlatIndex.clear();
             deviceIndex.recordsByExtension.clear();
+            deviceIndex.extensionIndexLiveDeltaEntries = 0;
             deviceIndex.directoryFsIndexToRecordIdx.clear();
             deviceIndex.fsIndexToRecordIndices.clear();
             deviceIndex.generation++;
@@ -871,6 +872,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     }
 
                     if (deletedCount > 0) {
+                        targetIndex->extensionIndexLiveDeltaEntries +=
+                            static_cast<std::size_t>(deletedCount);
                         result.deleted += deletedCount;
                     }
                     else {
@@ -881,6 +884,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 }
 
                 if (deletedCount > 0) {
+                    targetIndex->extensionIndexLiveDeltaEntries +=
+                        static_cast<std::size_t>(deletedCount);
                     result.deleted += deletedCount;
                     fsIndexMapsNeedRebuild = true;
                 }
@@ -1019,6 +1024,15 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         rebuildTrigramIndexAfterLiveUpdates(*targetIndex);
     }
 
+    if (shouldRebuildExtensionIndexAfterLiveUpdates(*targetIndex)) {
+        PhaseTimer timer(
+            QStringLiteral("live batch #%1 rebuild extension index").arg(liveBatchDebugId),
+            10
+        );
+
+        rebuildExtensionIndexAfterLiveUpdates(*targetIndex);
+    }
+
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: applied live update operations"
               << " deviceId=" << deviceId.toStdString()
@@ -1034,18 +1048,20 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << "\n";
 
     std::cerr << "live batch #" << liveBatchDebugId
-          << " end elapsed=" << elapsedMsSince(batchStart)
-          << "ms"
-          << " result metadataChanged=" << result.metadataChanged
-          << " upserted=" << result.upserted
-          << " deleted=" << result.deleted
-          << " needsRescan=" << result.needsRescan
-          << " unsupported=" << result.unsupported
-          << " missingDevice=" << result.missingDevice
-          << " missingInode=" << result.missingInode
-          << " missingParent=" << result.missingParent
-          << " missingEntry=" << result.missingEntry
-          << "\n";
+              << " end elapsed=" << elapsedMsSince(batchStart)
+              << "ms"
+              << " result metadataChanged=" << result.metadataChanged
+              << " upserted=" << result.upserted
+              << " deleted=" << result.deleted
+              << " needsRescan=" << result.needsRescan
+              << " unsupported=" << result.unsupported
+              << " missingDevice=" << result.missingDevice
+              << " missingInode=" << result.missingInode
+              << " missingParent=" << result.missingParent
+              << " missingEntry=" << result.missingEntry
+              << " extensionIndexLiveDeltaEntries=" << targetIndex->extensionIndexLiveDeltaEntries
+              << " extensionIndexEntries=" << extensionIndexEntryCount(*targetIndex)
+              << "\n";
 #endif
 
     return result;
@@ -1236,13 +1252,6 @@ bool IndexController::appendTrigramsForRecord(
     return true;
 }
 
-void IndexController::addRecordToExtensionIndexIfApplicable(
-    DeviceIndex& deviceIndex,
-    uint32_t recordIdx)
-{
-    deviceIndex.addRecordToExtensionIndex(recordIdx);
-}
-
 bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
 {
     if (deviceIndex.liveDeltaFlatIndex.empty()) {
@@ -1370,6 +1379,73 @@ void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)
     );
 
     deviceIndex.liveDeltaFlatIndex.erase(last, deviceIndex.liveDeltaFlatIndex.end());
+}
+
+void IndexController::addRecordToExtensionIndexIfApplicable(
+    DeviceIndex& deviceIndex,
+    uint32_t recordIdx)
+{
+    if (deviceIndex.addRecordToExtensionIndex(recordIdx)) {
+        ++deviceIndex.extensionIndexLiveDeltaEntries;
+    }
+}
+
+std::size_t IndexController::extensionIndexEntryCount(const DeviceIndex& deviceIndex)
+{
+    std::size_t count = 0;
+
+    for (const auto& [extension, records] : deviceIndex.recordsByExtension) {
+        count += records.size();
+    }
+
+    return count;
+}
+
+bool IndexController::shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
+{
+    if (deviceIndex.extensionIndexLiveDeltaEntries == 0) {
+        return false;
+    }
+
+    static constexpr std::size_t ExtensionDeltaRebuildMinEntries = 25'000;
+    static constexpr std::size_t ExtensionDeltaRebuildRatioDivisor = 5;
+
+    if (deviceIndex.extensionIndexLiveDeltaEntries < ExtensionDeltaRebuildMinEntries) {
+        return false;
+    }
+
+    const std::size_t indexedEntries = extensionIndexEntryCount(deviceIndex);
+
+    if (indexedEntries == 0) {
+        return true;
+    }
+
+    return deviceIndex.extensionIndexLiveDeltaEntries >=
+           indexedEntries / ExtensionDeltaRebuildRatioDivisor;
+}
+
+void IndexController::rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
+{
+#ifdef KERYTHING_ENABLE_LOGGING
+    const std::size_t oldIndexedEntries = extensionIndexEntryCount(deviceIndex);
+
+    std::cerr << "Rebuilding extension index after live updates"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " extensions=" << deviceIndex.recordsByExtension.size()
+              << " indexedEntries=" << oldIndexedEntries
+              << " liveDeltaEntries=" << deviceIndex.extensionIndexLiveDeltaEntries
+              << "\n";
+#endif
+
+    deviceIndex.buildExtensionIndex();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Finished rebuilding extension index after live updates"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " extensions=" << deviceIndex.recordsByExtension.size()
+              << " indexedEntries=" << extensionIndexEntryCount(deviceIndex)
+              << "\n";
+#endif
 }
 
 bool IndexController::appendRecordFromLiveUpdateOperation(

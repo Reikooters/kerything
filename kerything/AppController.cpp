@@ -353,6 +353,9 @@ bool AppController::start() {
                 // Build trigram index
                 indexController_->buildTrigramIndexParallelByRequestId(requestId);
 
+                // Build extension index
+                indexController_->buildExtensionIndexByRequestId(requestId);
+
                 // Mark ready
                 indexController_->setReadyState(requestId, true);
 

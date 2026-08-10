@@ -166,6 +166,7 @@ quint64 IndexController::addDevice(
             deviceIndex.lowercaseStringPool.clear();
             deviceIndex.flatIndex.clear();
             deviceIndex.liveDeltaFlatIndex.clear();
+            deviceIndex.recordsByExtension.clear();
             deviceIndex.directoryFsIndexToRecordIdx.clear();
             deviceIndex.fsIndexToRecordIndices.clear();
             deviceIndex.generation++;
@@ -761,6 +762,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 
                     FileRecord& record = targetIndex->fileRecords[recordIdx];
                     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
+                    addRecordToExtensionIndexIfApplicable(*targetIndex, recordIdx);
                     updatedAny = true;
                 }
 
@@ -1234,6 +1236,13 @@ bool IndexController::appendTrigramsForRecord(
     return true;
 }
 
+void IndexController::addRecordToExtensionIndexIfApplicable(
+    DeviceIndex& deviceIndex,
+    uint32_t recordIdx)
+{
+    deviceIndex.addRecordToExtensionIndex(recordIdx);
+}
+
 bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
 {
     if (deviceIndex.liveDeltaFlatIndex.empty()) {
@@ -1435,6 +1444,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     }
 
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
+    addRecordToExtensionIndexIfApplicable(deviceIndex, recordIdx);
 
     const qint64 elapsedMs = elapsedMsSince(appendStart);
 
@@ -1601,6 +1611,7 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
 
     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
+    addRecordToExtensionIndexIfApplicable(deviceIndex, recordIdx);
 
     return true;
 }
@@ -1803,6 +1814,51 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         return results;
     }
 
+    auto collectExtensionCandidates = [](
+        const DeviceIndex& index,
+        const ExtensionSet& extensions
+    ) {
+        std::vector<uint32_t> candidates;
+
+        if (extensions.empty()) {
+            return candidates;
+        }
+
+        std::size_t estimatedSize = 0;
+
+        for (const std::string& extension : extensions) {
+            if (const std::vector<uint32_t>* records =
+                    index.recordIndicesForExtension(extension)) {
+                estimatedSize += records->size();
+                    }
+        }
+
+        candidates.reserve(estimatedSize);
+
+        for (const std::string& extension : extensions) {
+            const std::vector<uint32_t>* records =
+                index.recordIndicesForExtension(extension);
+
+            if (!records) {
+                continue;
+            }
+
+            candidates.insert(
+                candidates.end(),
+                records->begin(),
+                records->end()
+            );
+        }
+
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(
+            std::unique(candidates.begin(), candidates.end()),
+            candidates.end()
+        );
+
+        return candidates;
+    };
+
     // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {
         std::size_t totalSize = 0;
@@ -1816,7 +1872,14 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 ? 1
                 : static_cast<std::size_t>(indexPtr->mountPoints.size());
 
-            totalSize += indexPtr->fileRecords.size() * mountMultiplier;
+            if (hasExtensionFilter) {
+                const auto extensionCandidates =
+                    collectExtensionCandidates(*indexPtr, extensionFilter);
+
+                totalSize += extensionCandidates.size() * mountMultiplier;
+            } else {
+                totalSize += indexPtr->fileRecords.size() * mountMultiplier;
+            }
         }
 
         results.reserve(totalSize);
@@ -1827,26 +1890,27 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             }
 
             const auto& index = *indexPtr;
-            for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
+
+            auto appendIfMatches = [&](uint32_t i) {
                 if (index.isDeletedRecord(i)) {
-                    continue;
+                    return;
                 }
 
                 const FileRecord& rec = index.fileRecords[i];
                 const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
 
                 if (foldersOnly && !isDirectory) {
-                    continue;
+                    return;
                 }
 
                 // Extension filters apply to files only. Reject directories before
                 // touching the string pool or scanning the name for a final extension.
                 if (hasExtensionFilter && isDirectory) {
-                    continue;
+                    return;
                 }
 
                 if (rec.nameOffset + rec.nameLen > index.lowercaseStringPool.size()) {
-                    continue;
+                    return;
                 }
 
                 const std::string_view name(
@@ -1856,10 +1920,23 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
                 if (hasExtensionFilter &&
                     !matchesFileExtensionFilter(rec, name, extensionFilter)) {
-                    continue;
+                    return;
                 }
 
                 appendResult(index, i);
+            };
+
+            if (hasExtensionFilter) {
+                const auto extensionCandidates =
+                    collectExtensionCandidates(index, extensionFilter);
+
+                for (const uint32_t recordIdx : extensionCandidates) {
+                    appendIfMatches(recordIdx);
+                }
+            } else {
+                for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
+                    appendIfMatches(i);
+                }
             }
         }
 
@@ -2008,9 +2085,20 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         };
 
         if (!trigramsUsed) {
-            // Fallback: Linear scan of all records (All keywords were too short)
-            for (uint32_t i = 0; i < static_cast<uint32_t>(indexPtr->fileRecords.size()); ++i) {
-                resultCallback(i);
+            // Fallback: if all keywords are too short for trigrams, use the
+            // extension index as the candidate source when possible.
+            if (hasExtensionFilter) {
+                const auto extensionCandidates =
+                    collectExtensionCandidates(*indexPtr, extensionFilter);
+
+                for (const uint32_t recordIdx : extensionCandidates) {
+                    resultCallback(recordIdx);
+                }
+            } else {
+                // Fallback: Linear scan of all records (All keywords were too short)
+                for (uint32_t i = 0; i < static_cast<uint32_t>(indexPtr->fileRecords.size()); ++i) {
+                    resultCallback(i);
+                }
             }
         } else {
             // High-speed scan of candidates
@@ -2345,4 +2433,26 @@ void IndexController::buildTrigramIndexParallelByRequestId(quint32 requestId) {
 
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
     deviceIndex.buildTrigramIndexParallel();
+}
+
+void IndexController::buildExtensionIndexByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
+        std::cerr << "IndexController: buildExtensionIndexByRequestId: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingIndexId = existingIndexIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: buildExtensionIndexByRequestId: No device index for indexId=" << existingIndexId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.buildExtensionIndex();
 }

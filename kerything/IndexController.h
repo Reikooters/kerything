@@ -12,6 +12,7 @@
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "FileRecord.h"
@@ -120,6 +121,18 @@ public:
         // Keeping these separate avoids re-sorting the full trigram index for
         // every create/rename event on busy filesystems.
         std::vector<TrigramEntry> liveDeltaFlatIndex;
+
+        // Lowercase final extension -> record indices.
+        //
+        // This is append-only for live updates/renames. Stale entries are filtered
+        // during query refinement by checking tombstones, file/dir flags, and the
+        // record's current final extension.
+        std::unordered_map<
+            std::string,
+            std::vector<uint32_t>,
+            TransparentStringHash,
+            TransparentStringEqual
+        > recordsByExtension;
 
         [[nodiscard]] bool isDeletedRecord(uint32_t recordIdx) const noexcept
         {
@@ -467,6 +480,109 @@ public:
             flatIndex.shrink_to_fit();
         }
 
+        void buildExtensionIndex()
+        {
+            recordsByExtension.clear();
+
+            std::size_t fileCountWithExtension = 0;
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+
+                if ((record.flags & FileRecord_IsDir) != 0) {
+                    continue;
+                }
+
+                if (record.nameOffset + record.nameLen > lowercaseStringPool.size()) {
+                    continue;
+                }
+
+                const std::string_view name(
+                    &lowercaseStringPool[record.nameOffset],
+                    record.nameLen
+                );
+
+                if (!finalExtension(name).empty()) {
+                    ++fileCountWithExtension;
+                }
+            }
+
+            recordsByExtension.reserve(std::min<std::size_t>(
+                fileCountWithExtension,
+                4096
+            ));
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                addRecordToExtensionIndex(recordIdx);
+            }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::size_t indexedRecords = 0;
+            for (const auto& [extension, records] : recordsByExtension) {
+                indexedRecords += records.size();
+            }
+
+            std::cerr << "Built extension index"
+                      << " extensions=" << recordsByExtension.size()
+                      << " indexedRecords=" << indexedRecords
+                      << "\n";
+#endif
+        }
+
+        bool addRecordToExtensionIndex(uint32_t recordIdx)
+        {
+            if (recordIdx >= fileRecords.size()) {
+                return false;
+            }
+
+            if (isDeletedRecord(recordIdx)) {
+                return false;
+            }
+
+            const FileRecord& record = fileRecords[recordIdx];
+
+            if ((record.flags & FileRecord_IsDir) != 0) {
+                return false;
+            }
+
+            if (record.nameOffset + record.nameLen > lowercaseStringPool.size()) {
+                return false;
+            }
+
+            const std::string_view name(
+                &lowercaseStringPool[record.nameOffset],
+                record.nameLen
+            );
+
+            const std::string_view extension = finalExtension(name);
+
+            if (extension.empty()) {
+                return false;
+            }
+
+            recordsByExtension[std::string(extension)].push_back(recordIdx);
+            return true;
+        }
+
+        [[nodiscard]] const std::vector<uint32_t>* recordIndicesForExtension(
+            std::string_view extension
+        ) const {
+            const auto it = recordsByExtension.find(extension);
+            if (it == recordsByExtension.end()) {
+                return nullptr;
+            }
+
+            return &it->second;
+        }
+
         [[nodiscard]] std::string getFullPath(const uint32_t recordIdx) const {
             std::vector<uint32_t> chain;
             uint32_t current = recordIdx;
@@ -617,6 +733,7 @@ public:
     void buildLowercaseStringPoolByRequestId(quint32 requestId);
     void sortByNameAscendingParallelByRequestId(quint32 requestId);
     void buildTrigramIndexParallelByRequestId(quint32 requestId);
+    void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
     LiveUpdateApplyResult applyLiveUpdateOperations(
         const QString& deviceId,
@@ -672,6 +789,10 @@ private:
         DeviceIndex& deviceIndex,
         uint32_t recordIdx,
         std::vector<TrigramEntry>& targetIndex
+    );
+    static void addRecordToExtensionIndexIfApplicable(
+        DeviceIndex& deviceIndex,
+        uint32_t recordIdx
     );
     static bool shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
     static void rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex);

@@ -134,6 +134,10 @@ public:
             TransparentStringEqual
         > recordsByExtension;
 
+        // Total stored entries across all extension buckets, including stale
+        // live-update entries. Used as a cheap denominator for rebuild heuristics.
+        std::size_t extensionIndexEntryCount = 0;
+
         // Number of live-update extension-index changes since the last clean
         // rebuild. This counts appended entries and tombstoned records that may
         // have left stale references behind.
@@ -488,6 +492,7 @@ public:
         void buildExtensionIndex()
         {
             recordsByExtension.clear();
+            extensionIndexEntryCount = 0;
 
             std::size_t fileCountWithExtension = 0;
 
@@ -532,14 +537,9 @@ public:
             extensionIndexLiveDeltaEntries = 0;
 
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::size_t indexedRecords = 0;
-            for (const auto& [extension, records] : recordsByExtension) {
-                indexedRecords += records.size();
-            }
-
             std::cerr << "Built extension index"
                       << " extensions=" << recordsByExtension.size()
-                      << " indexedRecords=" << indexedRecords
+                      << " indexedRecords=" << extensionIndexEntryCount
                       << "\n";
 #endif
         }
@@ -576,6 +576,7 @@ public:
             }
 
             recordsByExtension[std::string(extension)].push_back(recordIdx);
+            ++extensionIndexEntryCount;
             return true;
         }
 
@@ -804,7 +805,6 @@ private:
         DeviceIndex& deviceIndex,
         uint32_t recordIdx
     );
-    static std::size_t extensionIndexEntryCount(const DeviceIndex& deviceIndex);
     static bool shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
     static void rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
     static bool appendRecordFromLiveUpdateOperation(

@@ -167,6 +167,7 @@ quint64 IndexController::addDevice(
             deviceIndex.flatIndex.clear();
             deviceIndex.liveDeltaFlatIndex.clear();
             deviceIndex.recordsByExtension.clear();
+            deviceIndex.extensionIndexEntryCount = 0;
             deviceIndex.extensionIndexLiveDeltaEntries = 0;
             deviceIndex.directoryFsIndexToRecordIdx.clear();
             deviceIndex.fsIndexToRecordIndices.clear();
@@ -762,8 +763,15 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     }
 
                     FileRecord& record = targetIndex->fileRecords[recordIdx];
+                    const bool wasDirectory = (record.flags & FileRecord_IsDir) != 0;
+
                     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
-                    addRecordToExtensionIndexIfApplicable(*targetIndex, recordIdx);
+
+                    const bool isDirectory = (record.flags & FileRecord_IsDir) != 0;
+                    if (wasDirectory && !isDirectory) {
+                        addRecordToExtensionIndexIfApplicable(*targetIndex, recordIdx);
+                    }
+
                     updatedAny = true;
                 }
 
@@ -1060,7 +1068,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " missingParent=" << result.missingParent
               << " missingEntry=" << result.missingEntry
               << " extensionIndexLiveDeltaEntries=" << targetIndex->extensionIndexLiveDeltaEntries
-              << " extensionIndexEntries=" << extensionIndexEntryCount(*targetIndex)
+              << " extensionIndexEntries=" << targetIndex->extensionIndexEntryCount
               << "\n";
 #endif
 
@@ -1390,17 +1398,6 @@ void IndexController::addRecordToExtensionIndexIfApplicable(
     }
 }
 
-std::size_t IndexController::extensionIndexEntryCount(const DeviceIndex& deviceIndex)
-{
-    std::size_t count = 0;
-
-    for (const auto& [extension, records] : deviceIndex.recordsByExtension) {
-        count += records.size();
-    }
-
-    return count;
-}
-
 bool IndexController::shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
 {
     if (deviceIndex.extensionIndexLiveDeltaEntries == 0) {
@@ -1414,7 +1411,7 @@ bool IndexController::shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIn
         return false;
     }
 
-    const std::size_t indexedEntries = extensionIndexEntryCount(deviceIndex);
+    const std::size_t indexedEntries = deviceIndex.extensionIndexEntryCount;
 
     if (indexedEntries == 0) {
         return true;
@@ -1427,12 +1424,10 @@ bool IndexController::shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIn
 void IndexController::rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
 {
 #ifdef KERYTHING_ENABLE_LOGGING
-    const std::size_t oldIndexedEntries = extensionIndexEntryCount(deviceIndex);
-
     std::cerr << "Rebuilding extension index after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
               << " extensions=" << deviceIndex.recordsByExtension.size()
-              << " indexedEntries=" << oldIndexedEntries
+              << " indexedEntries=" << deviceIndex.extensionIndexEntryCount
               << " liveDeltaEntries=" << deviceIndex.extensionIndexLiveDeltaEntries
               << "\n";
 #endif
@@ -1443,7 +1438,7 @@ void IndexController::rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceI
     std::cerr << "Finished rebuilding extension index after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
               << " extensions=" << deviceIndex.recordsByExtension.size()
-              << " indexedEntries=" << extensionIndexEntryCount(deviceIndex)
+              << " indexedEntries=" << deviceIndex.extensionIndexEntryCount
               << "\n";
 #endif
 }

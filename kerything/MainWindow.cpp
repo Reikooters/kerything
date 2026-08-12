@@ -829,6 +829,7 @@ void MainWindow::updateSearchLineFilterHint()
             QStringLiteral("Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, or folder:.")
         );
         updateFilterChip();
+        updateFilterMenuTitle();
         return;
     }
 
@@ -851,6 +852,7 @@ void MainWindow::updateSearchLineFilterHint()
     );
 
     updateFilterChip();
+    updateFilterMenuTitle();
 }
 
 void MainWindow::updateFilterChip()
@@ -896,6 +898,28 @@ void MainWindow::updateFilterChip()
     );
     filterChip_->setStatusTip(QStringLiteral("Click to clear filter: %1").arg(activeSearchFilterName_));
     filterChip_->show();
+}
+
+void MainWindow::updateFilterMenuTitle()
+{
+    if (!filterMenu_) {
+        return;
+    }
+
+    if (activeSearchFilter_.isEmpty()) {
+        filterMenu_->setTitle(QStringLiteral("Filter"));
+        filterMenu_->menuAction()->setToolTip(QString());
+        filterMenu_->menuAction()->setStatusTip(QString());
+        return;
+    }
+
+    filterMenu_->setTitle(QStringLiteral("Filter ●"));
+    filterMenu_->menuAction()->setToolTip(
+        QStringLiteral("Active filter: %1").arg(activeSearchFilterName_)
+    );
+    filterMenu_->menuAction()->setStatusTip(
+        QStringLiteral("Active filter: %1").arg(activeSearchFilterName_)
+    );
 }
 
 void MainWindow::refreshDirtyLiveUpdatesIfNeeded()

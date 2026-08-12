@@ -160,6 +160,7 @@ private:
     void applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment);
     void updateSearchLineFilterHint();
     void updateFilterChip();
+    void updateFilterMenuTitle();
     void refreshDirtyLiveUpdatesIfNeeded();
 
     AppController* controller_ = nullptr;

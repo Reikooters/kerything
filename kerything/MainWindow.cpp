@@ -14,7 +14,6 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QHeaderView>
-#include <QHBoxLayout>
 #include <QItemSelection>
 #include <QLabel>
 #include <QMenu>
@@ -71,10 +70,6 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto* centralWidget = new QWidget(this);
     auto* layout = new QVBoxLayout(centralWidget);
 
-    auto* searchLayout = new QHBoxLayout();
-    searchLayout->setContentsMargins(0, 0, 0, 0);
-    searchLayout->setSpacing(6);
-
     searchLine_ = new QLineEdit(centralWidget);
     searchLine_->setPlaceholderText("Search files...");
     searchLine_->setClearButtonEnabled(true);
@@ -82,30 +77,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Add magnifying glass icon to the search bar
     searchLine_->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
 
-    filterChip_ = new QToolButton(centralWidget);
-    filterChip_->setAutoRaise(true);
-    filterChip_->setCursor(Qt::PointingHandCursor);
-    filterChip_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    filterChip_->setVisible(false);
-    filterChip_->setStyleSheet(QStringLiteral(
-        "QToolButton {"
-        "  border: 1px solid palette(mid);"
-        "  border-radius: 10px;"
-        "  padding: 2px 8px;"
-        "}"
-        "QToolButton:hover {"
-        "  background: palette(alternate-base);"
-        "}"
-    ));
-
-    connect(filterChip_, &QToolButton::clicked, this, [this]() {
-        applySearchFilter(QString(), QString(), QString());
-    });
-
-    searchLayout->addWidget(searchLine_, 1);
-    searchLayout->addWidget(filterChip_);
-
-    layout->addLayout(searchLayout);
+    layout->addWidget(searchLine_);
 
     tableView_ = new SearchResultTableView(centralWidget);
     model_ = new FileModel(controller_, this);
@@ -253,7 +225,48 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Status Bar
     statusLabel_ = new QLabel(this);
+    statusLabel_->setStyleSheet(QStringLiteral(
+        "QLabel {"
+        "  margin-right: 6px;"
+        "}"
+    ));
     statusBar()->addPermanentWidget(statusLabel_);
+
+    statusBar()->setSizeGripEnabled(false);
+
+    filterChip_ = new QToolButton(this);
+    filterChip_->setAutoRaise(true);
+    filterChip_->setCursor(Qt::PointingHandCursor);
+    filterChip_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    filterChip_->setVisible(false);
+    filterChip_->setStatusTip(QStringLiteral("Click to clear the active filter"));
+    filterChip_->setStyleSheet(QStringLiteral(
+        "QToolButton {"
+        "  background: palette(midlight);"
+        "  color: palette(window-text);"
+        "  border: 1px solid palette(midlight);"
+        "  border-radius: 4px;"
+        "  padding: 1px 8px;"
+        "  margin-left: 2px;"
+        "  margin-right: 2px;"
+        "}"
+        "QToolButton:hover {"
+        "  background: palette(midlight);"
+        "  color: palette(window-text);"
+        "  border: 1px solid palette(highlight);"
+        "}"
+        "QToolButton:pressed {"
+        "  background: palette(alternate-base);"
+        "  color: palette(window-text);"
+        "  border: 1px solid palette(highlight);"
+        "}"
+    ));
+
+    connect(filterChip_, &QToolButton::clicked, this, [this]() {
+        applySearchFilter(QString(), QString(), QString());
+    });
+
+    statusBar()->addPermanentWidget(filterChip_, 0);
 
     setCentralWidget(centralWidget);
     resize(1200, 800);
@@ -536,17 +549,11 @@ void MainWindow::updateSearch(const QString &text) {
     std::chrono::duration<double> elapsed = end2 - start1;
 
     // Update status bar
-    QString statusMessage = QStringLiteral("%L1 objects found in %2s (search: %3s, sort: %4s)")
+    statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort: %4s)")
         .arg(model_->rowCount())
         .arg(elapsed.count(), 0, 'f', 4)
         .arg(elapsed1.count(), 0, 'f', 4)
-        .arg(elapsed2.count(), 0, 'f', 4);
-
-    if (!activeSearchFilter_.isEmpty()) {
-        statusMessage += QStringLiteral(" — Filter: %1").arg(activeSearchFilterName_);
-    }
-
-    statusBar()->showMessage(statusMessage);
+        .arg(elapsed2.count(), 0, 'f', 4));
 }
 
 int MainWindow::hoveredRow() const {
@@ -849,15 +856,32 @@ void MainWindow::updateSearchLineFilterHint()
 void MainWindow::updateFilterChip()
 {
     if (!filterChip_) {
+        statusLabel_->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            "  margin-right: 0px;"
+            "}"
+        ));
         return;
     }
 
     if (activeSearchFilter_.isEmpty()) {
+        statusLabel_->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            "  margin-right: 6px;"
+            "}"
+        ));
         filterChip_->hide();
         filterChip_->setText(QString());
         filterChip_->setToolTip(QString());
+        filterChip_->setStatusTip(QStringLiteral("No filter is active"));
         return;
     }
+
+    statusLabel_->setStyleSheet(QStringLiteral(
+        "QLabel {"
+        "  margin-right: 0px;"
+        "}"
+    ));
 
     filterChip_->setText(QStringLiteral("%1  ×").arg(activeSearchFilterName_));
     filterChip_->setToolTip(
@@ -870,6 +894,7 @@ void MainWindow::updateFilterChip()
             activeSearchFilter_
         )
     );
+    filterChip_->setStatusTip(QStringLiteral("Click to clear filter: %1").arg(activeSearchFilterName_));
     filterChip_->show();
 }
 

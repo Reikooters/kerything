@@ -507,11 +507,17 @@ void MainWindow::updateSearch(const QString &text) {
     std::chrono::duration<double> elapsed = end2 - start1;
 
     // Update status bar
-    statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort: %4s)")
+    QString statusMessage = QStringLiteral("%L1 objects found in %2s (search: %3s, sort: %4s)")
         .arg(model_->rowCount())
         .arg(elapsed.count(), 0, 'f', 4)
         .arg(elapsed1.count(), 0, 'f', 4)
-        .arg(elapsed2.count(), 0, 'f', 4));
+        .arg(elapsed2.count(), 0, 'f', 4);
+
+    if (!activeSearchFilter_.isEmpty()) {
+        statusMessage += QStringLiteral(" — Filter: %1").arg(activeSearchFilterName_);
+    }
+
+    statusBar()->showMessage(statusMessage);
 }
 
 int MainWindow::hoveredRow() const {

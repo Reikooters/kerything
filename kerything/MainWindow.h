@@ -15,6 +15,7 @@
 #include "FileModel.h"
 
 class AppController;
+class QToolButton;
 
 /**
  * @brief The main application window for searching and viewing files.
@@ -158,10 +159,12 @@ private:
     void rebuildFilterMenu();
     void applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment);
     void updateSearchLineFilterHint();
+    void updateFilterChip();
     void refreshDirtyLiveUpdatesIfNeeded();
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
+    QToolButton* filterChip_ = nullptr;
     QTableView *tableView_ = nullptr;
     FileModel *model_ = nullptr;
     QLabel *statusLabel_ = nullptr;

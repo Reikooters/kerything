@@ -14,6 +14,7 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QItemSelection>
 #include <QLabel>
 #include <QMenu>
@@ -25,6 +26,7 @@
 #include <QShortcut>
 #include <QActionGroup>
 #include <QStatusBar>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -69,6 +71,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto* centralWidget = new QWidget(this);
     auto* layout = new QVBoxLayout(centralWidget);
 
+    auto* searchLayout = new QHBoxLayout();
+    searchLayout->setContentsMargins(0, 0, 0, 0);
+    searchLayout->setSpacing(6);
+
     searchLine_ = new QLineEdit(centralWidget);
     searchLine_->setPlaceholderText("Search files...");
     searchLine_->setClearButtonEnabled(true);
@@ -76,7 +82,30 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Add magnifying glass icon to the search bar
     searchLine_->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
 
-    layout->addWidget(searchLine_);
+    filterChip_ = new QToolButton(centralWidget);
+    filterChip_->setAutoRaise(true);
+    filterChip_->setCursor(Qt::PointingHandCursor);
+    filterChip_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    filterChip_->setVisible(false);
+    filterChip_->setStyleSheet(QStringLiteral(
+        "QToolButton {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 10px;"
+        "  padding: 2px 8px;"
+        "}"
+        "QToolButton:hover {"
+        "  background: palette(alternate-base);"
+        "}"
+    ));
+
+    connect(filterChip_, &QToolButton::clicked, this, [this]() {
+        applySearchFilter(QString(), QString(), QString());
+    });
+
+    searchLayout->addWidget(searchLine_, 1);
+    searchLayout->addWidget(filterChip_);
+
+    layout->addLayout(searchLayout);
 
     tableView_ = new SearchResultTableView(centralWidget);
     model_ = new FileModel(controller_, this);
@@ -792,6 +821,7 @@ void MainWindow::updateSearchLineFilterHint()
         searchLine_->setToolTip(
             QStringLiteral("Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, or folder:.")
         );
+        updateFilterChip();
         return;
     }
 
@@ -812,6 +842,35 @@ void MainWindow::updateSearchLineFilterHint()
             activeSearchFilter_
         )
     );
+
+    updateFilterChip();
+}
+
+void MainWindow::updateFilterChip()
+{
+    if (!filterChip_) {
+        return;
+    }
+
+    if (activeSearchFilter_.isEmpty()) {
+        filterChip_->hide();
+        filterChip_->setText(QString());
+        filterChip_->setToolTip(QString());
+        return;
+    }
+
+    filterChip_->setText(QStringLiteral("%1  ×").arg(activeSearchFilterName_));
+    filterChip_->setToolTip(
+        QStringLiteral(
+            "Active filter: %1\n"
+            "Query fragment: %2\n\n"
+            "Click to clear this filter."
+        ).arg(
+            activeSearchFilterName_,
+            activeSearchFilter_
+        )
+    );
+    filterChip_->show();
 }
 
 void MainWindow::refreshDirtyLiveUpdatesIfNeeded()

@@ -98,6 +98,10 @@ void Preferences::setDeviceEnabled(const BlockDevice& blockDevice, bool enabled)
     preference.lastKnownMountPoints = blockDevice.mountPoints;
     preference.lastSeenAt = QDateTime::currentDateTimeUtc();
 
+    if (!deviceSupportsUnmountedScanning(blockDevice)) {
+        preference.scanWhenUnmounted = false;
+    }
+
     saveDevicePreference(preference);
 }
 
@@ -145,6 +149,10 @@ void Preferences::updateKnownDevices(const std::vector<BlockDevice>& blockDevice
         preference.lastKnownMountPoints = blockDevice.mountPoints;
         preference.lastSeenAt = QDateTime::currentDateTimeUtc();
 
+        if (!deviceSupportsUnmountedScanning(blockDevice)) {
+            preference.scanWhenUnmounted = false;
+        }
+
         saveDevicePreference(preference);
     }
 
@@ -162,6 +170,40 @@ void Preferences::markDeviceIndexed(const QString& deviceId)
     IndexedDevicePreference preference = loadDevicePreference(deviceId);
     preference.lastIndexedAt = QDateTime::currentDateTimeUtc();
     saveDevicePreference(preference);
+}
+
+bool Preferences::fsTypeSupportsUnmountedScanning(const QString& fsType)
+{
+    const QString normalized = fsType.trimmed().toLower();
+
+    return normalized == QStringLiteral("ext4") ||
+           normalized == QStringLiteral("ntfs") ||
+           normalized == QStringLiteral("ntfs3");
+}
+
+bool Preferences::deviceSupportsUnmountedScanning(const BlockDevice& blockDevice)
+{
+    return fsTypeSupportsUnmountedScanning(blockDevice.fsType);
+}
+
+bool Preferences::preferenceSupportsUnmountedScanning(const IndexedDevicePreference& preference)
+{
+    return fsTypeSupportsUnmountedScanning(preference.fsType);
+}
+
+bool Preferences::deviceSupportsLiveUpdates(const BlockDevice& blockDevice)
+{
+    /*
+     * This answers whether the user may enable the live-update preference.
+     * Actual watching still requires the device to be mounted and the daemon's
+     * fanotify setup to succeed.
+     */
+    return !blockDevice.fsType.trimmed().isEmpty();
+}
+
+bool Preferences::preferenceSupportsLiveUpdates(const IndexedDevicePreference& preference)
+{
+    return !preference.fsType.trimmed().isEmpty();
 }
 
 QString Preferences::displayNameForBlockDevice(const BlockDevice& blockDevice)

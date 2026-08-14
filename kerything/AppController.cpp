@@ -1095,13 +1095,22 @@ qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>&
         }
 
         const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
-        if (!blockDevice.mounted && (!preference || !preference->scanWhenUnmounted)) {
+        if (!blockDevice.mounted) {
+            const bool canScanUnmounted = Preferences::deviceSupportsUnmountedScanning(blockDevice);
+            const bool scanWhenUnmounted =
+                canScanUnmounted && preference && preference->scanWhenUnmounted;
+
+            if (!scanWhenUnmounted) {
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::cout << "GUI: skipping enabled device because it is unmounted and scanWhenUnmounted=false deviceId="
-                      << blockDevice.deviceId.toStdString()
-                      << "\n";
+                std::cout << "GUI: skipping enabled device because it cannot currently be scanned deviceId="
+                          << blockDevice.deviceId.toStdString()
+                          << " mounted=false"
+                          << " fsType=" << blockDevice.fsType.toStdString()
+                          << " canScanUnmounted=" << (canScanUnmounted ? "true" : "false")
+                          << "\n";
 #endif
-            continue;
+                continue;
+            }
         }
 
         const QByteArray payload = Protocol::makeScanDevicePayload(blockDevice.deviceId);
@@ -1344,13 +1353,13 @@ bool AppController::deviceSupportsLiveUpdates(const QString& deviceId) const
     const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId);
 
     if (blockDevice) {
-        return blockDevice->fsType == QStringLiteral("ext4");
+        return Preferences::deviceSupportsLiveUpdates(*blockDevice);
     }
 
     const std::optional<IndexedDevicePreference> preference =
         preferences_.indexedDevicePreference(deviceId);
 
-    return preference && preference->fsType == QStringLiteral("ext4");
+    return preference && Preferences::preferenceSupportsLiveUpdates(*preference);
 }
 
 bool AppController::requestScanForDeviceId(const QString& deviceId)
@@ -1392,12 +1401,20 @@ bool AppController::requestScanForDeviceId(const QString& deviceId)
     const std::optional<IndexedDevicePreference> preference =
         preferences_.indexedDevicePreference(deviceId);
 
-    if (!blockDevice->mounted && (!preference || !preference->scanWhenUnmounted)) {
-        requestWindowStatusMessage(
-            QStringLiteral("Cannot refresh index: device is not mounted."),
-            5000
-        );
-        return false;
+    if (!blockDevice->mounted) {
+        const bool canScanUnmounted = Preferences::deviceSupportsUnmountedScanning(*blockDevice);
+        const bool scanWhenUnmounted =
+            canScanUnmounted && preference && preference->scanWhenUnmounted;
+
+        if (!scanWhenUnmounted) {
+            requestWindowStatusMessage(
+                canScanUnmounted
+                    ? QStringLiteral("Cannot refresh index: device is not mounted.")
+                    : QStringLiteral("Cannot refresh index: this filesystem must be mounted to scan."),
+                5000
+            );
+            return false;
+        }
     }
 
     const QByteArray payload = Protocol::makeScanDevicePayload(deviceId);

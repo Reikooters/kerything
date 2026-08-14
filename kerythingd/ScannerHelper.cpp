@@ -21,6 +21,7 @@
 #include "FileRecord.h"
 #include "ScopedTimer.h"
 #include "scanners/Ext4ScannerEngine.h"
+#include "scanners/GenericMountedScannerEngine.h"
 #include "scanners/NtfsScannerEngine.h"
 
 namespace ScannerHelper {
@@ -122,7 +123,16 @@ namespace {
 
 bool isAllowedFsType(const QString& fsType)
 {
-    return fsType == QStringLiteral("ntfs") || fsType == QStringLiteral("ext4");
+    const QString normalized = fsType.trimmed().toLower();
+
+    /*
+     * EXT4 and NTFS have specialized low-level scanners.
+     *
+     * Other filesystem types can still be scanned when mounted through the
+     * generic VFS scanner. Filtering of unsuitable device types should happen
+     * in BlockDeviceHelper where mount/device metadata is available.
+     */
+    return !normalized.isEmpty();
 }
 
 std::expected<QString, QString> validateDevNode(const QString& inputPath)
@@ -216,9 +226,10 @@ bool scanDevice(const QString& devNode,
 
     const QString& resolvedPath = *validated;
 
-    syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
+    if (normalizedFsType == QStringLiteral("ntfs") ||
+        normalizedFsType == QStringLiteral("ntfs3")) {
+        syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
 
-    if (normalizedFsType == QStringLiteral("ntfs")) {
         return NtfsScannerEngine::scanDevice(
             resolvedPath,
             onFileRecordChunk,
@@ -230,6 +241,8 @@ bool scanDevice(const QString& devNode,
     }
 
     if (normalizedFsType == QStringLiteral("ext4")) {
+        syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
+
         return Ext4ScannerEngine::scanDevice(
             resolvedPath,
             onFileRecordChunk,
@@ -240,7 +253,25 @@ bool scanDevice(const QString& devNode,
         );
     }
 
-    return false;
+    if (primaryMountPoint.trimmed().isEmpty()) {
+        if (onError) {
+            onError(
+                QStringLiteral("filesystem type '%1' can only be scanned while mounted")
+                    .arg(fsType)
+            );
+        }
+
+        return false;
+    }
+
+    return GenericMountedScannerEngine::scanMountedDevice(
+        primaryMountPoint,
+        onFileRecordChunk,
+        onStringPoolChunk,
+        onError,
+        shouldCancel,
+        onProgress
+    );
 }
 
 } // namespace ScannerHelper

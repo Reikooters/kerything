@@ -324,6 +324,15 @@ void LiveUpdateManager::setKnownDevices(const std::vector<BlockDevice>& devices)
 
     for (const BlockDevice& device : devices) {
         if (!isLiveUpdateEligible(device)) {
+            if (device.mounted &&
+                device.mountedFsType.trimmed().toLower() == QStringLiteral("fuseblk")) {
+                Q_EMIT liveUpdateStatusChanged(
+                    device.deviceId,
+                    LiveUpdateStatus::NotWatching,
+                    QStringLiteral("live updates are not available for fuseblk/FUSE mounts")
+                );
+            }
+
             continue;
         }
 
@@ -394,15 +403,31 @@ QString LiveUpdateManager::watchKeyForDevice(const BlockDevice& device)
 
 bool LiveUpdateManager::isLiveUpdateEligible(const BlockDevice& device)
 {
+    /*
+     * Live-update preferences can be enabled while a device is unmounted, but
+     * actual fanotify watching can only start once the device has a mount point.
+     */
     if (!device.mounted) {
         return false;
     }
 
-    if (device.fsType != QStringLiteral("ext4")) {
+    if (device.primaryMountPoint.trimmed().isEmpty()) {
         return false;
     }
 
-    if (device.primaryMountPoint.isEmpty()) {
+    if (device.fsType.trimmed().isEmpty()) {
+        return false;
+    }
+
+    /*
+     * ntfs-3g and similar FUSE mounts are commonly reported as fuseblk in the
+     * active mount table. FAN_REPORT_FID/open_by_handle_at based tracking does
+     * not work for these mounts, so avoid starting a watcher that is known to fail.
+     *
+     * Kernel NTFS drivers such as ntfs3, and newer kernel ntfs mounts, are not
+     * reported as fuseblk and can still be attempted.
+     */
+    if (device.mountedFsType.trimmed().toLower() == QStringLiteral("fuseblk")) {
         return false;
     }
 

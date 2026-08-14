@@ -248,8 +248,14 @@ bool FanotifyWatcher::start()
         const int markErrno = errno;
         ::close(mountFd);
 
-        const QString errorText = QStringLiteral("fanotify_mark failed for %1: %2")
+        QString errorText = QStringLiteral("fanotify_mark failed for %1: %2")
             .arg(mountPoint_, QString::fromLocal8Bit(std::strerror(markErrno)));
+
+        if (markErrno == EOPNOTSUPP || markErrno == ENOSYS || markErrno == EINVAL) {
+            errorText += QStringLiteral(
+                ". This filesystem or kernel may not support the fanotify features required for live updates."
+            );
+        }
 
         std::cerr << errorText.toStdString() << "\n";
         closeFanotifyFd();
@@ -263,7 +269,7 @@ bool FanotifyWatcher::start()
     connect(notifier_, &QSocketNotifier::activated,
             this, &FanotifyWatcher::onActivated);
 
-    std::cout << "fanotify: watching EXT4 filesystem deviceId="
+    std::cout << "fanotify: watching mounted filesystem deviceId="
               << deviceId_.toStdString()
               << " mountPoint="
               << mountPoint_.toStdString()

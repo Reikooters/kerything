@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <QHash>
 #include <QStringList>
 #include <sstream>
 #include <vector>
@@ -116,17 +117,18 @@ static std::string decodeMountInfoField(const std::string& input)
 struct MountInfoEntry {
     std::string root;
     std::string mountPoint;
+    std::string fsType;
     std::string mountSource;
 };
 
 /**
  * Reads and parses the contents of /proc/self/mountinfo to retrieve a list of mounted file systems.
  *
- * This method extracts the mount root, mount point, and mount source from each line of the file.
+ * This method extracts the mount root, mount point, filesystem type, and mount source from each line of the file.
  * Only entries that conform to the expected format are included in the output.
  *
  * @return A vector of MountInfoEntry structures, where each structure contains the mount root,
- *         mount point, and associated mount source. Returns an empty vector if the file cannot
+ *         mount point, filesystem type, and associated mount source. Returns an empty vector if the file cannot
  *         be read or if no valid entries are found.
  */
 static std::vector<MountInfoEntry> readMountInfo() {
@@ -139,7 +141,7 @@ static std::vector<MountInfoEntry> readMountInfo() {
         // mountinfo format:
         //  id parent major:minor root mount_point opts ... - fstype mount_source superopts
         //
-        // We need root, mount_point and mount_source.
+        // We need root, mount_point, fstype and mount_source.
         const auto sep = line.find(" - ");
         if (sep == std::string::npos) continue;
 
@@ -165,6 +167,7 @@ static std::vector<MountInfoEntry> readMountInfo() {
         out.push_back({
             decodeMountInfoField(root),
             decodeMountInfoField(mountPoint),
+            decodeMountInfoField(fstype),
             decodeMountInfoField(mountSource)
         });
     }
@@ -324,14 +327,20 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
 
         QString fsType = fsTypeOpt->toLower();
 
-        if (fsType != QStringLiteral("ext4") &&
-            fsType != QStringLiteral("ntfs") &&
-            fsType != QStringLiteral("ntfs3")) {
+        /*
+         * Do not restrict the device list to only filesystems with specialized
+         * raw scanners. EXT4 and NTFS still use their optimized engines, while
+         * other mounted block-device filesystems can be indexed through the
+         * generic mounted scanner.
+         *
+         * Pseudo filesystems such as procfs/sysfs/devtmpfs normally do not show
+         * up here because we enumerate real /dev/disk/by-* block devices and
+         * require blkid filesystem metadata.
+         */
+        if (fsType.isEmpty()) {
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::cout << "Skipping unsupported block device devNode="
+            std::cout << "Skipping block device with empty filesystem type devNode="
                       << devNode
-                      << " fsType="
-                      << fsType.toStdString()
                       << "\n";
 #endif
             continue;
@@ -341,6 +350,7 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
         const auto label = blkidValueForDev(devNode, "LABEL");
 
         QStringList mountPoints;
+        QHash<QString, QString> mountFsTypeByMountPoint;
 
         for (const auto& mi : mountInfo) {
             /*
@@ -368,24 +378,32 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
             }
 
             if (srcResolved.string() == devNode) {
-                mountPoints << QString::fromStdString(mi.mountPoint);
+                const QString mountPoint = QString::fromStdString(mi.mountPoint);
+                mountPoints << mountPoint;
+                mountFsTypeByMountPoint.insert(
+                    mountPoint,
+                    QString::fromStdString(mi.fsType).toLower()
+                );
             }
         }
 
         mountPoints.removeDuplicates();
         std::sort(mountPoints.begin(), mountPoints.end());
 
+        const QString primaryMountPoint = pickPrimaryMountPoint(mountPoints);
+
         BlockDevice dev;
         dev.deviceId = cand.deviceId;
         dev.devNode = QString::fromStdString(devNode);
         dev.fsType = fsType;
+        dev.mountedFsType = mountFsTypeByMountPoint.value(primaryMountPoint);
         dev.uuid = probedUuid ? probedUuid->toLower() : cand.uuid.toLower();
         dev.partuuid = cand.partuuid.toLower();
         dev.label = label.value_or(QString());
         dev.diskModel = diskModelForDevNode(devNode);
         dev.mounted = !mountPoints.isEmpty();
         dev.mountPoints = mountPoints;
-        dev.primaryMountPoint = pickPrimaryMountPoint(mountPoints);
+        dev.primaryMountPoint = primaryMountPoint;
 
         devicesOut.push_back(std::move(dev));
     }

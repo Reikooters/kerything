@@ -83,6 +83,7 @@ private:
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;
     bool showOfflineResultsForDevice(const QString& deviceId) const;
+    bool unmountedScanningSupportedForDevice(const QString& deviceId) const;
     bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     bool liveUpdatesSupportedForDevice(const QString& deviceId) const;
     void toggleDeviceRowChecked(int row);
@@ -111,6 +112,7 @@ private:
     QTableWidget* deviceTable_ = nullptr;
     QCheckBox* scanWhenUnmountedCheckBox_ = nullptr;
     QCheckBox* showOfflineResultsCheckBox_ = nullptr;
+    QLabel* liveUpdatesWarningIconLabel_ = nullptr;
     QCheckBox* liveUpdatesEnabledCheckBox_ = nullptr;
     QLabel* selectedDeviceLabel_ = nullptr;
 

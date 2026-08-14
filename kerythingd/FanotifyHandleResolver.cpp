@@ -119,6 +119,12 @@ int FanotifyHandleResolver::openHandle(
     if (fd < 0 && errorText) {
         *errorText = QStringLiteral("open_by_handle_at failed for %1: %2")
             .arg(mountPoint_, QString::fromLocal8Bit(std::strerror(errno)));
+
+        if (errno == EOPNOTSUPP || errno == ESTALE || errno == EPERM) {
+            *errorText += QStringLiteral(
+                ". This filesystem may not provide stable file handles required for live updates."
+            );
+        }
     }
 
     return fd;

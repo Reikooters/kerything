@@ -135,6 +135,8 @@ add_executable(kerythingd
         kerythingd/ThrottledProgressReporter.h
         kerythingd/scanners/Ext4ScannerEngine.cpp
         kerythingd/scanners/Ext4ScannerEngine.h
+        kerythingd/scanners/GenericMountedScannerEngine.cpp
+        kerythingd/scanners/GenericMountedScannerEngine.h
         kerythingd/scanners/NtfsScannerEngine.cpp
         kerythingd/scanners/NtfsScannerEngine.h
         shared/BlockDevice.h

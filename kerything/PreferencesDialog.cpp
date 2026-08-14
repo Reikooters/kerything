@@ -13,6 +13,7 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
@@ -72,7 +73,7 @@ PreferencesDialog::PreferencesDialog(
       knownDevices_(knownDevices)
 {
     setWindowTitle(QStringLiteral("Configure Kerything"));
-    resize(980, 620);
+    resize(980, 700);
 
     for (const BlockDevice& blockDevice : knownDevices_) {
         if (!blockDevice.deviceId.isEmpty()) {
@@ -315,7 +316,9 @@ QWidget* PreferencesDialog::createDevicesPage()
     auto* title = new QLabel(
         QStringLiteral(
             "<h2>Devices</h2>"
-            "<p>Choose which devices Kerything indexes. Enabling a mounted device starts indexing immediately. Unmounted devices are indexed immediately only if “Scan this device even when it is not mounted” is enabled.</p>"
+            "<p>Choose which devices Kerything indexes. Enabling a mounted device starts indexing immediately. "
+            "Unmounted indexing is available only for filesystems with low-level raw scanners, currently EXT4 and NTFS. "
+            "Other filesystems are indexed through Linux’s mounted filesystem APIs and must be mounted to be scanned.</p>"
         ),
         page
     );
@@ -371,15 +374,30 @@ QWidget* PreferencesDialog::createDevicesPage()
         optionsGroup
     );
 
-    liveUpdatesEnabledCheckBox_ = new QCheckBox(
-        QStringLiteral("Watch this device for live updates when mounted"),
-        optionsGroup
-    );
-
     optionsLayout->addWidget(selectedDeviceLabel_);
     optionsLayout->addWidget(scanWhenUnmountedCheckBox_);
     optionsLayout->addWidget(showOfflineResultsCheckBox_);
-    optionsLayout->addWidget(liveUpdatesEnabledCheckBox_);
+
+    auto* liveUpdatesRow = new QWidget(optionsGroup);
+    auto* liveUpdatesRowLayout = new QHBoxLayout(liveUpdatesRow);
+    liveUpdatesRowLayout->setContentsMargins(0, 0, 0, 0);
+
+    liveUpdatesWarningIconLabel_ = new QLabel(liveUpdatesRow);
+    liveUpdatesWarningIconLabel_->setPixmap(
+        QIcon::fromTheme(QStringLiteral("dialog-warning")).pixmap(16, 16)
+    );
+    liveUpdatesWarningIconLabel_->setVisible(false);
+
+    liveUpdatesEnabledCheckBox_ = new QCheckBox(
+        QStringLiteral("Watch this device for live updates when mounted"),
+        liveUpdatesRow
+    );
+
+    liveUpdatesRowLayout->addWidget(liveUpdatesWarningIconLabel_);
+    liveUpdatesRowLayout->addWidget(liveUpdatesEnabledCheckBox_);
+    liveUpdatesRowLayout->addStretch();
+
+    optionsLayout->addWidget(liveUpdatesRow);
 
     layout->addWidget(optionsGroup);
 
@@ -415,14 +433,22 @@ QWidget* PreferencesDialog::createDevicesPage()
         QString deviceMountPoint = deviceTable_->item(row, DeviceMountPointColumn)->text().toHtmlEscaped();
 
         if (deviceMountPoint != QStringLiteral("—")) {
-            selectedDeviceLabel_->setText(QStringLiteral("Options for <b>%1</b><br>%2 | %3").arg(
+            selectedDeviceLabel_->setText(QStringLiteral(
+                "Options for <b>%1</b><br>"
+                "Currently mounted at <b>%3</b>.<br>"
+                "Device ID: %2"
+            ).arg(
                 deviceName,
                 deviceId.toHtmlEscaped(),
                 deviceMountPoint
             ));
         }
         else {
-            selectedDeviceLabel_->setText(QStringLiteral("Options for <b>%1</b><br>%2").arg(
+            selectedDeviceLabel_->setText(QStringLiteral(
+                "Options for <b>%1</b><br>"
+                "This device is not currently mounted.<br>"
+                "Device ID: %2"
+            ).arg(
                 deviceName,
                 deviceId.toHtmlEscaped()
             ));
@@ -431,29 +457,88 @@ QWidget* PreferencesDialog::createDevicesPage()
         scanWhenUnmountedCheckBox_->setEnabled(true);
         showOfflineResultsCheckBox_->setEnabled(true);
 
+        const bool unmountedScanningSupported = unmountedScanningSupportedForDevice(deviceId);
         const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
+        const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
+        const bool mountedAsFuseblk =
+            knownDeviceIt != knownDeviceById_.constEnd() &&
+            knownDeviceIt->mounted &&
+            knownDeviceIt->mountedFsType.trimmed().toLower() == QStringLiteral("fuseblk");
+
+        scanWhenUnmountedCheckBox_->setEnabled(unmountedScanningSupported);
         liveUpdatesEnabledCheckBox_->setEnabled(liveUpdatesSupported);
 
-        scanWhenUnmountedCheckBox_->setChecked(scanWhenUnmountedForDevice(deviceId));
+        scanWhenUnmountedCheckBox_->setChecked(
+            unmountedScanningSupported && scanWhenUnmountedForDevice(deviceId)
+        );
         showOfflineResultsCheckBox_->setChecked(showOfflineResultsForDevice(deviceId));
         liveUpdatesEnabledCheckBox_->setChecked(
             liveUpdatesSupported && liveUpdatesEnabledForDevice(deviceId)
         );
 
-        if (liveUpdatesSupported) {
-            liveUpdatesEnabledCheckBox_->setText(
-                QStringLiteral("Watch this device for live updates when mounted")
+        if (unmountedScanningSupported) {
+            scanWhenUnmountedCheckBox_->setText(
+                QStringLiteral("Scan this device even when it is not mounted")
             );
-            liveUpdatesEnabledCheckBox_->setToolTip(
-                QStringLiteral("Kerything will keep this EXT4 device up to date using fanotify while it is mounted.")
+            scanWhenUnmountedCheckBox_->setToolTip(
+                QStringLiteral(
+                    "Kerything can scan this filesystem while unmounted because it has a low-level\n"
+                    "raw scanner for this filesystem type."
+                )
             );
         } else {
-            liveUpdatesEnabledCheckBox_->setText(
-                QStringLiteral("Watch this device for live updates when mounted (EXT4 only)")
+            scanWhenUnmountedCheckBox_->setText(
+                QStringLiteral("Scan this device even when it is not mounted (EXT4/NTFS only)")
             );
+            scanWhenUnmountedCheckBox_->setToolTip(
+                QStringLiteral(
+                    "This filesystem is indexed with the generic mounted-device scanner,\n"
+                    "which uses Linux filesystem APIs and requires the device to be mounted."
+                )
+            );
+        }
+
+        liveUpdatesEnabledCheckBox_->setText(
+            QStringLiteral("Watch this device for live updates when mounted")
+        );
+
+        if (mountedAsFuseblk) {
+            const QString fuseblkLiveUpdatesToolTip = QStringLiteral(
+                "You can keep this preference enabled, but this device is currently mounted as fuseblk,\n"
+                "which usually means it is using a FUSE driver such as ntfs-3g.\n\n"
+                "Live updates are not expected to work for this mount. For NTFS, use a kernel driver\n"
+                "such as ntfs3 or the newer kernel ntfs driver."
+            );
+
+            liveUpdatesEnabledCheckBox_->setToolTip(fuseblkLiveUpdatesToolTip);
+
+            if (liveUpdatesWarningIconLabel_) {
+                liveUpdatesWarningIconLabel_->setToolTip(fuseblkLiveUpdatesToolTip);
+                liveUpdatesWarningIconLabel_->setVisible(true);
+            }
+        }
+        else if (liveUpdatesSupported) {
             liveUpdatesEnabledCheckBox_->setToolTip(
-                QStringLiteral("Live updates currently require EXT4. This device uses a different filesystem.")
+                QStringLiteral(
+                    "Kerything will try to keep this filesystem up to date using fanotify whenever it is mounted.\n"
+                    "If the mounted filesystem or kernel driver does not support the required file-handle features,\n"
+                    "Kerything will report that live updates are unavailable or that a rescan is needed."
+                )
             );
+
+            if (liveUpdatesWarningIconLabel_) {
+                liveUpdatesWarningIconLabel_->setToolTip(QString());
+                liveUpdatesWarningIconLabel_->setVisible(false);
+            }
+        } else {
+            liveUpdatesEnabledCheckBox_->setToolTip(
+                QStringLiteral("Live updates require a known filesystem type.")
+            );
+
+            if (liveUpdatesWarningIconLabel_) {
+                liveUpdatesWarningIconLabel_->setToolTip(QString());
+                liveUpdatesWarningIconLabel_->setVisible(false);
+            }
         }
     };
 
@@ -868,9 +953,15 @@ void PreferencesDialog::populateDeviceTable()
         enabledItem->setCheckState(preference.enabled ? Qt::Checked : Qt::Unchecked);
         enabledItem->setData(DeviceIdRole, blockDevice.deviceId);
         enabledItem->setData(InitialEnabledRole, preference.enabled);
-        enabledItem->setData(ScanWhenUnmountedRole, preference.scanWhenUnmounted);
+        enabledItem->setData(
+            ScanWhenUnmountedRole,
+            Preferences::deviceSupportsUnmountedScanning(blockDevice) && preference.scanWhenUnmounted
+        );
         enabledItem->setData(ShowOfflineResultsRole, preference.showOfflineResults);
-        enabledItem->setData(LiveUpdatesEnabledRole, preference.liveUpdatesEnabled);
+        enabledItem->setData(
+            LiveUpdatesEnabledRole,
+            Preferences::deviceSupportsLiveUpdates(blockDevice) && preference.liveUpdatesEnabled
+        );
         deviceTable_->setItem(row, DeviceEnabledColumn, enabledItem);
 
         auto* nameItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayNameForBlockDevice(blockDevice));
@@ -878,9 +969,38 @@ void PreferencesDialog::populateDeviceTable()
         deviceTable_->setItem(row, DeviceNameColumn, nameItem);
 
         auto* statusItem = new QTableWidgetItem(blockDevice.mounted ? QStringLiteral("Mounted") : QStringLiteral("Not mounted"));
+
+        if (blockDevice.mounted &&
+            blockDevice.mountedFsType.trimmed().toLower() == QStringLiteral("fuseblk")) {
+            statusItem->setIcon(QIcon::fromTheme(
+                QStringLiteral("dialog-warning"),
+                QIcon::fromTheme(QStringLiteral("emblem-warning"))
+            ));
+            statusItem->setToolTip(
+                QStringLiteral(
+                    "This device is mounted as fuseblk, which usually means it is using a FUSE driver such as ntfs-3g.\n\n"
+                    "Kerything can index the mounted files, but live updates are not expected to work for this mount.\n\n"
+                    "For NTFS, live updates require a kernel driver such as ntfs3 or the newer kernel ntfs driver."
+                )
+            );
+            }
+        else if (blockDevice.mounted && !blockDevice.mountedFsType.trimmed().isEmpty()) {
+            statusItem->setToolTip(
+                QStringLiteral("Mounted as %1").arg(blockDevice.mountedFsType.trimmed())
+            );
+        }
+
         deviceTable_->setItem(row, DeviceStatusColumn, statusItem);
 
         auto* fsTypeItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayOrDash(blockDevice.fsType));
+        if (blockDevice.mounted && !blockDevice.mountedFsType.trimmed().isEmpty()) {
+            fsTypeItem->setToolTip(
+                blockDevice.mountedFsType == blockDevice.fsType
+                    ? QStringLiteral("Filesystem type: %1").arg(blockDevice.fsType)
+                    : QStringLiteral("Detected filesystem: %1\nMounted as: %2")
+                        .arg(blockDevice.fsType, blockDevice.mountedFsType)
+            );
+        }
         deviceTable_->setItem(row, DeviceFsTypeColumn, fsTypeItem);
 
         const QString mountPointText = blockDevice.primaryMountPoint.trimmed().isEmpty()
@@ -976,6 +1096,10 @@ QStringList PreferencesDialog::enabledDeviceIdsFromTable() const
 
 bool PreferencesDialog::scanWhenUnmountedForDevice(const QString& deviceId) const
 {
+    if (!unmountedScanningSupportedForDevice(deviceId)) {
+        return false;
+    }
+
     if (!deviceTable_) {
         return true;
     }
@@ -1006,8 +1130,28 @@ bool PreferencesDialog::showOfflineResultsForDevice(const QString& deviceId) con
     return true;
 }
 
+bool PreferencesDialog::unmountedScanningSupportedForDevice(const QString& deviceId) const
+{
+    const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
+    if (knownDeviceIt != knownDeviceById_.constEnd()) {
+        return Preferences::deviceSupportsUnmountedScanning(knownDeviceIt.value());
+    }
+
+    const IndexedDevicePreference preference =
+        originalPreferencesByDeviceId_.value(
+            deviceId,
+            IndexedDevicePreference{ .deviceId = deviceId }
+        );
+
+    return Preferences::preferenceSupportsUnmountedScanning(preference);
+}
+
 bool PreferencesDialog::liveUpdatesEnabledForDevice(const QString& deviceId) const
 {
+    if (!liveUpdatesSupportedForDevice(deviceId)) {
+        return false;
+    }
+
     if (!deviceTable_) {
         return true;
     }
@@ -1026,7 +1170,7 @@ bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) c
 {
     const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
     if (knownDeviceIt != knownDeviceById_.constEnd()) {
-        return knownDeviceIt->fsType == QStringLiteral("ext4");
+        return Preferences::deviceSupportsLiveUpdates(knownDeviceIt.value());
     }
 
     const IndexedDevicePreference preference =
@@ -1035,7 +1179,7 @@ bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) c
             IndexedDevicePreference{ .deviceId = deviceId }
         );
 
-    return preference.fsType == QStringLiteral("ext4");
+    return Preferences::preferenceSupportsLiveUpdates(preference);
 }
 
 void PreferencesDialog::toggleDeviceRowChecked(int row)
@@ -1330,7 +1474,11 @@ bool PreferencesDialog::hasDeviceChanges() const
         const IndexedDevicePreference original =
             originalPreferencesByDeviceId_.value(deviceId, IndexedDevicePreference{ .deviceId = deviceId });
 
-        if (item->data(ScanWhenUnmountedRole).toBool() != original.scanWhenUnmounted) {
+        const bool unmountedScanningSupported = unmountedScanningSupportedForDevice(deviceId);
+        const bool scanWhenUnmounted =
+            unmountedScanningSupported && item->data(ScanWhenUnmountedRole).toBool();
+
+        if (scanWhenUnmounted != original.scanWhenUnmounted) {
             return true;
         }
 
@@ -1439,7 +1587,9 @@ void PreferencesDialog::applyChanges()
             originalPreferencesByDeviceId_.value(deviceId, IndexedDevicePreference{ .deviceId = deviceId });
 
         const bool originallyEnabled = original.enabled;
-        const bool scanWhenUnmounted = item->data(ScanWhenUnmountedRole).toBool();
+        const bool unmountedScanningSupported = unmountedScanningSupportedForDevice(deviceId);
+        const bool scanWhenUnmounted =
+            unmountedScanningSupported && item->data(ScanWhenUnmountedRole).toBool();
         const bool showOfflineResults = item->data(ShowOfflineResultsRole).toBool();
         const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
         const bool liveUpdatesEnabled =
@@ -1484,6 +1634,7 @@ void PreferencesDialog::applyChanges()
             }
 
         item->setData(InitialEnabledRole, enabled);
+        item->setData(ScanWhenUnmountedRole, scanWhenUnmounted);
         item->setData(LiveUpdatesEnabledRole, liveUpdatesEnabled);
     }
 

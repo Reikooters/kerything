@@ -13,6 +13,7 @@ struct BlockDevice {
     QString deviceId;
     QString devNode;
     QString fsType;
+    QString mountedFsType;
     QString uuid;
     QString partuuid;
     QString label;

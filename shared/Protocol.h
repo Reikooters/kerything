@@ -125,6 +125,7 @@ inline QByteArray makeKnownDevicesPayload(const std::vector<BlockDevice>& device
         out << device.deviceId
             << device.devNode
             << device.fsType
+            << device.mountedFsType
             << device.uuid
             << device.partuuid
             << device.label
@@ -159,6 +160,7 @@ inline std::optional<std::vector<BlockDevice>> parseKnownDevicesPayload(const QB
         in >> device.deviceId
            >> device.devNode
            >> device.fsType
+           >> device.mountedFsType
            >> device.uuid
            >> device.partuuid
            >> device.label

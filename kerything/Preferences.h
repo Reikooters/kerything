@@ -60,6 +60,12 @@ public:
     void updateKnownDevices(const std::vector<BlockDevice>& blockDevices);
     void markDeviceIndexed(const QString& deviceId);
 
+    [[nodiscard]] static bool fsTypeSupportsUnmountedScanning(const QString& fsType);
+    [[nodiscard]] static bool deviceSupportsUnmountedScanning(const BlockDevice& blockDevice);
+    [[nodiscard]] static bool preferenceSupportsUnmountedScanning(const IndexedDevicePreference& preference);
+    [[nodiscard]] static bool deviceSupportsLiveUpdates(const BlockDevice& blockDevice);
+    [[nodiscard]] static bool preferenceSupportsLiveUpdates(const IndexedDevicePreference& preference);
+
     // Filters
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
     void saveSearchFilters(const std::vector<SearchFilterPreference>& filters);

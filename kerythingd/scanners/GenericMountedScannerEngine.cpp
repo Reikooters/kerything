@@ -433,7 +433,6 @@ bool scanMountedDevice(
                 }
 
                 const bool isDirectory = S_ISDIR(st.st_mode);
-                const std::string absoluteChildPath = childPath(current.absolutePath, name);
 
                 /*
                  * Skip entries that belong to another mounted filesystem.
@@ -443,11 +442,18 @@ bool scanMountedDevice(
                  *
                  * mountinfo catches bind mounts, including bind mounts that may
                  * have the same st_dev as the root filesystem.
+                 *
+                 * Build the absolute child path only for directories. Files do not
+                 * need it, and avoiding this allocation matters on trees with
+                 * millions of entries.
                  */
+                std::string absoluteChildPath;
                 if (isDirectory) {
                     if (st.st_dev != rootDev) {
                         continue;
                     }
+
+                    absoluteChildPath = childPath(current.absolutePath, name);
 
                     if (nestedMountPoints.contains(normalizePath(absoluteChildPath))) {
                         continue;
@@ -490,7 +496,7 @@ bool scanMountedDevice(
                     .parentFd = childParentFd,
                     .name = name,
                     .inode = static_cast<uint64_t>(st.st_ino),
-                    .absolutePath = absoluteChildPath
+                    .absolutePath = std::move(absoluteChildPath)
                 });
             }
         }

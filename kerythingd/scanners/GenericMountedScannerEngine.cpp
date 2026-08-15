@@ -133,10 +133,8 @@ struct StreamState {
 };
 
 struct PendingDirectory {
-    int parentFd = -1;
-    std::string name;
+    std::string path;
     uint64_t inode = 0;
-    std::string absolutePath;
 };
 
 void reportError(const ScannerHelper::ErrorCallback& onError, const QString& message)
@@ -293,6 +291,17 @@ std::string childPath(const std::string& parent, std::string_view name)
     return out;
 }
 
+struct ScanStats {
+    uint64_t openedDirectories = 0;
+    uint64_t failedDirectoryOpens = 0;
+    uint64_t getdentsCalls = 0;
+    uint64_t getdentsFailures = 0;
+    uint64_t statFailures = 0;
+    uint64_t skippedCrossDeviceDirectories = 0;
+    uint64_t skippedNestedMountPoints = 0;
+    std::size_t maxPendingDirectories = 0;
+};
+
 } // namespace
 
 bool scanMountedDevice(
@@ -332,16 +341,6 @@ bool scanMountedDevice(
     const uint64_t rootInode = static_cast<uint64_t>(rootStat.st_ino);
     const auto nestedMountPoints = nestedMountPointsForRoot(rootPath);
 
-    int rootFd = ::open(rootPath.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (rootFd < 0) {
-        reportError(
-            onError,
-            QStringLiteral("failed to open mount point %1: %2")
-                .arg(primaryMountPoint, QString::fromLocal8Bit(std::strerror(errno)))
-        );
-        return false;
-    }
-
     StreamState stream;
     stream.records.reserve(StreamState::kRecordsPerIpcChunk);
     stream.stringPool.reserve(StreamState::kMaxIpcBufferSizeBytes);
@@ -355,54 +354,44 @@ bool scanMountedDevice(
             FileRecord_IsDir,
             onFileRecordChunk,
             onStringPoolChunk)) {
-        ::close(rootFd);
         return false;
     }
 
     std::vector<PendingDirectory> stack;
     stack.push_back(PendingDirectory{
-        .parentFd = AT_FDCWD,
-        .name = rootPath,
-        .inode = rootInode,
-        .absolutePath = rootPath
+        .path = rootPath,
+        .inode = rootInode
     });
 
     uint64_t processed = 0;
 
     std::vector<char> buffer(kGetdentsBufferSize);
+    ScanStats stats;
+    stats.maxPendingDirectories = stack.size();
 
     while (!stack.empty()) {
         if (shouldCancel && shouldCancel()) {
-            ::close(rootFd);
             return false;
         }
 
         PendingDirectory current = std::move(stack.back());
         stack.pop_back();
 
-        int dirFd = -1;
-        if (current.absolutePath == rootPath) {
-            dirFd = ::dup(rootFd);
-        } else {
-            dirFd = ::openat(
-                current.parentFd,
-                current.name.c_str(),
-                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-            );
-        }
-
-        if (current.parentFd >= 0 && current.parentFd != AT_FDCWD) {
-            ::close(current.parentFd);
-        }
+        const int dirFd = ::open(
+            current.path.c_str(),
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        );
 
         if (dirFd < 0) {
+            ++stats.failedDirectoryOpens;
             continue;
         }
+
+        ++stats.openedDirectories;
 
         while (true) {
             if (shouldCancel && shouldCancel()) {
                 ::close(dirFd);
-                ::close(rootFd);
                 return false;
             }
 
@@ -410,7 +399,10 @@ bool scanMountedDevice(
                 ::syscall(SYS_getdents64, dirFd, buffer.data(), buffer.size())
             );
 
+            ++stats.getdentsCalls;
+
             if (nread < 0) {
+                ++stats.getdentsFailures;
                 break;
             }
 
@@ -429,6 +421,7 @@ bool scanMountedDevice(
 
                 struct stat st {};
                 if (::fstatat(dirFd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+                    ++stats.statFailures;
                     continue;
                 }
 
@@ -450,12 +443,14 @@ bool scanMountedDevice(
                 std::string absoluteChildPath;
                 if (isDirectory) {
                     if (st.st_dev != rootDev) {
+                        ++stats.skippedCrossDeviceDirectories;
                         continue;
                     }
 
-                    absoluteChildPath = childPath(current.absolutePath, name);
+                    absoluteChildPath = childPath(current.path, name);
 
                     if (nestedMountPoints.contains(normalizePath(absoluteChildPath))) {
+                        ++stats.skippedNestedMountPoints;
                         continue;
                     }
                 }
@@ -473,9 +468,8 @@ bool scanMountedDevice(
                         onFileRecordChunk,
                         onStringPoolChunk)) {
                     ::close(dirFd);
-                    ::close(rootFd);
                     return false;
-                }
+                        }
 
                 ++processed;
 
@@ -487,24 +481,20 @@ bool scanMountedDevice(
                     continue;
                 }
 
-                const int childParentFd = ::dup(dirFd);
-                if (childParentFd < 0) {
-                    continue;
-                }
-
                 stack.push_back(PendingDirectory{
-                    .parentFd = childParentFd,
-                    .name = name,
-                    .inode = static_cast<uint64_t>(st.st_ino),
-                    .absolutePath = std::move(absoluteChildPath)
+                    .path = std::move(absoluteChildPath),
+                    .inode = static_cast<uint64_t>(st.st_ino)
                 });
+
+                stats.maxPendingDirectories = std::max(
+                    stats.maxPendingDirectories,
+                    stack.size()
+                );
             }
         }
 
         ::close(dirFd);
     }
-
-    ::close(rootFd);
 
     if (!stream.flush(onFileRecordChunk, onStringPoolChunk)) {
         return false;
@@ -519,6 +509,22 @@ bool scanMountedDevice(
               << stream.totalStringPoolLength
               << " recordsProcessed="
               << processed
+              << " openedDirectories="
+              << stats.openedDirectories
+              << " failedDirectoryOpens="
+              << stats.failedDirectoryOpens
+              << " getdentsCalls="
+              << stats.getdentsCalls
+              << " getdentsFailures="
+              << stats.getdentsFailures
+              << " statFailures="
+              << stats.statFailures
+              << " skippedCrossDeviceDirectories="
+              << stats.skippedCrossDeviceDirectories
+              << " skippedNestedMountPoints="
+              << stats.skippedNestedMountPoints
+              << " maxPendingDirectories="
+              << stats.maxPendingDirectories
               << "\n";
 #endif
 

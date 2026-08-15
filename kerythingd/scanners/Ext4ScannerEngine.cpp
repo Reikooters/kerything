@@ -86,7 +86,12 @@ namespace Ext4ScannerEngine {
             uint64_t usedInodesSeen = 0;
 
             if (onProgress) {
-                onProgress(0, inodesInUse);
+                onProgress(Protocol::ScanProgress{
+                    .phase = QStringLiteral("Reading inodes"),
+                    .unit = QStringLiteral("inodes"),
+                    .processed = 0,
+                    .total = inodesInUse
+                });
             }
 
             while (true) {
@@ -119,7 +124,12 @@ namespace Ext4ScannerEngine {
                 }
 
                 if (onProgress && ((usedInodesSeen & (kProgressEvery - 1)) == 0)) {
-                    onProgress(usedInodesSeen, inodesInUse);
+                    onProgress(Protocol::ScanProgress{
+                        .phase = QStringLiteral("Reading inodes"),
+                        .unit = QStringLiteral("inodes"),
+                        .processed = usedInodesSeen,
+                        .total = inodesInUse
+                    });
                 }
 
                 if (shouldCancel && shouldCancel()) {
@@ -131,7 +141,12 @@ namespace Ext4ScannerEngine {
             ext2fs_close_inode_scan(scan);
 
             if (onProgress) {
-                onProgress(inodesInUse, inodesInUse);
+                onProgress(Protocol::ScanProgress{
+                    .phase = QStringLiteral("Reading inodes"),
+                    .unit = QStringLiteral("inodes"),
+                    .processed = usedInodesSeen,
+                    .total = inodesInUse
+                });
             }
 
             return true;
@@ -361,6 +376,15 @@ namespace Ext4ScannerEngine {
 
             uint64_t directoriesScanned = 0;
 
+            if (onProgress) {
+                onProgress(Protocol::ScanProgress{
+                    .phase = QStringLiteral("Scanning directories"),
+                    .unit = QStringLiteral("directories"),
+                    .processed = 0,
+                    .total = static_cast<quint64>(directoryInodes.size())
+                });
+            }
+
             for (const uint32_t dirInode : directoryInodes) {
                 if (shouldCancel && shouldCancel()) {
                     ext2fs_close(fs);
@@ -396,7 +420,12 @@ namespace Ext4ScannerEngine {
                 ++directoriesScanned;
 
                 if (onProgress && ((directoriesScanned & (kProgressEvery - 1)) == 0)) {
-                    onProgress(directoriesScanned, directoryInodes.size());
+                    onProgress(Protocol::ScanProgress{
+                        .phase = QStringLiteral("Scanning directories"),
+                        .unit = QStringLiteral("directories"),
+                        .processed = directoriesScanned,
+                        .total = static_cast<quint64>(directoryInodes.size())
+                    });
                 }
             }
         }
@@ -417,7 +446,12 @@ namespace Ext4ScannerEngine {
                   << "\n";
 
         if (onProgress) {
-            onProgress(directoryInodes.size(), directoryInodes.size());
+            onProgress(Protocol::ScanProgress{
+                .phase = QStringLiteral("Scanning directories"),
+                .unit = QStringLiteral("directories"),
+                .processed = static_cast<quint64>(directoryInodes.size()),
+                .total = static_cast<quint64>(directoryInodes.size())
+            });
         }
 
         return true;

@@ -39,8 +39,8 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     // That makes the scan code easier to read and keeps the throttling logic
     // reusable if we ever want to report progress somewhere else.
     auto progressReporter = ThrottledProgressReporter{
-        [this, requestId](quint64 filesProcessed, quint64 filesTotal) {
-            Q_EMIT scanProgress(requestId, filesProcessed, filesTotal);
+        [this, requestId](Protocol::ScanProgress progress) {
+            Q_EMIT scanProgress(requestId, std::move(progress));
         },
         std::chrono::milliseconds(100) // Maximum update rate: 10 times per second.
     };
@@ -64,10 +64,10 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
         [jobRef]() -> bool {
             return jobRef->cancelled.load(std::memory_order_relaxed);
         },
-        [&progressReporter](quint64 filesProcessed, quint64 filesTotal) {
+        [&progressReporter](const Protocol::ScanProgress& progress) {
             // Forward raw progress into the throttler.
             // It will decide whether to emit now or skip this update.
-            progressReporter(filesProcessed, filesTotal);
+            progressReporter(progress);
         }
     );
 

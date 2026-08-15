@@ -19,7 +19,7 @@ namespace ScannerHelper {
     using StringPoolChunkCallback = std::function<bool(const std::vector<char>&)>;
     using ErrorCallback = std::function<void(const QString&)>;
     using CancelCallback = std::function<bool()>;
-    using ProgressCallback = std::function<void(quint64 filesProcessed, quint64 filesTotal)>;
+    using ProgressCallback = std::function<void(const Protocol::ScanProgress&)>;
 
     bool isAllowedFsType(const QString& fsType);
 

@@ -49,7 +49,7 @@ Q_SIGNALS:
         const QStringList& mountPoints,
         const QString& primaryMountPoint
     );
-    void scanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
+    void scanProgress(quint32 requestId, const Protocol::ScanProgress& progress);
     void scanFileRecordChunkReceived(quint32 requestId, const std::vector<FileRecord>& chunk);
     void scanStringPoolChunkReceived(quint32 requestId, QByteArrayView chunk);
     void scanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);

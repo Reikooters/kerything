@@ -444,15 +444,15 @@ namespace NtfsScannerEngine {
                 for (uint64_t i = 0; i < toRead; ++i) {
                     ++scannedRecords;
 
-                    // static constexpr uint64_t kProgressEvery = 4096; // must be power of two
-                    // if (progressCb && ((scannedRecords & (kProgressEvery - 1)) == 0)) {
-                    //     progressCb(scannedRecords, totalRecords);
-                    // }
-
                     // Notify progress
                     static constexpr uint64_t kProgressEvery = 4096; // must be power of two
                     if (onProgress && ((scannedRecords & (kProgressEvery - 1)) == 0)) {
-                        onProgress(scannedRecords, totalRecords);
+                        onProgress(Protocol::ScanProgress{
+                            .phase = QStringLiteral("Reading MFT"),
+                            .unit = QStringLiteral("records"),
+                            .processed = scannedRecords,
+                            .total = totalRecords
+                        });
                     }
 
                     char* mftRecordPtr = batchBuffer.data() + (i * mftRecordSize);
@@ -496,7 +496,14 @@ namespace NtfsScannerEngine {
         }
 
         // Report completion
-        onProgress(scannedRecords, totalRecords);
+        if (onProgress) {
+            onProgress(Protocol::ScanProgress{
+                .phase = QStringLiteral("Reading MFT"),
+                .unit = QStringLiteral("records"),
+                .processed = scannedRecords,
+                .total = totalRecords
+            });
+        }
 
         return true;
     }

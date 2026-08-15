@@ -442,26 +442,24 @@ void DaemonClient::handleScanStarted(const Protocol::MessageHeader& header, cons
 
 void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload)
 {
-    QDataStream in(payload);
-    in.setByteOrder(QDataStream::BigEndian);
-    in.setVersion(QDataStream::Qt_6_0);
+    const std::optional<Protocol::ScanProgress> progress =
+        Protocol::parseScanProgressPayload(payload);
 
-    quint64 filesProcessed = 0;
-    quint64 filesTotal = 0;
-    in >> filesProcessed >> filesTotal;
-
-    if (in.status() != QDataStream::Ok) {
+    if (!progress) {
         std::cerr << "Malformed ScanProgress payload\n";
         return;
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Scan progress requestId=" << header.requestId
-              << " processed=" << filesProcessed
-              << " total=" << filesTotal << "\n";
+              << " phase=" << progress->phase.toStdString()
+              << " processed=" << progress->processed
+              << " total=" << progress->total
+              << " unit=" << progress->unit.toStdString()
+              << "\n";
 #endif
 
-    Q_EMIT scanProgress(header.requestId, filesProcessed, filesTotal);
+    Q_EMIT scanProgress(header.requestId, *progress);
 }
 
 void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload)

@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "Protocol.h"
+
 // Small helper that limits how often progress updates are forwarded.
 // It is meant to wrap a callback like Q_EMIT scanProgress(...).
 // - It forwards updates at most once per minInterval.
@@ -27,18 +29,18 @@ public:
     {
     }
 
-    void operator()(uint64_t done, uint64_t total)
+    void operator()(Protocol::ScanProgress progress)
     {
-        const bool totalKnown = total > 0;
+        const bool totalKnown = progress.total > 0;
 
         // Clamp progress only when callers supplied a known total.
         // A total of zero means "unknown total", which is valid for scanners
         // that discover entries while walking directories.
-        if (totalKnown && done > total) {
-            done = total;
+        if (totalKnown && progress.processed > progress.total) {
+            progress.processed = progress.total;
         }
 
-        const bool completed = totalKnown && (done == total);
+        const bool completed = totalKnown && (progress.processed == progress.total);
 
         // If we're not finished yet, only allow an update when enough time
         // has passed since the last forwarded event.
@@ -56,7 +58,7 @@ public:
 
         // Forward the progress update to the real sink.
         // In ScannerWorker this sink can simply call Q_EMIT scanProgress(...).
-        sink_(done, total);
+        sink_(std::move(progress));
     }
 
 private:

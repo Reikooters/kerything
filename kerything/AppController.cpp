@@ -244,11 +244,14 @@ bool AppController::start() {
             });
 
     connect(daemonClient_, &DaemonClient::scanProgress,
-            this, [this](quint32 requestId, quint64 processed, quint64 total) {
+            this, [this](quint32 requestId, const Protocol::ScanProgress& progress) {
 #ifdef KERYTHING_ENABLE_LOGGING
                 std::cout << "GUI: scan progress requestId=" << requestId
-                          << " processed=" << processed
-                          << " total=" << total << "\n";
+                          << " phase=" << progress.phase.toStdString()
+                          << " processed=" << progress.processed
+                          << " total=" << progress.total
+                          << " unit=" << progress.unit.toStdString()
+                          << "\n";
 #endif
 
                 const QString deviceId = scanRequestDeviceIds_.value(requestId);
@@ -278,30 +281,42 @@ bool AppController::start() {
 
                 const QLocale locale;
 
+                const QString phaseText = progress.phase.trimmed().isEmpty()
+                    ? QStringLiteral("Indexing")
+                    : progress.phase.trimmed();
+
+                const QString unitText = progress.unit.trimmed().isEmpty()
+                    ? QStringLiteral("items")
+                    : progress.unit.trimmed();
+
                 QString message;
                 int timeoutMs = 0;
 
-                if (total > 0) {
-                    const quint64 clampedProcessed = std::min(processed, total);
+                if (progress.total > 0) {
+                    const quint64 clampedProcessed = std::min(progress.processed, progress.total);
 
                     // Calculate percentage progress with rounding.
-                    const quint64 pct64 = (clampedProcessed * 100 + total / 2) / total;
+                    const quint64 pct64 = (clampedProcessed * 100 + progress.total / 2) / progress.total;
                     const quint8 pct = static_cast<quint8>(std::min<quint64>(pct64, 100));
 
-                    message = QStringLiteral("Indexing %1: %2 of %3 files indexed (%4%)")
+                    message = QStringLiteral("%1 %2: %3 of %4 %5 (%6%)")
+                        .arg(phaseText)
                         .arg(deviceText)
                         .arg(locale.toString(static_cast<qulonglong>(clampedProcessed)))
-                        .arg(locale.toString(static_cast<qulonglong>(total)))
+                        .arg(locale.toString(static_cast<qulonglong>(progress.total)))
+                        .arg(unitText)
                         .arg(pct);
 
-                    timeoutMs = clampedProcessed < total ? 0 : 3000;
+                    timeoutMs = clampedProcessed < progress.total ? 0 : 3000;
                 }
                 else {
-                    message = QStringLiteral("Indexing %1: %2 files indexed")
+                    message = QStringLiteral("%1 %2: %3 %4")
+                        .arg(phaseText)
                         .arg(deviceText)
-                        .arg(locale.toString(static_cast<qulonglong>(processed)));
+                        .arg(locale.toString(static_cast<qulonglong>(progress.processed)))
+                        .arg(unitText);
 
-                    timeoutMs = processed > 0 ? 3000 : 0;
+                    timeoutMs = progress.processed > 0 ? 3000 : 0;
                 }
 
                 requestWindowStatusMessage(message, timeoutMs);

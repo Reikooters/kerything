@@ -19,7 +19,7 @@
 namespace Protocol {
 
 static constexpr quint32 Magic = 0x4B455259; // 'KERY'
-static constexpr quint16 Version = 1;
+static constexpr quint16 Version = 2;
 static constexpr int HeaderSize = 16;
 static const QString ServerName = "/run/kerythingd/kerythingd.sock";
 
@@ -58,6 +58,18 @@ struct MessageFrame {
 enum ScanIndexResultChunkType : quint8 {
     FileRecord = 1,
     StringPool = 2
+};
+
+struct ScanProgress {
+    QString phase;
+    QString unit;
+    quint64 processed = 0;
+    quint64 total = 0;
+
+    [[nodiscard]] bool hasKnownTotal() const noexcept
+    {
+        return total > 0;
+    }
 };
 
 inline QByteArray packMessage(MessageType type, quint32 requestId, const QByteArray& payload)
@@ -435,6 +447,40 @@ parseLiveUpdateOperationBatchPayload(const QByteArray& payload)
         std::move(mountPoint),
         std::move(operations)
     );
+}
+
+inline QByteArray makeScanProgressPayload(const ScanProgress& progress)
+{
+    QByteArray payload;
+    QDataStream out(&payload, QIODeviceBase::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << progress.phase
+        << progress.unit
+        << progress.processed
+        << progress.total;
+
+    return payload;
+}
+
+inline std::optional<ScanProgress> parseScanProgressPayload(const QByteArray& payload)
+{
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    ScanProgress progress;
+    in >> progress.phase
+       >> progress.unit
+       >> progress.processed
+       >> progress.total;
+
+    if (in.status() != QDataStream::Ok) {
+        return std::nullopt;
+    }
+
+    return progress;
 }
 
 } // namespace Protocol

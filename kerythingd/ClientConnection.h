@@ -36,7 +36,7 @@ public:
         const QStringList& mountPoints,
         const QString& primaryMountPoint
     );
-    void sendScanProgress(quint32 requestId, quint64 filesProcessed, quint64 filesTotal);
+    void sendScanProgress(quint32 requestId, const Protocol::ScanProgress& progress);
     bool sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
     bool sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void sendScanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);

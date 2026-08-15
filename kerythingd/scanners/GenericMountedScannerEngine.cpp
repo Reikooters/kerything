@@ -474,7 +474,12 @@ bool scanMountedDevice(
                 ++processed;
 
                 if (onProgress && ((processed & (kProgressEvery - 1)) == 0)) {
-                    onProgress(processed, 0);
+                    onProgress(Protocol::ScanProgress{
+                        .phase = QStringLiteral("Scanning files"),
+                        .unit = QStringLiteral("objects"),
+                        .processed = processed,
+                        .total = 0
+                    });
                 }
 
                 if (!isDirectory) {
@@ -501,7 +506,12 @@ bool scanMountedDevice(
     }
 
     if (onProgress) {
-        onProgress(processed, 0);
+        onProgress(Protocol::ScanProgress{
+            .phase = QStringLiteral("Scanning files"),
+            .unit = QStringLiteral("objects"),
+            .processed = processed,
+            .total = processed
+        });
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING

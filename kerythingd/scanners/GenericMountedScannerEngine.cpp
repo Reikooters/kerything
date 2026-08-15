@@ -303,7 +303,7 @@ bool scanMountedDevice(
     const ScannerHelper::CancelCallback& shouldCancel,
     const ScannerHelper::ProgressCallback& onProgress
 ) {
-    ScopedTimer totalTimer("[GenericMountedScannerEngine] total mounted scan");
+    ScopedTimer totalTimer(("[GenericMountedScannerEngine] total mounted scan for " + primaryMountPoint).toStdString());
 
     if (primaryMountPoint.trimmed().isEmpty()) {
         reportError(onError, QStringLiteral("generic mounted scanner requires a mount point"));
@@ -505,7 +505,7 @@ bool scanMountedDevice(
     }
 
     if (onProgress) {
-        onProgress(processed, processed);
+        onProgress(processed, 0);
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING

@@ -288,7 +288,7 @@ bool AppController::start() {
                     const quint64 pct64 = (clampedProcessed * 100 + total / 2) / total;
                     const quint8 pct = static_cast<quint8>(std::min<quint64>(pct64, 100));
 
-                    message = QStringLiteral("Indexing %1: %2 of %3 files scanned (%4%)")
+                    message = QStringLiteral("Indexing %1: %2 of %3 files indexed (%4%)")
                         .arg(deviceText)
                         .arg(locale.toString(static_cast<qulonglong>(clampedProcessed)))
                         .arg(locale.toString(static_cast<qulonglong>(total)))
@@ -297,9 +297,11 @@ bool AppController::start() {
                     timeoutMs = clampedProcessed < total ? 0 : 3000;
                 }
                 else {
-                    message = QStringLiteral("Indexing %1: %2 files scanned")
+                    message = QStringLiteral("Indexing %1: %2 files indexed")
                         .arg(deviceText)
                         .arg(locale.toString(static_cast<qulonglong>(processed)));
+
+                    timeoutMs = processed > 0 ? 3000 : 0;
                 }
 
                 requestWindowStatusMessage(message, timeoutMs);

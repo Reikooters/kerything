@@ -29,18 +29,16 @@ public:
 
     void operator()(uint64_t done, uint64_t total)
     {
-        // Avoid divide-by-zero style edge cases in callers that may not know
-        // the total yet.
-        if (total == 0) {
-            total = 1;
-        }
+        const bool totalKnown = total > 0;
 
-        // Clamp progress so "done" never exceeds "total".
-        if (done > total) {
+        // Clamp progress only when callers supplied a known total.
+        // A total of zero means "unknown total", which is valid for scanners
+        // that discover entries while walking directories.
+        if (totalKnown && done > total) {
             done = total;
         }
 
-        const bool completed = (done == total);
+        const bool completed = totalKnown && (done == total);
 
         // If we're not finished yet, only allow an update when enough time
         // has passed since the last forwarded event.

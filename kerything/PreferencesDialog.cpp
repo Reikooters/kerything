@@ -868,15 +868,15 @@ QWidget* PreferencesDialog::createUiPage()
     createNewWindowOnLaunchCheckBox_->setToolTip(
         QStringLiteral(
             "When enabled, launching Kerything while it is already running opens another search window.\n"
-            "When disabled, Kerything tries to present the existing window instead.\n"
-            "Some Wayland compositors may ignore requests to raise or activate existing windows."
+            "When disabled, Kerything tries to present the last active window instead."
         )
     );
 
     auto* description = new QLabel(
         QStringLiteral(
-            "Disable this if you prefer repeated launches from menus, shortcuts, or application launchers "
-            "to reuse the existing Kerything window instead of creating more windows."
+            "When enabled, launching Kerything while it is already running opens another search window. "
+            "When disabled, Kerything tries to present the last active window instead.\n"
+            "Some Wayland compositors may ignore requests to raise or activate existing windows."
         ),
         windowsGroup
     );
@@ -891,7 +891,7 @@ QWidget* PreferencesDialog::createUiPage()
     auto* sortingLayout = new QVBoxLayout(sortingGroup);
 
     sortDateDescendingFirstCheckBox_ = new QCheckBox(
-        QStringLiteral("Sort Date Modified descending first"),
+        QStringLiteral("Sort Date Modified descending (newest files) first"),
         sortingGroup
     );
     sortDateDescendingFirstCheckBox_->setChecked(preferences_.sortDateDescendingFirst());
@@ -902,7 +902,7 @@ QWidget* PreferencesDialog::createUiPage()
     );
 
     sortSizeDescendingFirstCheckBox_ = new QCheckBox(
-        QStringLiteral("Sort Size descending first"),
+        QStringLiteral("Sort Size descending (largest files) first"),
         sortingGroup
     );
     sortSizeDescendingFirstCheckBox_->setChecked(preferences_.sortSizeDescendingFirst());
@@ -970,7 +970,8 @@ QWidget* PreferencesDialog::createUiPage()
 
     auto* showHighlightedSearchTermsDescription = new QLabel(
         QStringLiteral(
-            "Search term highlighting only affects visible result text and does not change sorting or matching."
+            "When enabled, matching search text is shown in bold in the Name column. Search term highlighting "
+            "only affects visible result text and does not change sorting or matching."
         ),
         resultsGroup
     );
@@ -1042,8 +1043,9 @@ QWidget* PreferencesDialog::createAdvancedPage()
     autoRefreshLiveUpdatesCheckBox_->setChecked(preferences_.autoRefreshResultsForLiveUpdates());
     autoRefreshLiveUpdatesCheckBox_->setToolTip(
         QStringLiteral(
-            "When disabled, Kerything still keeps the internal index up to date, "
-            "but visible search results are not automatically refreshed or re-sorted until you search again or re-enable this option."
+            "When disabled, Kerything still keeps the internal index up to date,\n"
+            "but visible search results are not automatically refreshed or re-sorted\n"
+            "until you search again or re-enable this option."
         )
     );
 

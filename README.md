@@ -72,7 +72,7 @@ again.
 - **Broader Filesystem Support:** Indexes other mounted Linux filesystems supported by the generic mounted scanner.
 - **Offline Indexing:** Supports scanning NTFS and EXT4 partitions even when they are not mounted in Linux.
 - **Instant Search:** Uses trigram indexing for real-time search results as you type.
-- **Live EXT4 Updates:** Tracks mounted EXT4 filesystem changes in real time using Linux `fanotify`, keeping the in-memory index updated for common file operations.
+- **Live Updates:** Tracks filesystem changes for mounted devices in real time using Linux `fanotify`, keeping the in-memory index updated. *(Note: filesystems mounted using `fuseblk` are not expected to work. See note below for more info.)*
 - **Extension Filters:** Narrow searches by file extension using queries such as `ext:mp4` or `ext:wav;mp3`, or use saved filters from the Filter menu.
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
 - **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning, regular expressions and other complex patterns, Kerything stays lightweight and responsive.
@@ -82,14 +82,15 @@ again.
 - **Low Overhead:** The index is stored in memory with an emphasis on efficiency. By using string pooling (e.g., storing a folder path only once even if it contains thousands of files), Kerything maintains a surprisingly small memory footprint even for massive partitions.
 
 > [!NOTE]
-> Live file system updates are supported for mounted EXT4 filesystems using
-> Linux `fanotify`. Kerything keeps indexed EXT4 devices updated for common
+> Live file system updates are supported for mounted filesystems using
+> Linux `fanotify`. Kerything keeps indexed devices updated for common
 > operations such as creates, deletes, metadata changes, symlinks, and renames.
 >
-> Live update watching can be enabled for mounted filesystems from the device
-> configuration dialog, but support depends on the filesystem and mount driver.
+> Live update watching is enabled for mounted filesystems by default, and can
+> be toggled via the device configuration dialog. Support depends on the
+> filesystem and mount driver.
 >
-> Live updates for devices mounted through `fuseblk` are not expected to work,
+> Live updates for devices mounted using `fuseblk` are not expected to work,
 > including NTFS mounted using `ntfs-3g`. NTFS mounted using either `ntfs3`
 > or the newer `ntfs` driver added in Linux kernel version 7.1 have been tested
 > to work successfully.
@@ -671,10 +672,10 @@ sudo systemctl enable --now kerythingd.socket
 
 ### Manual live update test checklist
 
-For development, live EXT4 updates can be tested with a mounted EXT4 filesystem,
+For development, live updates can be tested with a mounted filesystem,
 including a loop device.
 
-A loop device could be created like so:
+A loop device formatted as EXT4 could be created like so:
 
 ```bash
 IMG="$HOME/kerything-test/ext4-test.img"

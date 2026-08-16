@@ -5,9 +5,19 @@
 
 Kerything is a fast Linux file search application built with C++26 and Qt 6.
 
-Inspired by the Windows utility "Everything" by Voidtools, Kerything bypasses standard directory crawling by reading the **NTFS Master File Table (MFT)** or scanning **EXT4 inodes** directly. This allows it to quickly index supported Linux block devices and provides fast filename search using trigram indexes.
+Inspired by the Windows utility "Everything" by Voidtools, Kerything bypasses standard directory crawling where possible by reading the **NTFS Master File Table (MFT)** or scanning **EXT4 inodes** directly. This allows it to quickly index Linux block devices which use these filesystems.
 
-Kerything currently supports indexing the following file systems:
+For other mounted filesystems, Kerything can use Linux filesystem APIs to build an index without requiring filesystem-specific low-level scanner support.
+
+Search is powered by fast in-memory trigram indexes to provide real-time results as you type.
+
+Kerything currently supports indexing:
+
+- EXT4
+- NTFS
+- Other mounted Linux filesystems through the generic mounted filesystem scanner
+
+Low-level offline (unmounted) scanning is currently available for:
 
 - EXT4
 - NTFS
@@ -58,7 +68,8 @@ again.
 
 ## Features
 
-- **Blazing Fast Indexing:** Uses low level disk partiton scanning to index devices much faster than standard directory crawling.
+- **Blazing Fast Indexing:** Uses low-level disk partition scanning for EXT4 and NTFS where available.
+- **Broader Filesystem Support:** Indexes other mounted Linux filesystems supported by the generic mounted scanner.
 - **Offline Indexing:** Supports scanning NTFS and EXT4 partitions even when they are not mounted in Linux.
 - **Instant Search:** Uses trigram indexing for real-time search results as you type.
 - **Live EXT4 Updates:** Tracks mounted EXT4 filesystem changes in real time using Linux `fanotify`, keeping the in-memory index updated for common file operations.
@@ -75,13 +86,20 @@ again.
 > Linux `fanotify`. Kerything keeps indexed EXT4 devices updated for common
 > operations such as creates, deletes, metadata changes, symlinks, and renames.
 >
+> Live update watching can be enabled for mounted filesystems from the device
+> configuration dialog, but support depends on the filesystem and mount driver.
+>
+> Live updates for devices mounted through `fuseblk` are not expected to work,
+> including NTFS mounted using `ntfs-3g`. NTFS mounted using either `ntfs3`
+> or the newer `ntfs` driver added in Linux kernel version 7.1 have been tested
+> to work successfully.
+>
 > Live updates currently require the filesystem to be mounted and are provided
-> by the privileged `kerythingd` daemon. NTFS live updates are not currently
-> supported.
+> by the privileged `kerythingd` daemon.
 >
 > If the live update stream becomes unreliable, for example due to a fanotify
 > queue overflow or an unsupported edge case, Kerything may mark the index as
-> potentially stale and a full refresh can be performed with F5.
+> potentially stale and a full refresh can be performed by pressing F5.
 
 **Native KDE Integration (Optional):**
 
@@ -917,8 +935,9 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 
 ## Future Plans
 
-- **Live Update Expansion:** Extend live update support beyond mounted EXT4 filesystems, including additional filesystems and more advanced recovery behavior.
-- **Additional File System Support:** Expanding support to other file systems such as Btrfs.
+- **Additional Quality of Life Improvements:** Enhancing user experience and usability with additional searching and filtering options.
+- **Live Update Expansion:** Improve live updates with more advanced recovery behavior.
+- **Additional Low-Level Scanning Support:** Expanding low-level and offline file scanning support to other file systems such as Btrfs and F2FS.
 
 ## Credits
 

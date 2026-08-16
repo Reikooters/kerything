@@ -968,7 +968,11 @@ void AppController::setAutoRefreshResultsForLiveUpdates(bool enabled)
         preferencesDialog_->setAutoRefreshResultsForLiveUpdates(enabled);
     }
 
-    if (enabled && liveUpdateRefreshPausedDirty_) {
+    if (!enabled) {
+        liveUpdateRefreshTimer_.stop();
+        liveMetadataRefreshTimer_.stop();
+    }
+    else if (liveUpdateRefreshPausedDirty_) {
         liveUpdateRefreshPausedDirty_ = false;
         requestRefreshAllWindows();
     }

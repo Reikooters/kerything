@@ -1756,10 +1756,6 @@ void PreferencesDialog::applyChanges()
             ? autoRefreshLiveUpdatesCheckBox_->isChecked()
             : preferences_.autoRefreshResultsForLiveUpdates();
 
-    if (autoRefreshChanged) {
-        preferences_.setAutoRefreshResultsForLiveUpdates(autoRefreshEnabled);
-    }
-
     const bool filtersChanged = hasFilterChanges();
 
     if (filtersChanged) {

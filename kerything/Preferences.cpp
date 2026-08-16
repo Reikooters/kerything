@@ -29,7 +29,7 @@ bool Preferences::createNewWindowOnLaunch() const
 {
     return settings_.value(
         QStringLiteral("ui/createNewWindowOnLaunch"),
-        true
+        false
     ).toBool();
 }
 

@@ -1334,6 +1334,15 @@ void MainWindow::openFile(const QModelIndex &index) {
         );
     }
 
+    static constexpr int PathColumn = 1;
+
+    if (index.column() == PathColumn &&
+        controller_ &&
+        controller_->showInFileManagerOnPathDoubleClick()) {
+        openSelectedLocation();
+        return;
+    }
+
     openSelectedFiles();
 }
 

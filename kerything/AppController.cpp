@@ -968,6 +968,11 @@ bool AppController::sortSizeDescendingFirst() const
     return preferences_.sortSizeDescendingFirst();
 }
 
+bool AppController::showInFileManagerOnPathDoubleClick() const
+{
+    return preferences_.showInFileManagerOnPathDoubleClick();
+}
+
 IndexController* AppController::indexController() const noexcept {
     return indexController_;
 }

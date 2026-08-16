@@ -43,6 +43,7 @@ public:
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
     [[nodiscard]] bool sortDateDescendingFirst() const;
     [[nodiscard]] bool sortSizeDescendingFirst() const;
+    [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;
     IndexController* indexController() const noexcept;
 
 Q_SIGNALS:

@@ -67,6 +67,20 @@ void Preferences::setSortSizeDescendingFirst(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showInFileManagerOnPathDoubleClick() const
+{
+    return settings_.value(
+        QStringLiteral("ui/showInFileManagerOnPathDoubleClick"),
+        false
+    ).toBool();
+}
+
+void Preferences::setShowInFileManagerOnPathDoubleClick(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/showInFileManagerOnPathDoubleClick"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::hasAnyIndexedDevicePreferences() const
 {
     return !deviceIds().isEmpty();

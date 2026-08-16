@@ -917,6 +917,36 @@ QWidget* PreferencesDialog::createUiPage()
     sortingLayout->addWidget(sortingDescription);
 
     layout->addWidget(sortingGroup);
+
+    auto* resultsGroup = new QGroupBox(QStringLiteral("Search results"), page);
+    auto* resultsLayout = new QVBoxLayout(resultsGroup);
+
+    showInFileManagerOnPathDoubleClickCheckBox_ = new QCheckBox(
+        QStringLiteral("Show in file manager when double-clicking the Path column"),
+        resultsGroup
+    );
+    showInFileManagerOnPathDoubleClickCheckBox_->setChecked(
+        preferences_.showInFileManagerOnPathDoubleClick()
+    );
+    showInFileManagerOnPathDoubleClickCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, double-clicking the Path cell of a search result opens the item’s location\n"
+            "in the file manager instead of opening the file."
+        )
+    );
+
+    auto* resultsDescription = new QLabel(
+        QStringLiteral(
+            "When enabled, the Path column can be used as a shortcut for locating files in your file manager."
+        ),
+        resultsGroup
+    );
+    resultsDescription->setWordWrap(true);
+
+    resultsLayout->addWidget(showInFileManagerOnPathDoubleClickCheckBox_);
+    resultsLayout->addWidget(resultsDescription);
+
+    layout->addWidget(resultsGroup);
     layout->addStretch();
 
     connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
@@ -928,6 +958,10 @@ QWidget* PreferencesDialog::createUiPage()
     });
 
     connect(sortSizeDescendingFirstCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(showInFileManagerOnPathDoubleClickCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -1650,6 +1684,12 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.sortSizeDescendingFirst();
     }
 
+    if (showInFileManagerOnPathDoubleClickCheckBox_) {
+        changed = changed ||
+            showInFileManagerOnPathDoubleClickCheckBox_->isChecked() !=
+            preferences_.showInFileManagerOnPathDoubleClick();
+    }
+
     return changed;
 }
 
@@ -1712,6 +1752,12 @@ void PreferencesDialog::applyChanges()
         if (sortSizeDescendingFirstCheckBox_) {
             preferences_.setSortSizeDescendingFirst(
                 sortSizeDescendingFirstCheckBox_->isChecked()
+            );
+        }
+
+        if (showInFileManagerOnPathDoubleClickCheckBox_) {
+            preferences_.setShowInFileManagerOnPathDoubleClick(
+                showInFileManagerOnPathDoubleClickCheckBox_->isChecked()
             );
         }
     }

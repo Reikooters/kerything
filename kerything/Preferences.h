@@ -54,6 +54,8 @@ public:
     void setSortDateDescendingFirst(bool enabled);
     [[nodiscard]] bool sortSizeDescendingFirst() const;
     void setSortSizeDescendingFirst(bool enabled);
+    [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;
+    void setShowInFileManagerOnPathDoubleClick(bool enabled);
 
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;

@@ -19,6 +19,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -835,7 +836,7 @@ QWidget* PreferencesDialog::createIndexingPage()
 QWidget* PreferencesDialog::createUiPage()
 {
     auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
+    auto* pageLayout = new QVBoxLayout(page);
 
     auto* label = new QLabel(
         QStringLiteral(
@@ -846,9 +847,17 @@ QWidget* PreferencesDialog::createUiPage()
     );
     label->setWordWrap(true);
 
-    layout->addWidget(label);
+    pageLayout->addWidget(label);
 
-    auto* windowsGroup = new QGroupBox(QStringLiteral("Windows"), page);
+    auto* scrollArea = new QScrollArea(page);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+
+    auto* content = new QWidget(scrollArea);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    auto* windowsGroup = new QGroupBox(QStringLiteral("Windows"), content);
     auto* windowsLayout = new QVBoxLayout(windowsGroup);
 
     createNewWindowOnLaunchCheckBox_ = new QCheckBox(
@@ -878,7 +887,7 @@ QWidget* PreferencesDialog::createUiPage()
 
     layout->addWidget(windowsGroup);
 
-    auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), page);
+    auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), content);
     auto* sortingLayout = new QVBoxLayout(sortingGroup);
 
     sortDateDescendingFirstCheckBox_ = new QCheckBox(
@@ -918,7 +927,7 @@ QWidget* PreferencesDialog::createUiPage()
 
     layout->addWidget(sortingGroup);
 
-    auto* resultsGroup = new QGroupBox(QStringLiteral("Search results"), page);
+    auto* resultsGroup = new QGroupBox(QStringLiteral("Search results"), content);
     auto* resultsLayout = new QVBoxLayout(resultsGroup);
 
     showInFileManagerOnPathDoubleClickCheckBox_ = new QCheckBox(
@@ -973,6 +982,9 @@ QWidget* PreferencesDialog::createUiPage()
     layout->addWidget(resultsGroup);
     layout->addStretch();
 
+    scrollArea->setWidget(content);
+    pageLayout->addWidget(scrollArea, 1);
+
     connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
@@ -999,7 +1011,7 @@ QWidget* PreferencesDialog::createUiPage()
 QWidget* PreferencesDialog::createAdvancedPage()
 {
     auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
+    auto* pageLayout = new QVBoxLayout(page);
 
     auto* label = new QLabel(
         QStringLiteral(
@@ -1010,9 +1022,17 @@ QWidget* PreferencesDialog::createAdvancedPage()
     );
     label->setWordWrap(true);
 
-    layout->addWidget(label);
+    pageLayout->addWidget(label);
 
-    auto* liveUpdatesGroup = new QGroupBox(QStringLiteral("Live updates"), page);
+    auto* scrollArea = new QScrollArea(page);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+
+    auto* content = new QWidget(scrollArea);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    auto* liveUpdatesGroup = new QGroupBox(QStringLiteral("Live updates"), content);
     auto* liveUpdatesLayout = new QVBoxLayout(liveUpdatesGroup);
 
     autoRefreshLiveUpdatesCheckBox_ = new QCheckBox(
@@ -1041,7 +1061,7 @@ QWidget* PreferencesDialog::createAdvancedPage()
 
     layout->addWidget(liveUpdatesGroup);
 
-    auto* firstRunGroup = new QGroupBox(QStringLiteral("First-run setup"), page);
+    auto* firstRunGroup = new QGroupBox(QStringLiteral("First-run setup"), content);
     auto* firstRunLayout = new QVBoxLayout(firstRunGroup);
 
     auto* firstRunDescription = new QLabel(
@@ -1060,6 +1080,9 @@ QWidget* PreferencesDialog::createAdvancedPage()
 
     layout->addWidget(firstRunGroup);
     layout->addStretch();
+
+    scrollArea->setWidget(content);
+    pageLayout->addWidget(scrollArea, 1);
 
     connect(resetFirstRunButton, &QPushButton::clicked, this, [this]() {
         const QMessageBox::StandardButton result = QMessageBox::question(

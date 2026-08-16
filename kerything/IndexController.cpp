@@ -15,6 +15,8 @@
 
 #include <chrono>
 
+#include "SearchResultColumns.h"
+
 namespace {
     using Clock = std::chrono::steady_clock;
 
@@ -2238,7 +2240,7 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
         }
     };
 
-    if (column == 0) { // Name column
+    if (column == SearchResultColumn::Name) {
         struct NameKey {
             std::string_view nameKey;
             bool valid = false;
@@ -2298,7 +2300,7 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 return lessByIndex(rhs, lhs);
             });
         }
-    } else if (column == 1) { // Path column
+    } else if (column == SearchResultColumn::Path) {
         struct PathKey {
             std::string pathKey;
             bool valid = false;
@@ -2361,7 +2363,8 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 return lessByIndex(rhs, lhs);
             });
         }
-    } else if (column == 2 || column == 3) { // Size or Modification time column
+    } else if (column == SearchResultColumn::Size ||
+               column == SearchResultColumn::DateModified) {
         scratch.numericKeys.clear();
         scratch.numericKeys.resize(results.size());
 
@@ -2383,10 +2386,12 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                     || handle.recordIdx >= device->fileRecords.size()
                     || device->isDeletedRecord(handle.recordIdx)) {
                     continue;
-                    }
+                }
 
                 const auto& record = device->fileRecords[handle.recordIdx];
-                numericKeys[i] = (column == 2) ? record.size : record.modificationTime;
+                numericKeys[i] = column == SearchResultColumn::Size
+                    ? record.size
+                    : record.modificationTime;
             }
         }
 

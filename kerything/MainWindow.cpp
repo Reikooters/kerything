@@ -53,6 +53,7 @@
 #include "AppController.h"
 #include "HoverRowHighlight.h"
 #include "Version.h"
+#include "SearchResultColumns.h"
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
@@ -125,9 +126,9 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     tableView_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     // Set reasonable default column widths
-    tableView_->setColumnWidth(0, 375); // Name
-    tableView_->setColumnWidth(1, 525); // Path
-    tableView_->setColumnWidth(2, 100); // Size
+    tableView_->setColumnWidth(SearchResultColumn::Name, 375);
+    tableView_->setColumnWidth(SearchResultColumn::Path, 525);
+    tableView_->setColumnWidth(SearchResultColumn::Size, 100);
     // Column 3 (Date) will take the remaining space due to stretchLastSection
 
     layout->addWidget(tableView_);
@@ -505,7 +506,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(tableView_, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
 
     // Start with a full list, sorted by name ascending
-    tableView_->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
+    tableView_->horizontalHeader()->setSortIndicator(SearchResultColumn::Name, Qt::AscendingOrder);
     updateSearch("");
 }
 
@@ -635,7 +636,8 @@ void MainWindow::refreshLiveMetadata()
     const int sortColumn = tableView_->horizontalHeader()->sortIndicatorSection();
     const Qt::SortOrder sortOrder = tableView_->horizontalHeader()->sortIndicatorOrder();
 
-    if (sortColumn == 2 || sortColumn == 3) {
+    if (sortColumn == SearchResultColumn::Size ||
+        sortColumn == SearchResultColumn::DateModified) {
         const std::vector<IndexController::RecordHandle> selectedHandles =
             captureSelectedRecordHandles();
         const std::optional<IndexController::RecordHandle> currentHandle =
@@ -960,8 +962,8 @@ void MainWindow::handleSortSectionClicked(int section)
     }
 
     const bool shouldPreferDescending =
-        (section == 2 && controller_->sortSizeDescendingFirst()) ||
-        (section == 3 && controller_->sortDateDescendingFirst());
+        (section == SearchResultColumn::Size && controller_->sortSizeDescendingFirst()) ||
+        (section == SearchResultColumn::DateModified && controller_->sortDateDescendingFirst());
 
     if (!shouldPreferDescending) {
         return;
@@ -1334,9 +1336,7 @@ void MainWindow::openFile(const QModelIndex &index) {
         );
     }
 
-    static constexpr int PathColumn = 1;
-
-    if (index.column() == PathColumn &&
+    if (index.column() == SearchResultColumn::Path &&
         controller_ &&
         controller_->showInFileManagerOnPathDoubleClick()) {
         openSelectedLocation();
@@ -1499,7 +1499,10 @@ void MainWindow::copyFileNames()
     fileNames.reserve(selectedRows.size());
 
     for (const QModelIndex& index : selectedRows) {
-        const QString fileName = model_->data(model_->index(index.row(), 0), Qt::DisplayRole).toString();
+        const QString fileName = model_->data(
+            model_->index(index.row(), SearchResultColumn::Name),
+            Qt::DisplayRole
+        ).toString();
 
         if (!fileName.isEmpty()) {
             fileNames.append(fileName);
@@ -1534,8 +1537,15 @@ void MainWindow::copyPaths()
             continue;
         }
 
-        const QString displayPath = model_->data(model_->index(index.row(), 1), Qt::DisplayRole).toString();
-        const QString fileName = model_->data(model_->index(index.row(), 0), Qt::DisplayRole).toString();
+        const QString displayPath = model_->data(
+            model_->index(index.row(), SearchResultColumn::Path),
+            Qt::DisplayRole
+        ).toString();
+
+        const QString fileName = model_->data(
+            model_->index(index.row(), SearchResultColumn::Name),
+            Qt::DisplayRole
+        ).toString();
 
         if (displayPath.isEmpty()) {
             continue;
@@ -1586,7 +1596,10 @@ void MainWindow::copyParentPaths()
             continue;
         }
 
-        const QString displayPath = model_->data(model_->index(index.row(), 1), Qt::DisplayRole).toString();
+        const QString displayPath = model_->data(
+            model_->index(index.row(), SearchResultColumn::Path),
+            Qt::DisplayRole
+        ).toString();
 
         if (!displayPath.isEmpty()) {
             parentPaths.append(displayPath);

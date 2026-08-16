@@ -16,6 +16,7 @@
 
 #include "AppController.h"
 #include "GuiUtils.h"
+#include "SearchResultColumns.h"
 
 #include "IndexController.h"
 
@@ -399,16 +400,17 @@ int FileModel::rowCount(const QModelIndex &parent) const {
 }
 
 int FileModel::columnCount(const QModelIndex &parent) const {
-    return 4; // Name, Path, Size, Modified
+    Q_UNUSED(parent);
+    return SearchResultColumn::Count;
 }
 
 QVariant FileModel::headerData(int section, Qt::Orientation orientation, int role) const {
     if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return {};
     switch (section) {
-        case 0: return "Name";
-        case 1: return "Path";
-        case 2: return "Size";
-        case 3: return "Date Modified";
+        case SearchResultColumn::Name: return "Name";
+        case SearchResultColumn::Path: return "Path";
+        case SearchResultColumn::Size: return "Size";
+        case SearchResultColumn::DateModified: return "Date Modified";
         default: return {};
     }
 }
@@ -463,14 +465,14 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     // DecorationRole provides the icon shown next to the filename/path.
     // This is used to differentiate Files vs Folders and mark unmounted results.
     if (role == Qt::DecorationRole) {
-        if (index.column() == 1 && !mounted) {
+        if (index.column() == SearchResultColumn::Path && !mounted) {
             return QIcon::fromTheme(
                 QStringLiteral("dialog-warning"),
                 QIcon::fromTheme(QStringLiteral("emblem-warning"))
             );
         }
 
-        if (index.column() != 0) {
+        if (index.column() != SearchResultColumn::Name) {
             return {};
         }
 
@@ -497,13 +499,15 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
     }
 
     switch (index.column()) {
-        case 0: // Name: Extracted directly from the string pool
+        case SearchResultColumn::Name: // Name: Extracted directly from the string pool
             return QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
-        case 1: { // Path: Resolved from the directory map and current mount/virtual volume
+
+        case SearchResultColumn::Path: { // Path: Resolved from the directory map and current mount/virtual volume
             const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
             return mountedPathForHandle(*deviceIndex, handle, parentPath);
         }
-        case 2: // Size: Formatted according to the user's locale
+
+        case SearchResultColumn::Size: // Size: Formatted according to the user's locale
             if ((rec.flags & FileRecord_IsDir) != 0) {
                 return QString("<DIR>");
             }
@@ -513,8 +517,10 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
 
             // Formats the raw byte count with appropriate thousands separators
             return QLocale().toString(static_cast<qlonglong>(rec.size));
-        case 3: // Date: Formatted from unix seconds to local time
+
+        case SearchResultColumn::DateModified: // Date: Formatted from unix seconds to local time
             return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
+
         default:
             return {};
     }
@@ -651,7 +657,7 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
     // Since selection behavior is SelectRows, 'indexes' contains one entry per column
     // for every selected row. We only process column 0 to ensure each file is added once.
     for (const QModelIndex &index : indexes) {
-        if (index.column() != 0) {
+        if (index.column() != SearchResultColumn::Name) {
             continue;
         }
 

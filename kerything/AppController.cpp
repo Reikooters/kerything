@@ -958,6 +958,16 @@ void AppController::setAutoRefreshResultsForLiveUpdates(bool enabled)
     );
 }
 
+bool AppController::sortDateDescendingFirst() const
+{
+    return preferences_.sortDateDescendingFirst();
+}
+
+bool AppController::sortSizeDescendingFirst() const
+{
+    return preferences_.sortSizeDescendingFirst();
+}
+
 IndexController* AppController::indexController() const noexcept {
     return indexController_;
 }

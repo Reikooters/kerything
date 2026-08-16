@@ -41,6 +41,8 @@ public:
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
     [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
+    [[nodiscard]] bool sortDateDescendingFirst() const;
+    [[nodiscard]] bool sortSizeDescendingFirst() const;
     IndexController* indexController() const noexcept;
 
 Q_SIGNALS:

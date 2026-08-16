@@ -39,6 +39,34 @@ void Preferences::setCreateNewWindowOnLaunch(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::sortDateDescendingFirst() const
+{
+    return settings_.value(
+        QStringLiteral("ui/sortDateDescendingFirst"),
+        true
+    ).toBool();
+}
+
+void Preferences::setSortDateDescendingFirst(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/sortDateDescendingFirst"), enabled);
+    settings_.sync();
+}
+
+bool Preferences::sortSizeDescendingFirst() const
+{
+    return settings_.value(
+        QStringLiteral("ui/sortSizeDescendingFirst"),
+        true
+    ).toBool();
+}
+
+void Preferences::setSortSizeDescendingFirst(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/sortSizeDescendingFirst"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::hasAnyIndexedDevicePreferences() const
 {
     return !deviceIds().isEmpty();

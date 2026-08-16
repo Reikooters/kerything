@@ -877,9 +877,57 @@ QWidget* PreferencesDialog::createUiPage()
     windowsLayout->addWidget(description);
 
     layout->addWidget(windowsGroup);
+
+    auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), page);
+    auto* sortingLayout = new QVBoxLayout(sortingGroup);
+
+    sortDateDescendingFirstCheckBox_ = new QCheckBox(
+        QStringLiteral("Sort Date Modified descending first"),
+        sortingGroup
+    );
+    sortDateDescendingFirstCheckBox_->setChecked(preferences_.sortDateDescendingFirst());
+    sortDateDescendingFirstCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, the first click on the Date Modified column sorts newest files first."
+        )
+    );
+
+    sortSizeDescendingFirstCheckBox_ = new QCheckBox(
+        QStringLiteral("Sort Size descending first"),
+        sortingGroup
+    );
+    sortSizeDescendingFirstCheckBox_->setChecked(preferences_.sortSizeDescendingFirst());
+    sortSizeDescendingFirstCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, the first click on the Size column sorts largest files first."
+        )
+    );
+
+    sortingLayout->addWidget(sortDateDescendingFirstCheckBox_);
+    sortingLayout->addWidget(sortSizeDescendingFirstCheckBox_);
+
+    auto* sortingDescription = new QLabel(
+        QStringLiteral(
+            "These options only affect the first click when changing to the Size or Date Modified column. "
+            "Further clicks continue toggling the sort direction normally."
+        ),
+        sortingGroup
+    );
+    sortingDescription->setWordWrap(true);
+    sortingLayout->addWidget(sortingDescription);
+
+    layout->addWidget(sortingGroup);
     layout->addStretch();
 
     connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(sortDateDescendingFirstCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(sortSizeDescendingFirstCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -1582,12 +1630,27 @@ bool PreferencesDialog::hasFilterChanges() const
 
 bool PreferencesDialog::hasUIChanges() const
 {
-    if (!createNewWindowOnLaunchCheckBox_) {
-        return false;
+    bool changed = false;
+
+    if (createNewWindowOnLaunchCheckBox_) {
+        changed = changed ||
+            createNewWindowOnLaunchCheckBox_->isChecked() !=
+            preferences_.createNewWindowOnLaunch();
     }
 
-    return createNewWindowOnLaunchCheckBox_->isChecked() !=
-           preferences_.createNewWindowOnLaunch();
+    if (sortDateDescendingFirstCheckBox_) {
+        changed = changed ||
+            sortDateDescendingFirstCheckBox_->isChecked() !=
+            preferences_.sortDateDescendingFirst();
+    }
+
+    if (sortSizeDescendingFirstCheckBox_) {
+        changed = changed ||
+            sortSizeDescendingFirstCheckBox_->isChecked() !=
+            preferences_.sortSizeDescendingFirst();
+    }
+
+    return changed;
 }
 
 void PreferencesDialog::updateApplyButtonEnabled()
@@ -1632,13 +1695,25 @@ void PreferencesDialog::applyChanges()
     }
 
     const bool uiChanged = hasUIChanges();
-    const bool createNewWindowEnabled =
-        createNewWindowOnLaunchCheckBox_
-            ? createNewWindowOnLaunchCheckBox_->isChecked()
-            : preferences_.createNewWindowOnLaunch();
 
     if (uiChanged) {
-        preferences_.setCreateNewWindowOnLaunch(createNewWindowEnabled);
+        if (createNewWindowOnLaunchCheckBox_) {
+            preferences_.setCreateNewWindowOnLaunch(
+                createNewWindowOnLaunchCheckBox_->isChecked()
+            );
+        }
+
+        if (sortDateDescendingFirstCheckBox_) {
+            preferences_.setSortDateDescendingFirst(
+                sortDateDescendingFirstCheckBox_->isChecked()
+            );
+        }
+
+        if (sortSizeDescendingFirstCheckBox_) {
+            preferences_.setSortSizeDescendingFirst(
+                sortSizeDescendingFirstCheckBox_->isChecked()
+            );
+        }
     }
 
     if (!deviceTable_) {

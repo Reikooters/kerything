@@ -87,6 +87,9 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     tableView_->setSortingEnabled(true);
     tableView_->horizontalHeader()->setSortIndicatorShown(true);
 
+    connect(tableView_->horizontalHeader(), &QHeaderView::sectionClicked,
+            this, &MainWindow::handleSortSectionClicked);
+
     // Table Styling
     tableView_->setAlternatingRowColors(true);
     tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -935,6 +938,46 @@ void MainWindow::refreshDirtyLiveUpdatesIfNeeded()
 
     if (liveMetadataRefreshDirty_) {
         refreshLiveMetadata();
+    }
+}
+
+void MainWindow::handleSortSectionClicked(int section)
+{
+    if (!tableView_ || !model_ || !controller_) {
+        return;
+    }
+
+    auto* header = tableView_->horizontalHeader();
+    if (!header) {
+        return;
+    }
+
+    const bool switchedColumn = section != lastSortSection_;
+    lastSortSection_ = section;
+
+    if (!switchedColumn) {
+        return;
+    }
+
+    const bool shouldPreferDescending =
+        (section == 2 && controller_->sortSizeDescendingFirst()) ||
+        (section == 3 && controller_->sortDateDescendingFirst());
+
+    if (!shouldPreferDescending) {
+        return;
+    }
+
+    /*
+     * Qt's default sorting makes the first click on a newly selected column
+     * ascending. For Size and Date Modified, descending is usually the desired
+     * initial direction, so correct only that first click after switching columns.
+     *
+     * Subsequent clicks on the same column are left alone so normal toggling works.
+     */
+    if (header->sortIndicatorSection() == section &&
+        header->sortIndicatorOrder() == Qt::AscendingOrder) {
+        header->setSortIndicator(section, Qt::DescendingOrder);
+        model_->sort(section, Qt::DescendingOrder);
     }
 }
 

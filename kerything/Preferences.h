@@ -50,6 +50,10 @@ public:
     // UI
     [[nodiscard]] bool createNewWindowOnLaunch() const;
     void setCreateNewWindowOnLaunch(bool enabled);
+    [[nodiscard]] bool sortDateDescendingFirst() const;
+    void setSortDateDescendingFirst(bool enabled);
+    [[nodiscard]] bool sortSizeDescendingFirst() const;
+    void setSortSizeDescendingFirst(bool enabled);
 
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;

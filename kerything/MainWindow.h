@@ -162,6 +162,7 @@ private:
     void updateFilterChip();
     void updateFilterMenuTitle();
     void refreshDirtyLiveUpdatesIfNeeded();
+    void handleSortSectionClicked(int section);
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
@@ -178,6 +179,7 @@ private:
     QString activeSearchFilter_;
     bool liveStructuralRefreshDirty_ = false;
     bool liveMetadataRefreshDirty_ = false;
+    int lastSortSection_ = 0;
 
     int hoveredRow_ = -1;
 };

@@ -125,6 +125,8 @@ private:
     QPushButton* restoreDefaultFiltersButton_ = nullptr;
 
     QCheckBox* createNewWindowOnLaunchCheckBox_ = nullptr;
+    QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;
+    QCheckBox* sortSizeDescendingFirstCheckBox_ = nullptr;
 
     QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 };

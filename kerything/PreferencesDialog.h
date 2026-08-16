@@ -65,6 +65,7 @@ private:
 
     QWidget* createDevicesPage();
     QWidget* createFiltersPage();
+    QWidget* createUiPage();
     QWidget* createIndexingPage();
     QWidget* createAdvancedPage();
 
@@ -77,6 +78,7 @@ private:
     bool hasChanges() const;
     bool hasDeviceChanges() const;
     bool hasFilterChanges() const;
+    bool hasUIChanges() const;
     bool hasGeneralChanges() const;
     bool validateFilters(QString* errorText = nullptr) const;
 
@@ -107,8 +109,6 @@ private:
     QDialogButtonBox* buttonBox_ = nullptr;
     QPushButton* applyButton_ = nullptr;
 
-    QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
-
     QTableWidget* deviceTable_ = nullptr;
     QCheckBox* scanWhenUnmountedCheckBox_ = nullptr;
     QCheckBox* showOfflineResultsCheckBox_ = nullptr;
@@ -123,6 +123,10 @@ private:
     QPushButton* moveFilterUpButton_ = nullptr;
     QPushButton* moveFilterDownButton_ = nullptr;
     QPushButton* restoreDefaultFiltersButton_ = nullptr;
+
+    QCheckBox* createNewWindowOnLaunchCheckBox_ = nullptr;
+
+    QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 };
 
 #endif // KERYTHING_PREFERENCESDIALOG_H

@@ -47,6 +47,10 @@ public:
     [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
 
+    // UI
+    [[nodiscard]] bool createNewWindowOnLaunch() const;
+    void setCreateNewWindowOnLaunch(bool enabled);
+
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;
     [[nodiscard]] bool isDeviceEnabled(const QString& deviceId) const;

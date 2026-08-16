@@ -173,8 +173,11 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
         case PreferencesDialogPage::Filters:
             row = 1;
             break;
-        case PreferencesDialogPage::Advanced:
+        case PreferencesDialogPage::UI:
             row = 2;
+            break;
+        case PreferencesDialogPage::Advanced:
+            row = 3;
             break;
     }
 
@@ -298,6 +301,9 @@ void PreferencesDialog::populateNavigation()
 
     pages_->addWidget(createFiltersPage());
     navigation_->addItem(QStringLiteral("Filters"));
+
+    pages_->addWidget(createUiPage());
+    navigation_->addItem(QStringLiteral("UI"));
 
     // pages_->addWidget(createIndexingPage());
     // navigation_->addItem(QStringLiteral("Indexing"));
@@ -822,6 +828,60 @@ QWidget* PreferencesDialog::createIndexingPage()
 
     layout->addWidget(label);
     layout->addStretch();
+
+    return page;
+}
+
+QWidget* PreferencesDialog::createUiPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+
+    auto* label = new QLabel(
+        QStringLiteral(
+            "<h2>UI</h2>"
+            "<p>Configure window and user-interface behavior.</p>"
+        ),
+        page
+    );
+    label->setWordWrap(true);
+
+    layout->addWidget(label);
+
+    auto* windowsGroup = new QGroupBox(QStringLiteral("Windows"), page);
+    auto* windowsLayout = new QVBoxLayout(windowsGroup);
+
+    createNewWindowOnLaunchCheckBox_ = new QCheckBox(
+        QStringLiteral("Create a new window when running Kerything"),
+        windowsGroup
+    );
+    createNewWindowOnLaunchCheckBox_->setChecked(preferences_.createNewWindowOnLaunch());
+    createNewWindowOnLaunchCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, launching Kerything while it is already running opens another search window.\n"
+            "When disabled, Kerything tries to present the existing window instead.\n"
+            "Some Wayland compositors may ignore requests to raise or activate existing windows."
+        )
+    );
+
+    auto* description = new QLabel(
+        QStringLiteral(
+            "Disable this if you prefer repeated launches from menus, shortcuts, or application launchers "
+            "to reuse the existing Kerything window instead of creating more windows."
+        ),
+        windowsGroup
+    );
+    description->setWordWrap(true);
+
+    windowsLayout->addWidget(createNewWindowOnLaunchCheckBox_);
+    windowsLayout->addWidget(description);
+
+    layout->addWidget(windowsGroup);
+    layout->addStretch();
+
+    connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
 
     return page;
 }
@@ -1438,17 +1498,20 @@ bool PreferencesDialog::validateFilters(QString* errorText) const
 
 bool PreferencesDialog::hasChanges() const
 {
-    return hasDeviceChanges() || hasFilterChanges() || hasGeneralChanges();
+    return hasDeviceChanges() || hasFilterChanges() || hasUIChanges() || hasGeneralChanges();
 }
 
 bool PreferencesDialog::hasGeneralChanges() const
 {
-    if (!autoRefreshLiveUpdatesCheckBox_) {
-        return false;
+    bool changed = false;
+
+    if (autoRefreshLiveUpdatesCheckBox_) {
+        changed = changed ||
+            autoRefreshLiveUpdatesCheckBox_->isChecked() !=
+            preferences_.autoRefreshResultsForLiveUpdates();
     }
 
-    return autoRefreshLiveUpdatesCheckBox_->isChecked() !=
-           preferences_.autoRefreshResultsForLiveUpdates();
+    return changed;
 }
 
 bool PreferencesDialog::hasDeviceChanges() const
@@ -1517,6 +1580,16 @@ bool PreferencesDialog::hasFilterChanges() const
     return false;
 }
 
+bool PreferencesDialog::hasUIChanges() const
+{
+    if (!createNewWindowOnLaunchCheckBox_) {
+        return false;
+    }
+
+    return createNewWindowOnLaunchCheckBox_->isChecked() !=
+           preferences_.createNewWindowOnLaunch();
+}
+
 void PreferencesDialog::updateApplyButtonEnabled()
 {
     if (applyButton_) {
@@ -1536,11 +1609,19 @@ void PreferencesDialog::applyChanges()
         return;
     }
 
-    const bool autoRefreshChanged = hasGeneralChanges();
+    const bool autoRefreshChanged =
+        autoRefreshLiveUpdatesCheckBox_ &&
+        autoRefreshLiveUpdatesCheckBox_->isChecked() !=
+        preferences_.autoRefreshResultsForLiveUpdates();
+
     const bool autoRefreshEnabled =
         autoRefreshLiveUpdatesCheckBox_
             ? autoRefreshLiveUpdatesCheckBox_->isChecked()
             : preferences_.autoRefreshResultsForLiveUpdates();
+
+    if (autoRefreshChanged) {
+        preferences_.setAutoRefreshResultsForLiveUpdates(autoRefreshEnabled);
+    }
 
     const bool filtersChanged = hasFilterChanges();
 
@@ -1548,6 +1629,16 @@ void PreferencesDialog::applyChanges()
         preferences_.saveSearchFilters(filtersFromTable());
         originalSearchFilters_ = preferences_.searchFilters();
         populateFilterTable();
+    }
+
+    const bool uiChanged = hasUIChanges();
+    const bool createNewWindowEnabled =
+        createNewWindowOnLaunchCheckBox_
+            ? createNewWindowOnLaunchCheckBox_->isChecked()
+            : preferences_.createNewWindowOnLaunch();
+
+    if (uiChanged) {
+        preferences_.setCreateNewWindowOnLaunch(createNewWindowEnabled);
     }
 
     if (!deviceTable_) {
@@ -1649,10 +1740,6 @@ void PreferencesDialog::applyChanges()
 
     if (filtersChanged) {
         Q_EMIT searchFiltersApplied();
-    }
-
-    if (autoRefreshChanged) {
-        Q_EMIT autoRefreshResultsForLiveUpdatesApplied(autoRefreshEnabled);
     }
 
     if (!changes.isEmpty()) {

@@ -30,6 +30,8 @@ public:
 
     bool start();
     void openNewWindow();
+    void openWindowForLaunchRequest();
+    void presentExistingWindow();
     void showPreferencesDialog(PreferencesDialogPage initialPage = PreferencesDialogPage::Devices);
     void refreshIndexes();
     void requestRefreshAllWindows();

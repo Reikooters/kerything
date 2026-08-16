@@ -25,6 +25,20 @@ void Preferences::setAutoRefreshResultsForLiveUpdates(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::createNewWindowOnLaunch() const
+{
+    return settings_.value(
+        QStringLiteral("ui/createNewWindowOnLaunch"),
+        true
+    ).toBool();
+}
+
+void Preferences::setCreateNewWindowOnLaunch(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/createNewWindowOnLaunch"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::hasAnyIndexedDevicePreferences() const
 {
     return !deviceIds().isEmpty();

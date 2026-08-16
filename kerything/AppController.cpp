@@ -672,6 +672,50 @@ void AppController::openNewWindow() {
     window->activateWindow();
 }
 
+void AppController::openWindowForLaunchRequest()
+{
+    if (preferences_.createNewWindowOnLaunch()) {
+        openNewWindow();
+        return;
+    }
+
+    presentExistingWindow();
+}
+
+void AppController::presentExistingWindow()
+{
+    cleanupWindows();
+
+    MainWindow* windowToPresent = nullptr;
+
+    if (auto* activeWindow = qobject_cast<MainWindow*>(app_.activeWindow())) {
+        windowToPresent = activeWindow;
+    }
+
+    if (!windowToPresent) {
+        for (auto it = windows_.crbegin(); it != windows_.crend(); ++it) {
+            if (*it) {
+                windowToPresent = it->data();
+                break;
+            }
+        }
+    }
+
+    if (!windowToPresent) {
+        openNewWindow();
+        return;
+    }
+
+    if (windowToPresent->isMinimized()) {
+        windowToPresent->showNormal();
+    } else {
+        windowToPresent->show();
+    }
+
+    windowToPresent->raise();
+    windowToPresent->activateWindow();
+}
+
 void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
 {
     if (preferencesDialog_) {
@@ -697,13 +741,13 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
             this, &AppController::applyDevicePreferenceChanges);
 
     connect(dialog, &PreferencesDialog::searchFiltersApplied,
-        this, [this]() {
-            Q_EMIT searchFiltersChanged();
-            requestRefreshAllWindows();
-        });
+            this, [this]() {
+                Q_EMIT searchFiltersChanged();
+                requestRefreshAllWindows();
+            });
 
     connect(dialog, &PreferencesDialog::autoRefreshResultsForLiveUpdatesApplied,
-        this, &AppController::setAutoRefreshResultsForLiveUpdates);
+            this, &AppController::setAutoRefreshResultsForLiveUpdates);
 
     dialog->show();
     dialog->raise();
@@ -919,14 +963,14 @@ IndexController* AppController::indexController() const noexcept {
 }
 
 void AppController::onPrimaryRequestedOpenWindow() {
-    // IPC request from another process: just open a new window.
-    openNewWindow();
+    // IPC request from another process: follow the user's launch behavior preference.
+    openWindowForLaunchRequest();
 }
 
 void AppController::onPrimaryRequestedCommand(const QString& command) {
     // Very small command router for future extensibility.
     if (command == QStringLiteral("OPEN_WINDOW")) {
-        openNewWindow();
+        openWindowForLaunchRequest();
     }
 }
 

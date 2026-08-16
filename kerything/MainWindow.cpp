@@ -21,6 +21,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QActionGroup>
@@ -57,6 +58,30 @@
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
+
+    QStringList highlightTermsForSearchText(const QString& text)
+    {
+        QStringList terms;
+
+        const QStringList parts = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+
+        for (const QString& part : parts) {
+            const QString term = part.trimmed();
+
+            if (term.isEmpty()) {
+                continue;
+            }
+
+            if (term.contains(QLatin1Char(':'))) {
+                continue;
+            }
+
+            terms << term;
+        }
+
+        terms.removeDuplicates();
+        return terms;
+    }
 }
 
 MainWindow::MainWindow(AppController* controller, QWidget* parent)
@@ -516,6 +541,13 @@ void MainWindow::updateSearch(const QString &text) {
         return;
     }
 
+    if (model_) {
+        model_->setSearchHighlightTerms(
+            highlightTermsForSearchText(text),
+            controller_ && controller_->showHighlightedSearchTerms()
+        );
+    }
+
     auto start1 = std::chrono::steady_clock::now();
 
     const std::vector<IndexController::RecordHandle> selectedHandles =
@@ -672,6 +704,22 @@ void MainWindow::refreshLiveMetadata()
     }
 
     model_->notifyRowsDataChanged(firstVisibleRow, lastVisibleRow);
+}
+
+void MainWindow::refreshSearchHighlighting()
+{
+    if (!model_ || !searchLine_) {
+        return;
+    }
+
+    model_->setSearchHighlightTerms(
+        highlightTermsForSearchText(searchLine_->text()),
+        controller_ && controller_->showHighlightedSearchTerms()
+    );
+
+    if (tableView_ && tableView_->viewport()) {
+        tableView_->viewport()->update();
+    }
 }
 
 void MainWindow::markLiveStructuralRefreshDirty()

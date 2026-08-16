@@ -44,6 +44,7 @@ Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);
     void searchFiltersApplied();
     void autoRefreshResultsForLiveUpdatesApplied(bool enabled);
+    void searchResultHighlightingApplied(bool enabled);
 
 private:
     enum DeviceColumn {
@@ -128,6 +129,7 @@ private:
     QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;
     QCheckBox* sortSizeDescendingFirstCheckBox_ = nullptr;
     QCheckBox* showInFileManagerOnPathDoubleClickCheckBox_ = nullptr;
+    QCheckBox* showHighlightedSearchTermsCheckBox_ = nullptr;
 
     QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 };

@@ -35,6 +35,7 @@ public:
     void showPreferencesDialog(PreferencesDialogPage initialPage = PreferencesDialogPage::Devices);
     void refreshIndexes();
     void requestRefreshAllWindows();
+    void requestSearchHighlightRepaintAllWindows();
     void requestWindowStatusMessage(const QString& message, int timeoutMs);
     [[nodiscard]] bool isDaemonConnected() const noexcept;
     [[nodiscard]] bool isDaemonReady() const noexcept;
@@ -44,6 +45,7 @@ public:
     [[nodiscard]] bool sortDateDescendingFirst() const;
     [[nodiscard]] bool sortSizeDescendingFirst() const;
     [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;
+    [[nodiscard]] bool showHighlightedSearchTerms() const;
     IndexController* indexController() const noexcept;
 
 Q_SIGNALS:

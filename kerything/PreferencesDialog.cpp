@@ -935,16 +935,40 @@ QWidget* PreferencesDialog::createUiPage()
         )
     );
 
-    auto* resultsDescription = new QLabel(
+    auto* showInFileManagerOnPathDoubleClickDescription = new QLabel(
         QStringLiteral(
             "When enabled, the Path column can be used as a shortcut for locating files in your file manager."
         ),
         resultsGroup
     );
-    resultsDescription->setWordWrap(true);
+    showInFileManagerOnPathDoubleClickDescription->setWordWrap(true);
 
     resultsLayout->addWidget(showInFileManagerOnPathDoubleClickCheckBox_);
-    resultsLayout->addWidget(resultsDescription);
+    resultsLayout->addWidget(showInFileManagerOnPathDoubleClickDescription);
+
+    showHighlightedSearchTermsCheckBox_ = new QCheckBox(
+        QStringLiteral("Show highlighted search terms in result names"),
+        resultsGroup
+    );
+    showHighlightedSearchTermsCheckBox_->setChecked(
+        preferences_.showHighlightedSearchTerms()
+    );
+    showHighlightedSearchTermsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, matching search text is shown in bold in the Name column."
+        )
+    );
+
+    auto* showHighlightedSearchTermsDescription = new QLabel(
+        QStringLiteral(
+            "Search term highlighting only affects visible result text and does not change sorting or matching."
+        ),
+        resultsGroup
+    );
+    showHighlightedSearchTermsDescription->setWordWrap(true);
+
+    resultsLayout->addWidget(showHighlightedSearchTermsCheckBox_);
+    resultsLayout->addWidget(showHighlightedSearchTermsDescription);
 
     layout->addWidget(resultsGroup);
     layout->addStretch();
@@ -962,6 +986,10 @@ QWidget* PreferencesDialog::createUiPage()
     });
 
     connect(showInFileManagerOnPathDoubleClickCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(showHighlightedSearchTermsCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -1690,6 +1718,12 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.showInFileManagerOnPathDoubleClick();
     }
 
+    if (showHighlightedSearchTermsCheckBox_) {
+        changed = changed ||
+            showHighlightedSearchTermsCheckBox_->isChecked() !=
+            preferences_.showHighlightedSearchTerms();
+    }
+
     return changed;
 }
 
@@ -1736,6 +1770,16 @@ void PreferencesDialog::applyChanges()
 
     const bool uiChanged = hasUIChanges();
 
+    const bool searchResultHighlightingChanged =
+        showHighlightedSearchTermsCheckBox_ &&
+        showHighlightedSearchTermsCheckBox_->isChecked() !=
+        preferences_.showHighlightedSearchTerms();
+
+    const bool searchResultHighlightingEnabled =
+        showHighlightedSearchTermsCheckBox_
+            ? showHighlightedSearchTermsCheckBox_->isChecked()
+            : preferences_.showHighlightedSearchTerms();
+
     if (uiChanged) {
         if (createNewWindowOnLaunchCheckBox_) {
             preferences_.setCreateNewWindowOnLaunch(
@@ -1760,6 +1804,12 @@ void PreferencesDialog::applyChanges()
                 showInFileManagerOnPathDoubleClickCheckBox_->isChecked()
             );
         }
+
+        if (showHighlightedSearchTermsCheckBox_) {
+            preferences_.setShowHighlightedSearchTerms(
+                showHighlightedSearchTermsCheckBox_->isChecked()
+            );
+        }
     }
 
     if (!deviceTable_) {
@@ -1769,6 +1819,10 @@ void PreferencesDialog::applyChanges()
 
         if (autoRefreshChanged) {
             Q_EMIT autoRefreshResultsForLiveUpdatesApplied(autoRefreshEnabled);
+        }
+
+        if (searchResultHighlightingChanged) {
+            Q_EMIT searchResultHighlightingApplied(searchResultHighlightingEnabled);
         }
 
         updateApplyButtonEnabled();
@@ -1865,5 +1919,13 @@ void PreferencesDialog::applyChanges()
 
     if (!changes.isEmpty()) {
         Q_EMIT preferencesApplied(changes);
+    }
+
+    if (autoRefreshChanged) {
+        Q_EMIT autoRefreshResultsForLiveUpdatesApplied(autoRefreshEnabled);
+    }
+
+    if (searchResultHighlightingChanged) {
+        Q_EMIT searchResultHighlightingApplied(searchResultHighlightingEnabled);
     }
 }

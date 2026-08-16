@@ -56,6 +56,8 @@ public:
     void setSortSizeDescendingFirst(bool enabled);
     [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;
     void setShowInFileManagerOnPathDoubleClick(bool enabled);
+    [[nodiscard]] bool showHighlightedSearchTerms() const;
+    void setShowHighlightedSearchTerms(bool enabled);
 
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;

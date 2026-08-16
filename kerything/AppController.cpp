@@ -749,6 +749,18 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
     connect(dialog, &PreferencesDialog::autoRefreshResultsForLiveUpdatesApplied,
             this, &AppController::setAutoRefreshResultsForLiveUpdates);
 
+    connect(dialog, &PreferencesDialog::searchResultHighlightingApplied,
+            this, [this](bool enabled) {
+                requestSearchHighlightRepaintAllWindows();
+
+                requestWindowStatusMessage(
+                    enabled
+                        ? QStringLiteral("Search term highlighting enabled")
+                        : QStringLiteral("Search term highlighting disabled"),
+                    3000
+                );
+            });
+
     dialog->show();
     dialog->raise();
     dialog->activateWindow();
@@ -811,6 +823,17 @@ void AppController::requestRefreshAllWindows() {
             window->markLiveStructuralRefreshDirty();
         } else {
             window->refresh();
+        }
+    }
+}
+
+void AppController::requestSearchHighlightRepaintAllWindows()
+{
+    cleanupWindows();
+
+    for (auto& window : windows_) {
+        if (window) {
+            window->refreshSearchHighlighting();
         }
     }
 }
@@ -971,6 +994,11 @@ bool AppController::sortSizeDescendingFirst() const
 bool AppController::showInFileManagerOnPathDoubleClick() const
 {
     return preferences_.showInFileManagerOnPathDoubleClick();
+}
+
+bool AppController::showHighlightedSearchTerms() const
+{
+    return preferences_.showHighlightedSearchTerms();
 }
 
 IndexController* AppController::indexController() const noexcept {

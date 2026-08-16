@@ -81,6 +81,20 @@ void Preferences::setShowInFileManagerOnPathDoubleClick(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showHighlightedSearchTerms() const
+{
+    return settings_.value(
+        QStringLiteral("ui/showHighlightedSearchTerms"),
+        true
+    ).toBool();
+}
+
+void Preferences::setShowHighlightedSearchTerms(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/showHighlightedSearchTerms"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::hasAnyIndexedDevicePreferences() const
 {
     return !deviceIds().isEmpty();

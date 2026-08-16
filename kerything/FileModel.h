@@ -19,7 +19,11 @@ class FileModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
+    static constexpr int HighlightTermsRole = Qt::UserRole + 100;
+
     explicit FileModel(AppController* controller, QObject *parent = nullptr);
+
+    void setSearchHighlightTerms(QStringList terms, bool enabled);
 
     /**
      * @brief Updates the model with a new set of search results.
@@ -132,6 +136,8 @@ private:
     AppController* controller_ = nullptr;
     std::vector<IndexController::RecordHandle> searchResults_;
     IndexController::SortScratch sortScratch_;
+    QStringList searchHighlightTerms_;
+    bool searchHighlightTermsEnabled_ = true;
 };
 
 #endif //KERYTHING_FILEMODEL_H

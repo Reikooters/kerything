@@ -41,6 +41,7 @@ public:
 
     void refresh();
     void refreshLiveMetadata();
+    void refreshSearchHighlighting();
     void markLiveStructuralRefreshDirty();
     void markLiveMetadataRefreshDirty();
     void trimSortScratch();

@@ -695,6 +695,7 @@ public:
 
     struct SearchOptions {
         bool matchCase = false;
+        bool matchWholeWord = false;
     };
 
     struct LiveUpdateApplyResult {

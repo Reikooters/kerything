@@ -81,6 +81,60 @@ namespace {
         std::string lowercaseText;
     };
 
+    bool isAsciiWordCharacter(unsigned char c) noexcept
+    {
+        return std::isalnum(c) || c == '_';
+    }
+
+    bool isWholeWordMatchAt(
+            std::string_view text,
+            std::size_t pos,
+            std::size_t length
+        ) {
+        if (length == 0 || pos > text.size() || pos + length > text.size()) {
+            return false;
+        }
+
+        const bool leftBoundary =
+            pos == 0 ||
+            !isAsciiWordCharacter(static_cast<unsigned char>(text[pos - 1]));
+
+        const bool rightBoundary =
+            pos + length >= text.size() ||
+            !isAsciiWordCharacter(static_cast<unsigned char>(text[pos + length]));
+
+        return leftBoundary && rightBoundary;
+    }
+
+    bool containsWholeWord(std::string_view haystack, std::string_view needle)
+    {
+        if (needle.empty()) {
+            return true;
+        }
+
+        std::size_t pos = 0;
+
+        while ((pos = haystack.find(needle, pos)) != std::string_view::npos) {
+            if (isWholeWordMatchAt(haystack, pos, needle.size())) {
+                return true;
+            }
+
+            pos += std::max<std::size_t>(needle.size(), 1);
+        }
+
+        return false;
+    }
+
+    bool matchesKeyword(
+        std::string_view haystack,
+        std::string_view needle,
+        const IndexController::SearchOptions& options
+    ) {
+        return options.matchWholeWord
+            ? containsWholeWord(haystack, needle)
+            : IndexController::contains(haystack, needle);
+    }
+
     bool containsTrigram(
         const std::vector<IndexController::TrigramEntry>& index,
         uint32_t trigram)
@@ -2200,7 +2254,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     ? queryKeyword.text
                     : queryKeyword.lowercaseText;
 
-                if (!contains(name, kw)) {
+                if (!matchesKeyword(name, kw, options)) {
                     return;
                 }
             }

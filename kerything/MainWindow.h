@@ -165,6 +165,7 @@ private:
     void refreshDirtyLiveUpdatesIfNeeded();
     void handleSortSectionClicked(int section);
     void setMatchCaseEnabled(bool enabled);
+    void setMatchWholeWordEnabled(bool enabled);
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
@@ -176,6 +177,7 @@ private:
     QMenu* filterMenu_ = nullptr;
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
     QAction* matchCaseAct_ = nullptr;
+    QAction* matchWholeWordAct_ = nullptr;
 
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;
@@ -183,6 +185,7 @@ private:
     bool liveStructuralRefreshDirty_ = false;
     bool liveMetadataRefreshDirty_ = false;
     bool matchCaseEnabled_ = false;
+    bool matchWholeWordEnabled_ = false;
     int lastSortSection_ = 0;
 
     int hoveredRow_ = -1;

@@ -66,10 +66,41 @@ namespace {
         qsizetype length = 0;
     };
 
+    bool isAsciiWordCharacter(QChar c) noexcept
+    {
+        const ushort value = c.unicode();
+
+        return (value >= 'A' && value <= 'Z') ||
+               (value >= 'a' && value <= 'z') ||
+               (value >= '0' && value <= '9') ||
+               value == '_';
+    }
+
+    bool isWholeWordMatchAt(
+        const QString& text,
+        qsizetype pos,
+        qsizetype length
+    ) {
+        if (length <= 0 || pos < 0 || pos + length > text.size()) {
+            return false;
+        }
+
+        const bool leftBoundary =
+            pos == 0 ||
+            !isAsciiWordCharacter(text.at(pos - 1));
+
+        const bool rightBoundary =
+            pos + length >= text.size() ||
+            !isAsciiWordCharacter(text.at(pos + length));
+
+        return leftBoundary && rightBoundary;
+    }
+
     QList<HighlightSpan> highlightSpansForText(
         const QString& text,
         const QStringList& terms,
-        bool matchCase
+        bool matchCase,
+        bool matchWholeWord
     ) {
         QList<HighlightSpan> spans;
         const QString searchText = matchCase
@@ -89,10 +120,12 @@ namespace {
             qsizetype pos = 0;
 
             while ((pos = searchText.indexOf(searchTerm, pos)) >= 0) {
-                spans.append(HighlightSpan{
-                    .start = pos,
-                    .length = searchTerm.size(),
-                });
+                if (!matchWholeWord || isWholeWordMatchAt(searchText, pos, searchTerm.size())) {
+                    spans.append(HighlightSpan{
+                        .start = pos,
+                        .length = searchTerm.size(),
+                    });
+                }
 
                 pos += std::max<qsizetype>(searchTerm.size(), 1);
             }
@@ -176,6 +209,7 @@ namespace {
         const QString& text,
         const QStringList& terms,
         bool matchCase,
+        bool matchWholeWord,
         const QFont& font,
         int width
     ) {
@@ -183,7 +217,8 @@ namespace {
             return QString();
         }
 
-        const QList<HighlightSpan> fullSpans = highlightSpansForText(text, terms, matchCase);
+        const QList<HighlightSpan> fullSpans =
+            highlightSpansForText(text, terms, matchCase, matchWholeWord);
         const QList<QTextLayout::FormatRange> fullFormats =
             formatRangesForSpans(fullSpans, font, Qt::black);
 
@@ -202,7 +237,7 @@ namespace {
             const QString candidate = text.left(mid) + Ellipsis;
 
             const QList<HighlightSpan> candidateSpans =
-                highlightSpansForText(candidate, terms, matchCase);
+                highlightSpansForText(candidate, terms, matchCase, matchWholeWord);
             const QList<QTextLayout::FormatRange> candidateFormats =
                 formatRangesForSpans(candidateSpans, font, Qt::black);
 
@@ -231,13 +266,15 @@ namespace {
             applyHoverRowStyle(opt, painter, index);
 
             const QStringList terms = index.data(FileModel::HighlightTermsRole).toStringList();
-            const bool matchCase = index.data(FileModel::HighlightMatchCaseRole).toBool();
 
             if (terms.isEmpty()) {
                 QStyledItemDelegate::paint(painter, opt, index);
                 painter->restore();
                 return;
             }
+
+            const bool matchCase = index.data(FileModel::HighlightMatchCaseRole).toBool();
+            const bool matchWholeWord = index.data(FileModel::HighlightMatchWholeWordRole).toBool();
 
             const QString plainText = opt.text;
 
@@ -296,11 +333,13 @@ namespace {
                 plainText,
                 terms,
                 matchCase,
+                matchWholeWord,
                 opt.font,
                 availableWidth
             );
 
-            QList<HighlightSpan> spans = highlightSpansForText(elidedText, terms, matchCase);
+            QList<HighlightSpan> spans =
+                highlightSpansForText(elidedText, terms, matchCase, matchWholeWord);
             QList<QTextLayout::FormatRange> formats =
                 formatRangesForSpans(spans, opt.font, textColor);
 

@@ -279,8 +279,12 @@ FileModel::FileModel(AppController* controller, QObject *parent)
     : QAbstractTableModel(parent),
       controller_(controller) {}
 
-void FileModel::setSearchHighlightTerms(QStringList terms, bool enabled, bool matchCase)
-{
+void FileModel::setSearchHighlightTerms(
+    QStringList terms,
+    bool enabled,
+    bool matchCase,
+    bool matchWholeWord
+) {
     terms.removeAll(QString());
 
     for (QString& term : terms) {
@@ -291,13 +295,15 @@ void FileModel::setSearchHighlightTerms(QStringList terms, bool enabled, bool ma
 
     if (searchHighlightTerms_ == terms &&
         searchHighlightTermsEnabled_ == enabled &&
-        searchHighlightMatchCase_ == matchCase) {
+        searchHighlightMatchCase_ == matchCase &&
+        searchHighlightMatchWholeWord_ == matchWholeWord) {
         return;
     }
 
     searchHighlightTerms_ = std::move(terms);
     searchHighlightTermsEnabled_ = enabled;
     searchHighlightMatchCase_ = matchCase;
+    searchHighlightMatchWholeWord_ = matchWholeWord;
 
     if (rowCount() > 0) {
         Q_EMIT dataChanged(
@@ -305,7 +311,8 @@ void FileModel::setSearchHighlightTerms(QStringList terms, bool enabled, bool ma
             index(rowCount() - 1, SearchResultColumn::Name),
             {
                 HighlightTermsRole,
-                HighlightMatchCaseRole
+                HighlightMatchCaseRole,
+                HighlightMatchWholeWordRole
             }
         );
     }
@@ -462,7 +469,8 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         role == Qt::ForegroundRole ||
         role == Qt::DecorationRole ||
         role == HighlightTermsRole ||
-        role == HighlightMatchCaseRole;
+        role == HighlightMatchCaseRole ||
+        role == HighlightMatchWholeWordRole;
 
     if (!supportedRole) {
         return {};
@@ -486,6 +494,16 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         }
 
         return searchHighlightMatchCase_;
+    }
+
+    if (role == HighlightMatchWholeWordRole) {
+        if (!searchHighlightTermsEnabled_ ||
+            index.column() != SearchResultColumn::Name ||
+            searchHighlightTerms_.isEmpty()) {
+            return {};
+        }
+
+        return searchHighlightMatchWholeWord_;
     }
 
     const auto& handle = searchResults_[index.row()];

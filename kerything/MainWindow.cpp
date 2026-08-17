@@ -428,6 +428,14 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(matchCaseAct_, &QAction::toggled, this, &MainWindow::setMatchCaseEnabled);
     addAction(matchCaseAct_);
 
+    // Whole Word
+    matchWholeWordAct_ = new QAction(QStringLiteral("Match Whole Word"), this);
+    matchWholeWordAct_->setCheckable(true);
+    matchWholeWordAct_->setChecked(matchWholeWordEnabled_);
+    matchWholeWordAct_->setStatusTip(QStringLiteral("Match complete words in file names"));
+    connect(matchWholeWordAct_, &QAction::toggled, this, &MainWindow::setMatchWholeWordEnabled);
+    addAction(matchWholeWordAct_);
+
     // Enter: Open
     auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
     openAct->setShortcuts({
@@ -500,6 +508,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Search Menu
     auto* searchMenu = menuBar()->addMenu(QStringLiteral("Search"));
     searchMenu->addAction(matchCaseAct_);
+    searchMenu->addAction(matchWholeWordAct_);
 
     // Filter Menu
     filterMenu_ = menuBar()->addMenu(QStringLiteral("Filter"));
@@ -557,7 +566,8 @@ void MainWindow::updateSearch(const QString &text) {
         model_->setSearchHighlightTerms(
             highlightTermsForSearchText(text),
             controller_ && controller_->showHighlightedSearchTerms(),
-            matchCaseEnabled_
+            matchCaseEnabled_,
+            matchWholeWordEnabled_
         );
     }
 
@@ -581,7 +591,8 @@ void MainWindow::updateSearch(const QString &text) {
     auto results = controller_->indexController()->performTrigramSearch(
     effectiveQuery.toStdString(),
         IndexController::SearchOptions{
-            .matchCase = matchCaseEnabled_
+            .matchCase = matchCaseEnabled_,
+            .matchWholeWord = matchWholeWordEnabled_
         }
     );
     auto end1 = std::chrono::steady_clock::now();
@@ -733,7 +744,8 @@ void MainWindow::refreshSearchHighlighting()
     model_->setSearchHighlightTerms(
         highlightTermsForSearchText(searchLine_->text()),
         controller_ && controller_->showHighlightedSearchTerms(),
-        matchCaseEnabled_
+        matchCaseEnabled_,
+        matchWholeWordEnabled_
     );
 
     if (tableView_ && tableView_->viewport()) {
@@ -1061,6 +1073,22 @@ void MainWindow::setMatchCaseEnabled(bool enabled)
     if (matchCaseAct_ && matchCaseAct_->isChecked() != enabled) {
         const QSignalBlocker blocker(matchCaseAct_);
         matchCaseAct_->setChecked(enabled);
+    }
+
+    updateSearch(searchLine_ ? searchLine_->text() : QString());
+}
+
+void MainWindow::setMatchWholeWordEnabled(bool enabled)
+{
+    if (matchWholeWordEnabled_ == enabled) {
+        return;
+    }
+
+    matchWholeWordEnabled_ = enabled;
+
+    if (matchWholeWordAct_ && matchWholeWordAct_->isChecked() != enabled) {
+        const QSignalBlocker blocker(matchWholeWordAct_);
+        matchWholeWordAct_->setChecked(enabled);
     }
 
     updateSearch(searchLine_ ? searchLine_->text() : QString());

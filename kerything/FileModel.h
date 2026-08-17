@@ -21,6 +21,7 @@ class FileModel : public QAbstractTableModel {
 public:
     static constexpr int HighlightTermsRole = Qt::UserRole + 100;
     static constexpr int HighlightMatchCaseRole = Qt::UserRole + 101;
+    static constexpr int HighlightMatchWholeWordRole = Qt::UserRole + 102;
 
     explicit FileModel(AppController* controller, QObject *parent = nullptr);
 
@@ -36,8 +37,14 @@ public:
      *              each term is stripped of surrounding whitespace.
      * @param enabled A boolean indicating whether highlighting of search terms is enabled or disabled.
      * @param matchCase A boolean indicating whether the search highlighting should be case-sensitive.
+     * @param matchWholeWord A boolean indicating whether the search highlighting should match whole words only.
      */
-    void setSearchHighlightTerms(QStringList terms, bool enabled, bool matchCase = false);
+    void setSearchHighlightTerms(
+        QStringList terms,
+        bool enabled,
+        bool matchCase = false,
+        bool matchWholeWord = false
+    );
 
     /**
      * @brief Updates the model with a new set of search results.
@@ -153,6 +160,7 @@ private:
     QStringList searchHighlightTerms_;
     bool searchHighlightTermsEnabled_ = true;
     bool searchHighlightMatchCase_ = false;
+    bool searchHighlightMatchWholeWord_ = false;
 };
 
 #endif //KERYTHING_FILEMODEL_H

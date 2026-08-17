@@ -162,6 +162,9 @@ private:
     void updateSearchLineFilterHint();
     void updateFilterChip();
     void updateFilterMenuTitle();
+    void updateSearchOptionChips();
+    void updateSearchMenuTitle();
+    void updateChipSpacing();
     void refreshDirtyLiveUpdatesIfNeeded();
     void handleSortSectionClicked(int section);
     void setMatchCaseEnabled(bool enabled);
@@ -170,11 +173,15 @@ private:
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
     QToolButton* filterChip_ = nullptr;
+    QToolButton* matchCaseChip_ = nullptr;
+    QToolButton* matchWholeWordChip_ = nullptr;
+    QWidget* chipContainer_ = nullptr;
     QTableView *tableView_ = nullptr;
     FileModel *model_ = nullptr;
     QLabel *statusLabel_ = nullptr;
     quint64 statusMessageId_ = 0;
     QMenu* filterMenu_ = nullptr;
+    QMenu* searchMenu_ = nullptr;
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
     QAction* matchCaseAct_ = nullptr;
     QAction* matchWholeWordAct_ = nullptr;

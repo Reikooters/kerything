@@ -291,11 +291,44 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         "}"
     ));
 
+    const QString chipStyle = filterChip_->styleSheet();
+
+    auto makeSearchOptionChip = [this, &chipStyle](const QString& statusTip) {
+        auto* chip = new QToolButton(this);
+        chip->setAutoRaise(true);
+        chip->setCursor(Qt::PointingHandCursor);
+        chip->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        chip->setVisible(false);
+        chip->setStatusTip(statusTip);
+        chip->setStyleSheet(chipStyle);
+        return chip;
+    };
+
+    matchCaseChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Case"));
+    matchWholeWordChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Whole Word"));
+
     connect(filterChip_, &QToolButton::clicked, this, [this]() {
         applySearchFilter(QString(), QString(), QString());
     });
 
-    statusBar()->addPermanentWidget(filterChip_, 0);
+    connect(matchCaseChip_, &QToolButton::clicked, this, [this]() {
+        setMatchCaseEnabled(false);
+    });
+
+    connect(matchWholeWordChip_, &QToolButton::clicked, this, [this]() {
+        setMatchWholeWordEnabled(false);
+    });
+
+    chipContainer_ = new QWidget(this);
+    auto* chipLayout = new QHBoxLayout(chipContainer_);
+    chipLayout->setContentsMargins(6, 0, 0, 0);
+    chipLayout->setSpacing(2);
+    chipLayout->addWidget(matchCaseChip_);
+    chipLayout->addWidget(matchWholeWordChip_);
+    chipLayout->addWidget(filterChip_);
+    chipContainer_->setVisible(false);
+
+    statusBar()->addPermanentWidget(chipContainer_, 0);
 
     setCentralWidget(centralWidget);
     resize(1200, 800);
@@ -506,9 +539,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyParentPathsAct);
 
     // Search Menu
-    auto* searchMenu = menuBar()->addMenu(QStringLiteral("Search"));
-    searchMenu->addAction(matchCaseAct_);
-    searchMenu->addAction(matchWholeWordAct_);
+    searchMenu_ = menuBar()->addMenu(QStringLiteral("Search"));
+    searchMenu_->addAction(matchCaseAct_);
+    searchMenu_->addAction(matchWholeWordAct_);
+    updateSearchMenuTitle();
 
     // Filter Menu
     filterMenu_ = menuBar()->addMenu(QStringLiteral("Filter"));
@@ -550,6 +584,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Handle double-click on item in table view to open file
     connect(tableView_, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
+
+    // Initialize initial search chip/menu state
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
 
     // Start with a full list, sorted by name ascending
     tableView_->horizontalHeader()->setSortIndicator(SearchResultColumn::Name, Qt::AscendingOrder);
@@ -942,32 +980,18 @@ void MainWindow::updateSearchLineFilterHint()
 void MainWindow::updateFilterChip()
 {
     if (!filterChip_) {
-        statusLabel_->setStyleSheet(QStringLiteral(
-            "QLabel {"
-            "  margin-right: 0px;"
-            "}"
-        ));
+        updateChipSpacing();
         return;
     }
 
     if (activeSearchFilter_.isEmpty()) {
-        statusLabel_->setStyleSheet(QStringLiteral(
-            "QLabel {"
-            "  margin-right: 6px;"
-            "}"
-        ));
         filterChip_->hide();
         filterChip_->setText(QString());
         filterChip_->setToolTip(QString());
         filterChip_->setStatusTip(QStringLiteral("No filter is active"));
+        updateChipSpacing();
         return;
     }
-
-    statusLabel_->setStyleSheet(QStringLiteral(
-        "QLabel {"
-        "  margin-right: 0px;"
-        "}"
-    ));
 
     filterChip_->setText(QStringLiteral("%1  ×").arg(activeSearchFilterName_));
     filterChip_->setToolTip(
@@ -982,6 +1006,8 @@ void MainWindow::updateFilterChip()
     );
     filterChip_->setStatusTip(QStringLiteral("Click to clear filter: %1").arg(activeSearchFilterName_));
     filterChip_->show();
+
+    updateChipSpacing();
 }
 
 void MainWindow::updateFilterMenuTitle()
@@ -1003,6 +1029,142 @@ void MainWindow::updateFilterMenuTitle()
     );
     filterMenu_->menuAction()->setStatusTip(
         QStringLiteral("Active filter: %1").arg(activeSearchFilterName_)
+    );
+}
+
+void MainWindow::updateSearchOptionChips()
+{
+    if (matchCaseChip_) {
+        if (matchCaseEnabled_) {
+            matchCaseChip_->setText(QStringLiteral("Case  ×"));
+            matchCaseChip_->setToolTip(
+                QStringLiteral(
+                    "Search option enabled: Match Case\n\n"
+                    "Click to turn off Match Case."
+                )
+            );
+            matchCaseChip_->setStatusTip(QStringLiteral("Click to turn off Match Case"));
+            matchCaseChip_->show();
+        } else {
+            matchCaseChip_->hide();
+            matchCaseChip_->setText(QString());
+            matchCaseChip_->setToolTip(QString());
+            matchCaseChip_->setStatusTip(QStringLiteral("Match Case is off"));
+        }
+    }
+
+    if (matchWholeWordChip_) {
+        if (matchWholeWordEnabled_) {
+            matchWholeWordChip_->setText(QStringLiteral("Whole Word  ×"));
+            matchWholeWordChip_->setToolTip(
+                QStringLiteral(
+                    "Search option enabled: Match Whole Word\n\n"
+                    "Click to turn off Match Whole Word."
+                )
+            );
+            matchWholeWordChip_->setStatusTip(QStringLiteral("Click to turn off Match Whole Word"));
+            matchWholeWordChip_->show();
+        } else {
+            matchWholeWordChip_->hide();
+            matchWholeWordChip_->setText(QString());
+            matchWholeWordChip_->setToolTip(QString());
+            matchWholeWordChip_->setStatusTip(QStringLiteral("Match Whole Word is off"));
+        }
+    }
+
+    updateChipSpacing();
+}
+
+void MainWindow::updateSearchMenuTitle()
+{
+    if (!searchMenu_) {
+        return;
+    }
+
+    QStringList activeOptions;
+
+    if (matchCaseEnabled_) {
+        activeOptions << QStringLiteral("Match Case");
+    }
+
+    if (matchWholeWordEnabled_) {
+        activeOptions << QStringLiteral("Match Whole Word");
+    }
+
+    if (activeOptions.isEmpty()) {
+        searchMenu_->setTitle(QStringLiteral("Search"));
+        searchMenu_->menuAction()->setToolTip(QString());
+        searchMenu_->menuAction()->setStatusTip(QString());
+        return;
+    }
+
+    const QString activeText = activeOptions.join(QStringLiteral(", "));
+
+    searchMenu_->setTitle(QStringLiteral("Search ●"));
+    searchMenu_->menuAction()->setToolTip(
+        QStringLiteral("Active search options: %1").arg(activeText)
+    );
+    searchMenu_->menuAction()->setStatusTip(
+        QStringLiteral("Active search options: %1").arg(activeText)
+    );
+}
+
+void MainWindow::updateChipSpacing()
+{
+    const QList<QToolButton*> chips = {
+        matchCaseChip_,
+        matchWholeWordChip_,
+        filterChip_
+    };
+
+    bool anyShownChip = false;
+
+    for (QToolButton* chip : chips) {
+        if (!chip) {
+            continue;
+        }
+
+        anyShownChip = anyShownChip || !chip->isHidden();
+
+        chip->setStyleSheet(QStringLiteral(
+            "QToolButton {"
+            "  background: palette(midlight);"
+            "  color: palette(window-text);"
+            "  border: 1px solid palette(midlight);"
+            "  border-radius: 4px;"
+            "  padding: 1px 8px;"
+            "  margin-left: 0px;"
+            "  margin-right: 0px;"
+            "}"
+            "QToolButton:hover {"
+            "  background: palette(midlight);"
+            "  color: palette(window-text);"
+            "  border: 1px solid palette(highlight);"
+            "}"
+            "QToolButton:pressed {"
+            "  background: palette(alternate-base);"
+            "  color: palette(window-text);"
+            "  border: 1px solid palette(highlight);"
+            "}"
+        ));
+    }
+
+    if (chipContainer_) {
+        chipContainer_->setVisible(anyShownChip);
+    }
+
+    statusLabel_->setStyleSheet(
+        anyShownChip
+            ? QStringLiteral(
+                "QLabel {"
+                "  margin-right: 0px;"
+                "}"
+            )
+            : QStringLiteral(
+                "QLabel {"
+                "  margin-right: 6px;"
+                "}"
+            )
     );
 }
 
@@ -1075,6 +1237,8 @@ void MainWindow::setMatchCaseEnabled(bool enabled)
         matchCaseAct_->setChecked(enabled);
     }
 
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
     updateSearch(searchLine_ ? searchLine_->text() : QString());
 }
 
@@ -1091,6 +1255,8 @@ void MainWindow::setMatchWholeWordEnabled(bool enabled)
         matchWholeWordAct_->setChecked(enabled);
     }
 
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
     updateSearch(searchLine_ ? searchLine_->text() : QString());
 }
 

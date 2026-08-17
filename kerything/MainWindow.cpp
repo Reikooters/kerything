@@ -269,38 +269,14 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     filterChip_->setToolButtonStyle(Qt::ToolButtonTextOnly);
     filterChip_->setVisible(false);
     filterChip_->setStatusTip(QStringLiteral("Click to clear the active filter"));
-    filterChip_->setStyleSheet(QStringLiteral(
-        "QToolButton {"
-        "  background: palette(midlight);"
-        "  color: palette(window-text);"
-        "  border: 1px solid palette(midlight);"
-        "  border-radius: 4px;"
-        "  padding: 1px 8px;"
-        "  margin-left: 2px;"
-        "  margin-right: 2px;"
-        "}"
-        "QToolButton:hover {"
-        "  background: palette(midlight);"
-        "  color: palette(window-text);"
-        "  border: 1px solid palette(highlight);"
-        "}"
-        "QToolButton:pressed {"
-        "  background: palette(alternate-base);"
-        "  color: palette(window-text);"
-        "  border: 1px solid palette(highlight);"
-        "}"
-    ));
 
-    const QString chipStyle = filterChip_->styleSheet();
-
-    auto makeSearchOptionChip = [this, &chipStyle](const QString& statusTip) {
+    auto makeSearchOptionChip = [this](const QString& statusTip) {
         auto* chip = new QToolButton(this);
         chip->setAutoRaise(true);
         chip->setCursor(Qt::PointingHandCursor);
         chip->setToolButtonStyle(Qt::ToolButtonTextOnly);
         chip->setVisible(false);
         chip->setStatusTip(statusTip);
-        chip->setStyleSheet(chipStyle);
         return chip;
     };
 
@@ -322,7 +298,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     chipContainer_ = new QWidget(this);
     auto* chipLayout = new QHBoxLayout(chipContainer_);
     chipLayout->setContentsMargins(6, 0, 0, 0);
-    chipLayout->setSpacing(2);
+    chipLayout->setSpacing(1);
     chipLayout->addWidget(matchCaseChip_);
     chipLayout->addWidget(matchWholeWordChip_);
     chipLayout->addWidget(filterChip_);
@@ -1117,6 +1093,11 @@ void MainWindow::updateChipSpacing()
         filterChip_
     };
 
+    const int chipHeight = std::max(
+        12,
+        (statusLabel_ ? statusLabel_->fontMetrics().height() : fontMetrics().height()) - 2
+    );
+
     bool anyShownChip = false;
 
     for (QToolButton* chip : chips) {
@@ -1132,9 +1113,11 @@ void MainWindow::updateChipSpacing()
             "  color: palette(window-text);"
             "  border: 1px solid palette(midlight);"
             "  border-radius: 4px;"
-            "  padding: 1px 8px;"
+            "  padding: 0px 7px;"
             "  margin-left: 0px;"
             "  margin-right: 0px;"
+            "  min-height: %1px;"
+            "  max-height: %1px;"
             "}"
             "QToolButton:hover {"
             "  background: palette(midlight);"
@@ -1146,7 +1129,7 @@ void MainWindow::updateChipSpacing()
             "  color: palette(window-text);"
             "  border: 1px solid palette(highlight);"
             "}"
-        ));
+        ).arg(chipHeight));
     }
 
     if (chipContainer_) {

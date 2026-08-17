@@ -20,10 +20,24 @@ class FileModel : public QAbstractTableModel {
 
 public:
     static constexpr int HighlightTermsRole = Qt::UserRole + 100;
+    static constexpr int HighlightMatchCaseRole = Qt::UserRole + 101;
 
     explicit FileModel(AppController* controller, QObject *parent = nullptr);
 
-    void setSearchHighlightTerms(QStringList terms, bool enabled);
+    /**
+     * @brief Configures the search highlight terms and their display options for the model.
+     *
+     * This method updates the internal state of the model with the provided search highlight terms,
+     * whether highlighting is enabled, and whether the search is case-sensitive. If the new state
+     * differs from the current state, it triggers the `dataChanged` signal to notify the view to refresh
+     * the display of highlighted terms in the "Name" column.
+     *
+     * @param terms A list of search terms to highlight. Empty or duplicate terms are removed, and
+     *              each term is stripped of surrounding whitespace.
+     * @param enabled A boolean indicating whether highlighting of search terms is enabled or disabled.
+     * @param matchCase A boolean indicating whether the search highlighting should be case-sensitive.
+     */
+    void setSearchHighlightTerms(QStringList terms, bool enabled, bool matchCase = false);
 
     /**
      * @brief Updates the model with a new set of search results.
@@ -138,6 +152,7 @@ private:
     IndexController::SortScratch sortScratch_;
     QStringList searchHighlightTerms_;
     bool searchHighlightTermsEnabled_ = true;
+    bool searchHighlightMatchCase_ = false;
 };
 
 #endif //KERYTHING_FILEMODEL_H

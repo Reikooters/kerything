@@ -693,6 +693,10 @@ public:
         bool foldersOnly = false;
     };
 
+    struct SearchOptions {
+        bool matchCase = false;
+    };
+
     struct LiveUpdateApplyResult {
         qsizetype metadataChanged = 0;
         qsizetype upserted = 0;
@@ -729,7 +733,7 @@ public:
         const QStringList& mountPoints = {},
         const QString& primaryMountPoint = {}
     );
-    std::vector<RecordHandle> performTrigramSearch(const std::string& query);
+    std::vector<RecordHandle> performTrigramSearch(const std::string& query, SearchOptions options);
     std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;
     std::vector<RecordHandle> sortSearchResults(
         std::vector<RecordHandle> results,

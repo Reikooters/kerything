@@ -279,7 +279,7 @@ FileModel::FileModel(AppController* controller, QObject *parent)
     : QAbstractTableModel(parent),
       controller_(controller) {}
 
-void FileModel::setSearchHighlightTerms(QStringList terms, bool enabled)
+void FileModel::setSearchHighlightTerms(QStringList terms, bool enabled, bool matchCase)
 {
     terms.removeAll(QString());
 
@@ -290,18 +290,23 @@ void FileModel::setSearchHighlightTerms(QStringList terms, bool enabled)
     terms.removeDuplicates();
 
     if (searchHighlightTerms_ == terms &&
-        searchHighlightTermsEnabled_ == enabled) {
+        searchHighlightTermsEnabled_ == enabled &&
+        searchHighlightMatchCase_ == matchCase) {
         return;
     }
 
     searchHighlightTerms_ = std::move(terms);
     searchHighlightTermsEnabled_ = enabled;
+    searchHighlightMatchCase_ = matchCase;
 
     if (rowCount() > 0) {
         Q_EMIT dataChanged(
             index(0, SearchResultColumn::Name),
             index(rowCount() - 1, SearchResultColumn::Name),
-            { HighlightTermsRole }
+            {
+                HighlightTermsRole,
+                HighlightMatchCaseRole
+            }
         );
     }
 }
@@ -456,7 +461,8 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         role == Qt::ToolTipRole ||
         role == Qt::ForegroundRole ||
         role == Qt::DecorationRole ||
-        role == HighlightTermsRole;
+        role == HighlightTermsRole ||
+        role == HighlightMatchCaseRole;
 
     if (!supportedRole) {
         return {};
@@ -470,6 +476,16 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         }
 
         return searchHighlightTerms_;
+    }
+
+    if (role == HighlightMatchCaseRole) {
+        if (!searchHighlightTermsEnabled_ ||
+            index.column() != SearchResultColumn::Name ||
+            searchHighlightTerms_.isEmpty()) {
+            return {};
+        }
+
+        return searchHighlightMatchCase_;
     }
 
     const auto& handle = searchResults_[index.row()];

@@ -66,10 +66,15 @@ namespace {
         qsizetype length = 0;
     };
 
-    QList<HighlightSpan> highlightSpansForText(const QString& text, const QStringList& terms)
-    {
+    QList<HighlightSpan> highlightSpansForText(
+        const QString& text,
+        const QStringList& terms,
+        bool matchCase
+    ) {
         QList<HighlightSpan> spans;
-        const QString foldedText = text.toCaseFolded();
+        const QString searchText = matchCase
+            ? text
+            : text.toCaseFolded();
 
         for (const QString& term : terms) {
             const QString trimmedTerm = term.trimmed();
@@ -77,16 +82,19 @@ namespace {
                 continue;
             }
 
-            const QString foldedTerm = trimmedTerm.toCaseFolded();
+            const QString searchTerm = matchCase
+                ? trimmedTerm
+                : trimmedTerm.toCaseFolded();
+
             qsizetype pos = 0;
 
-            while ((pos = foldedText.indexOf(foldedTerm, pos)) >= 0) {
+            while ((pos = searchText.indexOf(searchTerm, pos)) >= 0) {
                 spans.append(HighlightSpan{
                     .start = pos,
-                    .length = foldedTerm.size(),
+                    .length = searchTerm.size(),
                 });
 
-                pos += std::max<qsizetype>(foldedTerm.size(), 1);
+                pos += std::max<qsizetype>(searchTerm.size(), 1);
             }
         }
 
@@ -167,6 +175,7 @@ namespace {
     QString elideHighlightedText(
         const QString& text,
         const QStringList& terms,
+        bool matchCase,
         const QFont& font,
         int width
     ) {
@@ -174,7 +183,7 @@ namespace {
             return QString();
         }
 
-        const QList<HighlightSpan> fullSpans = highlightSpansForText(text, terms);
+        const QList<HighlightSpan> fullSpans = highlightSpansForText(text, terms, matchCase);
         const QList<QTextLayout::FormatRange> fullFormats =
             formatRangesForSpans(fullSpans, font, Qt::black);
 
@@ -192,7 +201,8 @@ namespace {
             const int mid = low + (high - low) / 2;
             const QString candidate = text.left(mid) + Ellipsis;
 
-            const QList<HighlightSpan> candidateSpans = highlightSpansForText(candidate, terms);
+            const QList<HighlightSpan> candidateSpans =
+                highlightSpansForText(candidate, terms, matchCase);
             const QList<QTextLayout::FormatRange> candidateFormats =
                 formatRangesForSpans(candidateSpans, font, Qt::black);
 
@@ -221,6 +231,7 @@ namespace {
             applyHoverRowStyle(opt, painter, index);
 
             const QStringList terms = index.data(FileModel::HighlightTermsRole).toStringList();
+            const bool matchCase = index.data(FileModel::HighlightMatchCaseRole).toBool();
 
             if (terms.isEmpty()) {
                 QStyledItemDelegate::paint(painter, opt, index);
@@ -284,11 +295,12 @@ namespace {
             const QString elidedText = elideHighlightedText(
                 plainText,
                 terms,
+                matchCase,
                 opt.font,
                 availableWidth
             );
 
-            QList<HighlightSpan> spans = highlightSpansForText(elidedText, terms);
+            QList<HighlightSpan> spans = highlightSpansForText(elidedText, terms, matchCase);
             QList<QTextLayout::FormatRange> formats =
                 formatRangesForSpans(spans, opt.font, textColor);
 

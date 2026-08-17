@@ -420,6 +420,14 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(focusSearchAct);
 
+    // Match Case
+    matchCaseAct_ = new QAction(QStringLiteral("Match Case"), this);
+    matchCaseAct_->setCheckable(true);
+    matchCaseAct_->setChecked(matchCaseEnabled_);
+    matchCaseAct_->setStatusTip(QStringLiteral("Match uppercase and lowercase letters exactly in file names"));
+    connect(matchCaseAct_, &QAction::toggled, this, &MainWindow::setMatchCaseEnabled);
+    addAction(matchCaseAct_);
+
     // Enter: Open
     auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
     openAct->setShortcuts({
@@ -489,6 +497,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyPathsAct);
     editMenu->addAction(copyParentPathsAct);
 
+    // Search Menu
+    auto* searchMenu = menuBar()->addMenu(QStringLiteral("Search"));
+    searchMenu->addAction(matchCaseAct_);
+
     // Filter Menu
     filterMenu_ = menuBar()->addMenu(QStringLiteral("Filter"));
     rebuildFilterMenu();
@@ -544,7 +556,8 @@ void MainWindow::updateSearch(const QString &text) {
     if (model_) {
         model_->setSearchHighlightTerms(
             highlightTermsForSearchText(text),
-            controller_ && controller_->showHighlightedSearchTerms()
+            controller_ && controller_->showHighlightedSearchTerms(),
+            matchCaseEnabled_
         );
     }
 
@@ -565,7 +578,12 @@ void MainWindow::updateSearch(const QString &text) {
         effectiveQuery += activeSearchFilter_;
     }
 
-    auto results = controller_->indexController()->performTrigramSearch(effectiveQuery.toStdString());
+    auto results = controller_->indexController()->performTrigramSearch(
+    effectiveQuery.toStdString(),
+        IndexController::SearchOptions{
+            .matchCase = matchCaseEnabled_
+        }
+    );
     auto end1 = std::chrono::steady_clock::now();
 
     auto start2 = std::chrono::steady_clock::now();
@@ -714,7 +732,8 @@ void MainWindow::refreshSearchHighlighting()
 
     model_->setSearchHighlightTerms(
         highlightTermsForSearchText(searchLine_->text()),
-        controller_ && controller_->showHighlightedSearchTerms()
+        controller_ && controller_->showHighlightedSearchTerms(),
+        matchCaseEnabled_
     );
 
     if (tableView_ && tableView_->viewport()) {
@@ -1029,6 +1048,22 @@ void MainWindow::handleSortSectionClicked(int section)
         header->setSortIndicator(section, Qt::DescendingOrder);
         model_->sort(section, Qt::DescendingOrder);
     }
+}
+
+void MainWindow::setMatchCaseEnabled(bool enabled)
+{
+    if (matchCaseEnabled_ == enabled) {
+        return;
+    }
+
+    matchCaseEnabled_ = enabled;
+
+    if (matchCaseAct_ && matchCaseAct_->isChecked() != enabled) {
+        const QSignalBlocker blocker(matchCaseAct_);
+        matchCaseAct_->setChecked(enabled);
+    }
+
+    updateSearch(searchLine_ ? searchLine_->text() : QString());
 }
 
 void MainWindow::showTemporaryStatus(const QString& text, int timeoutMs)

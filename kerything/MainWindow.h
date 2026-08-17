@@ -164,6 +164,7 @@ private:
     void updateFilterMenuTitle();
     void refreshDirtyLiveUpdatesIfNeeded();
     void handleSortSectionClicked(int section);
+    void setMatchCaseEnabled(bool enabled);
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
@@ -174,12 +175,14 @@ private:
     quint64 statusMessageId_ = 0;
     QMenu* filterMenu_ = nullptr;
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
+    QAction* matchCaseAct_ = nullptr;
 
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;
     QString activeSearchFilter_;
     bool liveStructuralRefreshDirty_ = false;
     bool liveMetadataRefreshDirty_ = false;
+    bool matchCaseEnabled_ = false;
     int lastSortSection_ = 0;
 
     int hoveredRow_ = -1;

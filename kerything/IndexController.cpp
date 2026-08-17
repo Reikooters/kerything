@@ -76,6 +76,11 @@ namespace {
         }
     }
 
+    struct QueryKeyword {
+        std::string text;
+        std::string lowercaseText;
+    };
+
     bool containsTrigram(
         const std::vector<IndexController::TrigramEntry>& index,
         uint32_t trigram)
@@ -1812,33 +1817,37 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
     };
 
     std::size_t start = 0;
-    while (start < lowercaseQuery.size()) {
-        while (start < lowercaseQuery.size() &&
-               std::isspace(static_cast<unsigned char>(lowercaseQuery[start]))) {
+    while (start < query.size()) {
+        while (start < query.size() &&
+               std::isspace(static_cast<unsigned char>(query[start]))) {
             ++start;
         }
 
-        if (start >= lowercaseQuery.size()) {
+        if (start >= query.size()) {
             break;
         }
 
         std::size_t end = start;
-        while (end < lowercaseQuery.size() &&
-               !std::isspace(static_cast<unsigned char>(lowercaseQuery[end]))) {
+        while (end < query.size() &&
+               !std::isspace(static_cast<unsigned char>(query[end]))) {
             ++end;
         }
 
-        const std::string_view token(lowercaseQuery.data() + start, end - start);
+        const std::string_view token(query.data() + start, end - start);
+        const std::string_view lowercaseToken(lowercaseQuery.data() + start, end - start);
 
-        if (token.starts_with("ext:")) {
-            consumeExtensionList(token.substr(4));
-        } else if (token.starts_with("extension:")) {
-            consumeExtensionList(token.substr(10));
-        } else if (token == "folder:" || token == "folders:" || token == "type:folder" || token == "type:folders") {
+        if (lowercaseToken.starts_with("ext:")) {
+            consumeExtensionList(lowercaseToken.substr(4));
+        } else if (lowercaseToken.starts_with("extension:")) {
+            consumeExtensionList(lowercaseToken.substr(10));
+        } else if (lowercaseToken == "folder:" ||
+                   lowercaseToken == "folders:" ||
+                   lowercaseToken == "type:folder" ||
+                   lowercaseToken == "type:folders") {
             parsed.foldersOnly = true;
-        } else {
-            parsed.keywords.emplace_back(token);
-        }
+       } else {
+           parsed.keywords.emplace_back(token);
+       }
 
         start = end;
     }
@@ -1846,7 +1855,10 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
     return parsed;
 }
 
-std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch(const std::string& query) {
+std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch(
+    const std::string& query,
+    SearchOptions options
+) {
     std::shared_lock lock(indexMutex_);
 
     // 1. Tokenize query: "valley dragonforce" -> ["valley", "dragonforce"]
@@ -1885,6 +1897,26 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     // Extension filters are file-only, so this combination can never match.
     if (foldersOnly && hasExtensionFilter) {
         return results;
+    }
+
+    std::vector<QueryKeyword> queryKeywords;
+    queryKeywords.reserve(keywords.size());
+
+    for (const std::string& keyword : keywords) {
+        QueryKeyword queryKeyword;
+        queryKeyword.text = keyword;
+        queryKeyword.lowercaseText = keyword;
+
+        std::transform(
+            queryKeyword.lowercaseText.begin(),
+            queryKeyword.lowercaseText.end(),
+            queryKeyword.lowercaseText.begin(),
+            [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            }
+        );
+
+        queryKeywords.push_back(std::move(queryKeyword));
     }
 
     auto collectExtensionCandidates = [](
@@ -2027,7 +2059,9 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         bool trigramsUsed = false; // Track if we actually used the index
         bool skipDevice = false;
 
-        for (const auto& kw : keywords) {
+        for (const auto& queryKeyword : queryKeywords) {
+            const std::string& kw = queryKeyword.lowercaseText;
+
             if (kw.length() < 3) {
                 // Skip short words for now, as they won't be in our trigram index
                 continue;
@@ -2138,17 +2172,34 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 return;
             }
 
-            const std::string_view name(
+            const std::string_view lowercaseName(
                 &indexPtr->lowercaseStringPool[rec.nameOffset],
                 rec.nameLen
             );
 
             if (hasExtensionFilter &&
-                !matchesFileExtensionFilter(rec, name, extensionFilter)) {
+                !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) {
                 return;
             }
 
-            for (const auto& kw : keywords) {
+            const std::vector<char>& searchStringPool = options.matchCase
+                    ? indexPtr->stringPool
+                    : indexPtr->lowercaseStringPool;
+
+            if (rec.nameOffset + rec.nameLen > searchStringPool.size()) {
+                return;
+            }
+
+            const std::string_view name(
+                &searchStringPool[rec.nameOffset],
+                rec.nameLen
+            );
+
+            for (const auto& queryKeyword : queryKeywords) {
+                const std::string& kw = options.matchCase
+                    ? queryKeyword.text
+                    : queryKeyword.lowercaseText;
+
                 if (!contains(name, kw)) {
                     return;
                 }

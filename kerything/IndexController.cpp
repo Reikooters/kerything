@@ -9,9 +9,14 @@
 #include <mutex>
 #include <cctype>
 #include <limits>
+#include <numeric>
+#include <unistd.h>
 
+#include <QFile>
 #include <QHash>
+#include <QIODevice>
 #include <QSet>
+#include <QTextStream>
 
 #include <chrono>
 
@@ -165,6 +170,157 @@ namespace {
         key.append('\0');
         key.append(name);
         return key;
+    }
+
+    QString formatBytes(quint64 bytes)
+    {
+        static constexpr double KiB = 1024.0;
+        static constexpr double MiB = KiB * 1024.0;
+        static constexpr double GiB = MiB * 1024.0;
+
+        if (bytes >= static_cast<quint64>(GiB)) {
+            return QStringLiteral("%1 GiB").arg(bytes / GiB, 0, 'f', 2);
+        }
+
+        if (bytes >= static_cast<quint64>(MiB)) {
+            return QStringLiteral("%1 MiB").arg(bytes / MiB, 0, 'f', 2);
+        }
+
+        if (bytes >= static_cast<quint64>(KiB)) {
+            return QStringLiteral("%1 KiB").arg(bytes / KiB, 0, 'f', 2);
+        }
+
+        return QStringLiteral("%1 B").arg(bytes);
+    }
+
+    template <typename Vector>
+    quint64 vectorCapacityBytes(const Vector& vector)
+    {
+        using ValueType = typename Vector::value_type;
+        return static_cast<quint64>(vector.capacity()) * sizeof(ValueType);
+    }
+
+    template <typename Map>
+    quint64 approximateUnorderedMapBucketBytes(const Map& map)
+    {
+        return static_cast<quint64>(map.bucket_count()) * sizeof(void*);
+    }
+
+    template <typename Map>
+    quint64 approximateUnorderedMapNodePayloadBytes(const Map& map)
+    {
+        return static_cast<quint64>(map.size()) * sizeof(typename Map::value_type);
+    }
+
+    QString processStatusMemoryText()
+    {
+        const qint64 pid = static_cast<qint64>(::getpid());
+        const QString statusPath = QStringLiteral("/proc/%1/status").arg(pid);
+        const QString statmPath = QStringLiteral("/proc/%1/statm").arg(pid);
+
+        QString text;
+        QTextStream out(&text);
+
+        out << "Process memory:\n";
+        out << "  pid: " << pid << '\n';
+
+        QFile statusFile(statusPath);
+        bool foundStatusMemoryLine = false;
+
+        if (!statusFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out << "  " << statusPath << ": unavailable (could not be read)\n";
+        } else {
+            out << "  from " << statusPath << ":\n";
+
+            const QByteArray contents = statusFile.readAll();
+            const QList<QByteArray> lines = contents.split('\n');
+
+            for (QByteArray line : lines) {
+                line = line.trimmed();
+
+                if (line.startsWith("VmPeak:") ||
+                    line.startsWith("VmSize:") ||
+                    line.startsWith("VmLck:") ||
+                    line.startsWith("VmPin:") ||
+                    line.startsWith("VmHWM:") ||
+                    line.startsWith("VmRSS:") ||
+                    line.startsWith("RssAnon:") ||
+                    line.startsWith("RssFile:") ||
+                    line.startsWith("RssShmem:")) {
+                    out << "    " << QString::fromUtf8(line) << '\n';
+                    foundStatusMemoryLine = true;
+                }
+            }
+
+            if (!foundStatusMemoryLine) {
+                out << "    no Vm*/Rss* lines found";
+                out << " (read " << contents.size() << " bytes)\n";
+            }
+        }
+
+        QFile statmFile(statmPath);
+
+        if (!statmFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out << "  " << statmPath << ": unavailable (could not be read)\n";
+            return text;
+        }
+
+        const QByteArray statmContents = statmFile.readAll().trimmed();
+        const QList<QByteArray> fields = statmContents.split(' ');
+        const long pageSize = ::sysconf(_SC_PAGESIZE);
+
+        out << "  from " << statmPath << ":\n";
+        out << "    raw: " << QString::fromUtf8(statmContents) << '\n';
+
+        if (pageSize <= 0) {
+            out << "    page size: unavailable\n";
+            return text;
+        }
+
+        out << "    page size: " << pageSize << " bytes\n";
+
+        auto fieldToBytes = [&](int index) -> std::optional<quint64> {
+            if (index < 0 || index >= fields.size()) {
+                return std::nullopt;
+            }
+
+            bool ok = false;
+            const quint64 pages = fields.at(index).toULongLong(&ok);
+
+            if (!ok) {
+                return std::nullopt;
+            }
+
+            return pages * static_cast<quint64>(pageSize);
+        };
+
+        const std::optional<quint64> sizeBytes = fieldToBytes(0);
+        const std::optional<quint64> residentBytes = fieldToBytes(1);
+        const std::optional<quint64> sharedBytes = fieldToBytes(2);
+        const std::optional<quint64> textBytes = fieldToBytes(3);
+        const std::optional<quint64> dataBytes = fieldToBytes(5);
+
+        if (sizeBytes) {
+            out << "    size: " << formatBytes(*sizeBytes) << '\n';
+        }
+
+        if (residentBytes) {
+            out << "    resident: " << formatBytes(*residentBytes) << '\n';
+        }
+
+        if (sharedBytes) {
+            out << "    shared: " << formatBytes(*sharedBytes) << '\n';
+        }
+
+        if (textBytes) {
+            out << "    text: " << formatBytes(*textBytes) << '\n';
+        }
+
+        if (dataBytes) {
+            out << "    data + stack: " << formatBytes(*dataBytes) << '\n';
+        }
+
+        return text;
     }
 }
 
@@ -1156,6 +1312,235 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
 
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
     deviceIndex.isReady = isReady;
+}
+
+QString IndexController::memoryStatsText() const
+{
+    std::shared_lock lock(indexMutex_);
+
+    QString text;
+    QTextStream out(&text);
+
+    out << processStatusMemoryText();
+    out << '\n';
+
+    out << "Type sizes:\n";
+    out << "  sizeof(FileRecord): " << sizeof(FileRecord) << " bytes\n";
+    out << "  sizeof(TrigramEntry): " << sizeof(TrigramEntry) << " bytes\n";
+    out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
+    out << '\n';
+
+    out << "IndexController:\n";
+    out << "  devices: " << indexByIndexId_.size() << '\n';
+    out << "  indexByIndexId buckets: " << indexByIndexId_.bucket_count() << '\n';
+    out << "  indexIdByDevNode entries/buckets: "
+        << indexIdByDevNode_.size()
+        << '/'
+        << indexIdByDevNode_.bucket_count()
+        << '\n';
+    out << "  indexIdByRequestId entries/buckets: "
+        << indexIdByRequestId_.size()
+        << '/'
+        << indexIdByRequestId_.bucket_count()
+        << "\n\n";
+
+    quint64 grandVectorBytes = 0;
+    quint64 grandApproxHashPayloadBytes = 0;
+    quint64 grandApproxHashBucketBytes = 0;
+
+    std::size_t grandRecords = 0;
+    std::size_t grandFlatTrigrams = 0;
+    std::size_t grandLiveDeltaTrigrams = 0;
+    std::size_t grandStringBytes = 0;
+    std::size_t grandLowercaseStringBytes = 0;
+    std::size_t grandFsIndexStoredRecordRefs = 0;
+    std::size_t grandExtensionStoredRecordRefs = 0;
+
+    for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
+        if (!deviceIndexPtr) {
+            continue;
+        }
+
+        const DeviceIndex& device = *deviceIndexPtr;
+
+        const quint64 fileRecordsBytes = vectorCapacityBytes(device.fileRecords);
+        const quint64 stringPoolBytes = vectorCapacityBytes(device.stringPool);
+        const quint64 lowercaseStringPoolBytes = vectorCapacityBytes(device.lowercaseStringPool);
+        const quint64 deletedBitmapBytes = vectorCapacityBytes(device.deletedRecordBitmap);
+        const quint64 flatIndexBytes = vectorCapacityBytes(device.flatIndex);
+        const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
+
+        quint64 fsIndexVectorObjectBytes = 0;
+        quint64 fsIndexVectorStorageBytes = 0;
+        std::size_t fsIndexStoredRecordRefs = 0;
+
+        for (const auto& [fsIndex, recordIndices] : device.fsIndexToRecordIndices) {
+            Q_UNUSED(fsIndex);
+            fsIndexVectorObjectBytes += sizeof(recordIndices);
+            fsIndexVectorStorageBytes += vectorCapacityBytes(recordIndices);
+            fsIndexStoredRecordRefs += recordIndices.size();
+        }
+
+        quint64 extensionVectorObjectBytes = 0;
+        quint64 extensionVectorStorageBytes = 0;
+        std::size_t extensionStoredRecordRefs = 0;
+
+        for (const auto& [extension, recordIndices] : device.recordsByExtension) {
+            Q_UNUSED(extension);
+            extensionVectorObjectBytes += sizeof(recordIndices);
+            extensionVectorStorageBytes += vectorCapacityBytes(recordIndices);
+            extensionStoredRecordRefs += recordIndices.size();
+        }
+
+        const quint64 deviceVectorBytes =
+            fileRecordsBytes +
+            stringPoolBytes +
+            lowercaseStringPoolBytes +
+            deletedBitmapBytes +
+            flatIndexBytes +
+            liveDeltaFlatIndexBytes +
+            fsIndexVectorStorageBytes +
+            extensionVectorStorageBytes;
+
+        const quint64 deviceApproxHashPayloadBytes =
+            approximateUnorderedMapNodePayloadBytes(device.directoryFsIndexToRecordIdx) +
+            approximateUnorderedMapNodePayloadBytes(device.fsIndexToRecordIndices) +
+            approximateUnorderedMapNodePayloadBytes(device.recordsByExtension) +
+            fsIndexVectorObjectBytes +
+            extensionVectorObjectBytes;
+
+        const quint64 deviceApproxHashBucketBytes =
+            approximateUnorderedMapBucketBytes(device.directoryFsIndexToRecordIdx) +
+            approximateUnorderedMapBucketBytes(device.fsIndexToRecordIndices) +
+            approximateUnorderedMapBucketBytes(device.recordsByExtension);
+
+        grandVectorBytes += deviceVectorBytes;
+        grandApproxHashPayloadBytes += deviceApproxHashPayloadBytes;
+        grandApproxHashBucketBytes += deviceApproxHashBucketBytes;
+
+        grandRecords += device.fileRecords.size();
+        grandFlatTrigrams += device.flatIndex.size();
+        grandLiveDeltaTrigrams += device.liveDeltaFlatIndex.size();
+        grandStringBytes += device.stringPool.size();
+        grandLowercaseStringBytes += device.lowercaseStringPool.size();
+        grandFsIndexStoredRecordRefs += fsIndexStoredRecordRefs;
+        grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
+
+        out << "Device indexId=" << device.indexId << ":\n";
+        out << "  label: " << device.label << '\n';
+        out << "  deviceId: " << device.deviceId << '\n';
+        out << "  devNode: " << device.devNode << '\n';
+        out << "  fsType: " << device.fsType << '\n';
+        out << "  ready/searchable/mounted: "
+            << (device.isReady ? "true" : "false")
+            << '/'
+            << (device.isSearchable() ? "true" : "false")
+            << '/'
+            << (device.mounted ? "true" : "false")
+            << '\n';
+        out << "  mountPoints: " << device.mountPoints.size() << '\n';
+        out << '\n';
+
+        out << "  vectors:\n";
+        out << "    fileRecords size/capacity: "
+            << device.fileRecords.size()
+            << '/'
+            << device.fileRecords.capacity()
+            << " => "
+            << formatBytes(fileRecordsBytes)
+            << '\n';
+        out << "    stringPool size/capacity: "
+            << device.stringPool.size()
+            << '/'
+            << device.stringPool.capacity()
+            << " => "
+            << formatBytes(stringPoolBytes)
+            << '\n';
+        out << "    lowercaseStringPool size/capacity: "
+            << device.lowercaseStringPool.size()
+            << '/'
+            << device.lowercaseStringPool.capacity()
+            << " => "
+            << formatBytes(lowercaseStringPoolBytes)
+            << '\n';
+        out << "    deletedRecordBitmap size/capacity: "
+            << device.deletedRecordBitmap.size()
+            << '/'
+            << device.deletedRecordBitmap.capacity()
+            << " => "
+            << formatBytes(deletedBitmapBytes)
+            << '\n';
+        out << "    flatIndex size/capacity: "
+            << device.flatIndex.size()
+            << '/'
+            << device.flatIndex.capacity()
+            << " => "
+            << formatBytes(flatIndexBytes)
+            << '\n';
+        out << "    liveDeltaFlatIndex size/capacity: "
+            << device.liveDeltaFlatIndex.size()
+            << '/'
+            << device.liveDeltaFlatIndex.capacity()
+            << " => "
+            << formatBytes(liveDeltaFlatIndexBytes)
+            << '\n';
+        out << '\n';
+
+        out << "  maps:\n";
+        out << "    directoryFsIndexToRecordIdx entries/buckets: "
+            << device.directoryFsIndexToRecordIdx.size()
+            << '/'
+            << device.directoryFsIndexToRecordIdx.bucket_count()
+            << '\n';
+        out << "    fsIndexToRecordIndices entries/buckets: "
+            << device.fsIndexToRecordIndices.size()
+            << '/'
+            << device.fsIndexToRecordIndices.bucket_count()
+            << '\n';
+        out << "      stored record refs: " << fsIndexStoredRecordRefs << '\n';
+        out << "      vector object bytes: " << formatBytes(fsIndexVectorObjectBytes) << '\n';
+        out << "      vector storage bytes: " << formatBytes(fsIndexVectorStorageBytes) << '\n';
+        out << "    recordsByExtension entries/buckets: "
+            << device.recordsByExtension.size()
+            << '/'
+            << device.recordsByExtension.bucket_count()
+            << '\n';
+        out << "      stored record refs: " << extensionStoredRecordRefs << '\n';
+        out << "      extensionIndexEntryCount: " << device.extensionIndexEntryCount << '\n';
+        out << "      extensionIndexLiveDeltaEntries: " << device.extensionIndexLiveDeltaEntries << '\n';
+        out << "      vector object bytes: " << formatBytes(extensionVectorObjectBytes) << '\n';
+        out << "      vector storage bytes: " << formatBytes(extensionVectorStorageBytes) << '\n';
+        out << '\n';
+
+        out << "  approximate subtotal:\n";
+        out << "    vector capacity bytes: " << formatBytes(deviceVectorBytes) << '\n';
+        out << "    hash payload bytes, excluding allocator/node overhead: "
+            << formatBytes(deviceApproxHashPayloadBytes)
+            << '\n';
+        out << "    hash bucket bytes: " << formatBytes(deviceApproxHashBucketBytes) << '\n';
+        out << "    rough accounted subtotal: "
+            << formatBytes(deviceVectorBytes + deviceApproxHashPayloadBytes + deviceApproxHashBucketBytes)
+            << "\n\n";
+    }
+
+    out << "Grand totals:\n";
+    out << "  file records: " << grandRecords << '\n';
+    out << "  stringPool bytes used: " << grandStringBytes << '\n';
+    out << "  lowercaseStringPool bytes used: " << grandLowercaseStringBytes << '\n';
+    out << "  flat trigram entries: " << grandFlatTrigrams << '\n';
+    out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
+    out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';
+    out << "  extension stored record refs: " << grandExtensionStoredRecordRefs << '\n';
+    out << "  vector capacity bytes: " << formatBytes(grandVectorBytes) << '\n';
+    out << "  hash payload bytes, excluding allocator/node overhead: "
+        << formatBytes(grandApproxHashPayloadBytes)
+        << '\n';
+    out << "  hash bucket bytes: " << formatBytes(grandApproxHashBucketBytes) << '\n';
+    out << "  rough accounted index subtotal: "
+        << formatBytes(grandVectorBytes + grandApproxHashPayloadBytes + grandApproxHashBucketBytes)
+        << '\n';
+
+    return text;
 }
 
 bool IndexController::contains(std::string_view haystack, std::string_view needle) {

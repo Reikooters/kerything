@@ -273,6 +273,34 @@ namespace {
             QIcon::fromTheme(QStringLiteral("document-new"))
         );
     }
+
+    QString formatModelBytes(quint64 bytes)
+    {
+        static constexpr double KiB = 1024.0;
+        static constexpr double MiB = KiB * 1024.0;
+        static constexpr double GiB = MiB * 1024.0;
+
+        if (bytes >= static_cast<quint64>(GiB)) {
+            return QStringLiteral("%1 GiB").arg(bytes / GiB, 0, 'f', 2);
+        }
+
+        if (bytes >= static_cast<quint64>(MiB)) {
+            return QStringLiteral("%1 MiB").arg(bytes / MiB, 0, 'f', 2);
+        }
+
+        if (bytes >= static_cast<quint64>(KiB)) {
+            return QStringLiteral("%1 KiB").arg(bytes / KiB, 0, 'f', 2);
+        }
+
+        return QStringLiteral("%1 B").arg(bytes);
+    }
+
+    template <typename Vector>
+    quint64 modelVectorCapacityBytes(const Vector& vector)
+    {
+        using ValueType = typename Vector::value_type;
+        return static_cast<quint64>(vector.capacity()) * sizeof(ValueType);
+    }
 }
 
 FileModel::FileModel(AppController* controller, QObject *parent)
@@ -376,6 +404,61 @@ void FileModel::notifyRowsDataChanged(int firstRow, int lastRow)
 void FileModel::trimSortScratch()
 {
     sortScratch_.clearAndRelease();
+}
+
+QString FileModel::memoryStatsText() const
+{
+    QString text;
+    QTextStream out(&text);
+
+    const quint64 searchResultsBytes = modelVectorCapacityBytes(searchResults_);
+    const quint64 resultsOrderBytes = modelVectorCapacityBytes(sortScratch_.resultsOrder);
+    const quint64 sortedResultsBytes = modelVectorCapacityBytes(sortScratch_.sortedResults);
+    const quint64 numericKeysBytes = modelVectorCapacityBytes(sortScratch_.numericKeys);
+
+    out << "FileModel:\n";
+    out << "  searchResults size/capacity: "
+        << searchResults_.size()
+        << '/'
+        << searchResults_.capacity()
+        << " => "
+        << formatModelBytes(searchResultsBytes)
+        << '\n';
+
+    out << "  sortScratch.resultsOrder size/capacity: "
+        << sortScratch_.resultsOrder.size()
+        << '/'
+        << sortScratch_.resultsOrder.capacity()
+        << " => "
+        << formatModelBytes(resultsOrderBytes)
+        << '\n';
+
+    out << "  sortScratch.sortedResults size/capacity: "
+        << sortScratch_.sortedResults.size()
+        << '/'
+        << sortScratch_.sortedResults.capacity()
+        << " => "
+        << formatModelBytes(sortedResultsBytes)
+        << '\n';
+
+    out << "  sortScratch.numericKeys size/capacity: "
+        << sortScratch_.numericKeys.size()
+        << '/'
+        << sortScratch_.numericKeys.capacity()
+        << " => "
+        << formatModelBytes(numericKeysBytes)
+        << '\n';
+
+    out << "  rough accounted model subtotal: "
+        << formatModelBytes(
+            searchResultsBytes +
+            resultsOrderBytes +
+            sortedResultsBytes +
+            numericKeysBytes
+        )
+        << '\n';
+
+    return text;
 }
 
 // const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {

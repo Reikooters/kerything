@@ -101,6 +101,13 @@ private Q_SLOTS:
      */
     void showAbout();
 
+#ifdef KERYTHING_ENABLE_MEMORY_STATS
+    /**
+     * @brief Shows debug memory statistics for the GUI index/model.
+     */
+    void showMemoryStats();
+#endif
+
     /**
      * @brief Opens the selected file or folder using system defaults.
      */

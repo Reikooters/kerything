@@ -51,6 +51,16 @@
 #include <QProcess>
 #endif
 
+#ifdef KERYTHING_ENABLE_MEMORY_STATS
+#include <QDialog>
+#include <QFontDatabase>
+#include <QMimeData>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QTextStream>
+#endif
+
 #include "AppController.h"
 #include "HoverRowHighlight.h"
 #include "Version.h"
@@ -416,6 +426,16 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
 
+#ifdef KERYTHING_ENABLE_MEMORY_STATS
+    auto* memoryStatsAct = new QAction(
+        QIcon::fromTheme(QStringLiteral("utilities-system-monitor")),
+        QStringLiteral("Memory Statistics..."),
+        this
+    );
+    memoryStatsAct->setStatusTip(QStringLiteral("Show debug memory statistics for the in-memory index and current results"));
+    connect(memoryStatsAct, &QAction::triggered, this, &MainWindow::showMemoryStats);
+#endif
+
     // Ctrl+F, Ctrl+L and Alt+D: Focus Search
     auto *focusSearchAct = new QAction(this);
     focusSearchAct->setShortcuts({
@@ -538,6 +558,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Help Menu
     auto* helpMenu = menuBar()->addMenu("Help");
+#ifdef KERYTHING_ENABLE_MEMORY_STATS
+    helpMenu->addAction(memoryStatsAct);
+    helpMenu->addSeparator();
+#endif
     helpMenu->addAction(aboutAct);
     // ---------------------
 
@@ -1431,6 +1455,74 @@ void MainWindow::restoreSelectedRecordHandles(
         tableView_->horizontalScrollBar()->setValue(horizontalScrollValue);
     }
 }
+
+#ifdef KERYTHING_ENABLE_MEMORY_STATS
+void MainWindow::showMemoryStats()
+{
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("Kerything Memory Statistics"));
+    dialog->resize(1000, 750);
+
+    auto* layout = new QVBoxLayout(dialog);
+
+    auto* textEdit = new QPlainTextEdit(dialog);
+    textEdit->setReadOnly(true);
+    textEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    textEdit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+    auto buildStatsText = [this]() {
+        QString text;
+        QTextStream out(&text);
+
+        out << "Kerything Memory Statistics\n";
+        out << "===========================\n\n";
+        out << "Notes:\n";
+        out << "  - Vector figures use capacity, not just size.\n";
+        out << "  - Hash-map figures are approximate and exclude STL allocator/node overhead.\n";
+        out << "  - Process RSS is the best top-level number; category subtotals are attribution aids.\n";
+        out << "  - Some temporary allocations from sorting/searching may not be retained here.\n\n";
+
+        if (controller_ && controller_->indexController()) {
+            out << controller_->indexController()->memoryStatsText();
+        } else {
+            out << "IndexController: unavailable\n";
+        }
+
+        out << "\n";
+
+        if (model_) {
+            out << model_->memoryStatsText();
+        } else {
+            out << "FileModel: unavailable\n";
+        }
+
+        return text;
+    };
+
+    textEdit->setPlainText(buildStatsText());
+
+    auto* buttonLayout = new QHBoxLayout();
+    buttonLayout->addStretch();
+
+    auto* refreshButton = new QPushButton(QStringLiteral("Refresh"), dialog);
+    auto* closeButton = new QPushButton(QStringLiteral("Close"), dialog);
+
+    buttonLayout->addWidget(refreshButton);
+    buttonLayout->addWidget(closeButton);
+
+    layout->addWidget(textEdit);
+    layout->addLayout(buttonLayout);
+
+    connect(refreshButton, &QPushButton::clicked, dialog, [textEdit, buildStatsText]() {
+        textEdit->setPlainText(buildStatsText());
+    });
+
+    connect(closeButton, &QPushButton::clicked, dialog, &QDialog::accept);
+
+    dialog->show();
+}
+#endif
 
 void MainWindow::showAbout()
 {

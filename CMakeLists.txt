@@ -40,6 +40,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 option(KERYTHING_WITH_KF6 "Use KDE Frameworks 6, including KDE KIO for opening files" ON)
 option(KERYTHING_ENABLE_LOGGING "Enable verbose runtime logging" OFF)
+option(KERYTHING_ENABLE_MEMORY_STATS "Enable the GUI memory statistics dialog" OFF)
 
 if(KERYTHING_WITH_KF6)
     # Find KDE Frameworks components
@@ -156,6 +157,10 @@ endif()
 if(KERYTHING_ENABLE_LOGGING)
     target_compile_definitions(kerything PRIVATE KERYTHING_ENABLE_LOGGING)
     target_compile_definitions(kerythingd PRIVATE KERYTHING_ENABLE_LOGGING)
+endif()
+
+if(KERYTHING_ENABLE_MEMORY_STATS)
+    target_compile_definitions(kerything PRIVATE KERYTHING_ENABLE_MEMORY_STATS)
 endif()
 
 target_compile_definitions(kerything PRIVATE QT_NO_KEYWORDS)

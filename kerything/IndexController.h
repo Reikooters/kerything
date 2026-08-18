@@ -748,6 +748,7 @@ public:
     void buildTrigramIndexParallelByRequestId(quint32 requestId);
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
+    [[nodiscard]] QString memoryStatsText() const;
     LiveUpdateApplyResult applyLiveUpdateOperations(
         const QString& deviceId,
         const std::vector<LiveUpdateOperation>& operations

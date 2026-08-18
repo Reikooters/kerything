@@ -84,6 +84,11 @@ public:
     void trimSortScratch();
 
     /**
+     * @brief Returns debug memory statistics for currently retained model buffers.
+     */
+    [[nodiscard]] QString memoryStatsText() const;
+
+    /**
      * @brief Sorts the search results based on the specified column and order.
      * Uses C++17 parallel algorithms (TBB) for high performance on large datasets.
      */

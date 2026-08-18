@@ -387,7 +387,9 @@ quint64 IndexController::addDevice(
             deviceIndex.extensionIndexEntryCount = 0;
             deviceIndex.extensionIndexLiveDeltaEntries = 0;
             deviceIndex.directoryFsIndexToRecordIdx.clear();
-            deviceIndex.fsIndexToRecordIndices.clear();
+            deviceIndex.fsIndexToPrimaryRecordIdx.clear();
+            deviceIndex.duplicateFsIndexToRecordIndices.clear();
+            deviceIndex.fsIndexLookupScratch.clear();
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
 
@@ -887,8 +889,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             targetIndex->liveDeltaFlatIndex.size() + estimatedTrigramsToAppend
         );
 
-        targetIndex->fsIndexToRecordIndices.reserve(
-            targetIndex->fsIndexToRecordIndices.size() + pendingUpserts.size()
+        targetIndex->fsIndexToPrimaryRecordIdx.reserve(
+            targetIndex->fsIndexToPrimaryRecordIdx.size() + pendingUpserts.size()
         );
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -1370,16 +1372,20 @@ QString IndexController::memoryStatsText() const
         const quint64 flatIndexBytes = vectorCapacityBytes(device.flatIndex);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
 
-        quint64 fsIndexVectorObjectBytes = 0;
-        quint64 fsIndexVectorStorageBytes = 0;
-        std::size_t fsIndexStoredRecordRefs = 0;
+        quint64 fsIndexDuplicateVectorObjectBytes = 0;
+        quint64 fsIndexDuplicateVectorStorageBytes = 0;
+        std::size_t fsIndexDuplicateStoredRecordRefs = 0;
 
-        for (const auto& [fsIndex, recordIndices] : device.fsIndexToRecordIndices) {
+        for (const auto& [fsIndex, recordIndices] : device.duplicateFsIndexToRecordIndices) {
             Q_UNUSED(fsIndex);
-            fsIndexVectorObjectBytes += sizeof(recordIndices);
-            fsIndexVectorStorageBytes += vectorCapacityBytes(recordIndices);
-            fsIndexStoredRecordRefs += recordIndices.size();
+            fsIndexDuplicateVectorObjectBytes += sizeof(recordIndices);
+            fsIndexDuplicateVectorStorageBytes += vectorCapacityBytes(recordIndices);
+            fsIndexDuplicateStoredRecordRefs += recordIndices.size();
         }
+
+        const std::size_t fsIndexStoredRecordRefs =
+            device.fsIndexToPrimaryRecordIdx.size() +
+            fsIndexDuplicateStoredRecordRefs;
 
         quint64 extensionVectorObjectBytes = 0;
         quint64 extensionVectorStorageBytes = 0;
@@ -1393,25 +1399,28 @@ QString IndexController::memoryStatsText() const
         }
 
         const quint64 deviceVectorBytes =
-            fileRecordsBytes +
-            stringPoolBytes +
-            lowercaseStringPoolBytes +
-            deletedBitmapBytes +
-            flatIndexBytes +
-            liveDeltaFlatIndexBytes +
-            fsIndexVectorStorageBytes +
-            extensionVectorStorageBytes;
+                fileRecordsBytes +
+                stringPoolBytes +
+                lowercaseStringPoolBytes +
+                deletedBitmapBytes +
+                flatIndexBytes +
+                liveDeltaFlatIndexBytes +
+                fsIndexDuplicateVectorStorageBytes +
+                vectorCapacityBytes(device.fsIndexLookupScratch) +
+                extensionVectorStorageBytes;
 
         const quint64 deviceApproxHashPayloadBytes =
             approximateUnorderedMapNodePayloadBytes(device.directoryFsIndexToRecordIdx) +
-            approximateUnorderedMapNodePayloadBytes(device.fsIndexToRecordIndices) +
+            approximateUnorderedMapNodePayloadBytes(device.fsIndexToPrimaryRecordIdx) +
+            approximateUnorderedMapNodePayloadBytes(device.duplicateFsIndexToRecordIndices) +
             approximateUnorderedMapNodePayloadBytes(device.recordsByExtension) +
-            fsIndexVectorObjectBytes +
+            fsIndexDuplicateVectorObjectBytes +
             extensionVectorObjectBytes;
 
         const quint64 deviceApproxHashBucketBytes =
             approximateUnorderedMapBucketBytes(device.directoryFsIndexToRecordIdx) +
-            approximateUnorderedMapBucketBytes(device.fsIndexToRecordIndices) +
+            approximateUnorderedMapBucketBytes(device.fsIndexToPrimaryRecordIdx) +
+            approximateUnorderedMapBucketBytes(device.duplicateFsIndexToRecordIndices) +
             approximateUnorderedMapBucketBytes(device.recordsByExtension);
 
         grandVectorBytes += deviceVectorBytes;
@@ -1488,18 +1497,32 @@ QString IndexController::memoryStatsText() const
 
         out << "  maps:\n";
         out << "    directoryFsIndexToRecordIdx entries/buckets: "
-            << device.directoryFsIndexToRecordIdx.size()
+                << device.directoryFsIndexToRecordIdx.size()
+                << '/'
+                << device.directoryFsIndexToRecordIdx.bucket_count()
+                << '\n';
+        out << "    fsIndexToPrimaryRecordIdx entries/buckets: "
+            << device.fsIndexToPrimaryRecordIdx.size()
             << '/'
-            << device.directoryFsIndexToRecordIdx.bucket_count()
+            << device.fsIndexToPrimaryRecordIdx.bucket_count()
             << '\n';
-        out << "    fsIndexToRecordIndices entries/buckets: "
-            << device.fsIndexToRecordIndices.size()
+        out << "    duplicateFsIndexToRecordIndices entries/buckets: "
+            << device.duplicateFsIndexToRecordIndices.size()
             << '/'
-            << device.fsIndexToRecordIndices.bucket_count()
+            << device.duplicateFsIndexToRecordIndices.bucket_count()
             << '\n';
-        out << "      stored record refs: " << fsIndexStoredRecordRefs << '\n';
-        out << "      vector object bytes: " << formatBytes(fsIndexVectorObjectBytes) << '\n';
-        out << "      vector storage bytes: " << formatBytes(fsIndexVectorStorageBytes) << '\n';
+        out << "      stored record refs total: " << fsIndexStoredRecordRefs << '\n';
+        out << "      primary record refs: " << device.fsIndexToPrimaryRecordIdx.size() << '\n';
+        out << "      duplicate record refs: " << fsIndexDuplicateStoredRecordRefs << '\n';
+        out << "      duplicate vector object bytes: " << formatBytes(fsIndexDuplicateVectorObjectBytes) << '\n';
+        out << "      duplicate vector storage bytes: " << formatBytes(fsIndexDuplicateVectorStorageBytes) << '\n';
+        out << "      lookup scratch size/capacity: "
+            << device.fsIndexLookupScratch.size()
+            << '/'
+            << device.fsIndexLookupScratch.capacity()
+            << " => "
+            << formatBytes(vectorCapacityBytes(device.fsIndexLookupScratch))
+            << '\n';
         out << "    recordsByExtension entries/buckets: "
             << device.recordsByExtension.size()
             << '/'
@@ -1954,7 +1977,12 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     deviceIndex.fileRecords.push_back(record);
     deviceIndex.deletedRecordBitmap.push_back(0);
 
-    deviceIndex.fsIndexToRecordIndices[record.fsIndex].push_back(recordIdx);
+    const auto [primaryIt, inserted] =
+                deviceIndex.fsIndexToPrimaryRecordIdx.emplace(record.fsIndex, recordIdx);
+
+    if (!inserted) {
+        deviceIndex.duplicateFsIndexToRecordIndices[record.fsIndex].push_back(recordIdx);
+    }
 
     if ((record.flags & FileRecord_IsDir) != 0) {
         deviceIndex.directoryFsIndexToRecordIdx[record.fsIndex] = recordIdx;

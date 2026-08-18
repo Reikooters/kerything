@@ -108,7 +108,13 @@ public:
         std::vector<char> stringPool;
         std::vector<uint8_t> deletedRecordBitmap;
         std::unordered_map<uint64_t, uint32_t> directoryFsIndexToRecordIdx;
-        std::unordered_map<uint64_t, std::vector<uint32_t>> fsIndexToRecordIndices;
+
+        // Most filesystem indices appear exactly once. Keep the common case as a
+        // compact inode -> record index map, and only allocate vectors for true
+        // duplicates such as hard links.
+        std::unordered_map<uint64_t, uint32_t> fsIndexToPrimaryRecordIdx;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> duplicateFsIndexToRecordIndices;
+        mutable std::vector<uint32_t> fsIndexLookupScratch;
 
         // Lowercase mirror of the string pool for sorting and searching
         std::vector<char> lowercaseStringPool;
@@ -276,7 +282,9 @@ public:
 
         void rebuildFsIndexMaps() {
             directoryFsIndexToRecordIdx.clear();
-            fsIndexToRecordIndices.clear();
+            fsIndexToPrimaryRecordIdx.clear();
+            duplicateFsIndexToRecordIndices.clear();
+            fsIndexLookupScratch.clear();
 
             std::size_t directoryCount = 0;
 
@@ -287,7 +295,7 @@ public:
             }
 
             directoryFsIndexToRecordIdx.reserve(directoryCount);
-            fsIndexToRecordIndices.reserve(fileRecords.size());
+            fsIndexToPrimaryRecordIdx.reserve(fileRecords.size());
 
             for (uint32_t i = 0; i < fileRecords.size(); ++i) {
                 if (isDeletedRecord(i)) {
@@ -297,9 +305,16 @@ public:
                 const FileRecord& rec = fileRecords[i];
 
                 // Full inode/filesystem-index map.
-                // This intentionally stores every record using this fsIndex, because
-                // hard links can produce multiple FileRecords with the same inode.
-                fsIndexToRecordIndices[rec.fsIndex].push_back(i);
+                //
+                // The common case is one FileRecord per fsIndex. Additional entries
+                // for the same fsIndex are rare and are stored separately to avoid
+                // millions of tiny std::vector allocations.
+                const auto [primaryIt, inserted] =
+                    fsIndexToPrimaryRecordIdx.emplace(rec.fsIndex, i);
+
+                if (!inserted) {
+                    duplicateFsIndexToRecordIndices[rec.fsIndex].push_back(i);
+                }
 
                 // Directory-only map used for parent resolution.
                 // Normal ext4 does not allow arbitrary hard-linked directories, so a
@@ -663,12 +678,24 @@ public:
         }
 
         [[nodiscard]] const std::vector<uint32_t>* recordIndicesForFsIndex(uint64_t fsIndex) const {
-            const auto it = fsIndexToRecordIndices.find(fsIndex);
-            if (it == fsIndexToRecordIndices.end()) {
+            const auto primaryIt = fsIndexToPrimaryRecordIdx.find(fsIndex);
+            if (primaryIt == fsIndexToPrimaryRecordIdx.end()) {
                 return nullptr;
             }
 
-            return &it->second;
+            fsIndexLookupScratch.clear();
+            fsIndexLookupScratch.push_back(primaryIt->second);
+
+            const auto duplicateIt = duplicateFsIndexToRecordIndices.find(fsIndex);
+            if (duplicateIt != duplicateFsIndexToRecordIndices.end()) {
+                fsIndexLookupScratch.insert(
+                    fsIndexLookupScratch.end(),
+                    duplicateIt->second.begin(),
+                    duplicateIt->second.end()
+                );
+            }
+
+            return &fsIndexLookupScratch;
         }
     };
 

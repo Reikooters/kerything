@@ -348,8 +348,31 @@ void FileModel::setSearchHighlightTerms(
 
 void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newResults)
 {
-    beginResetModel(); // Notify views that the entire model is being reset
+    beginResetModel();
     searchResults_ = std::move(newResults);
+
+    // For the searchResults_ vector:
+    // > if capacity > size * 1.25 and wasted capacity is at least 16 MiB
+    // then shrink it to reclaim memory.
+    static constexpr std::size_t MaxRetainedResultCapacityRatioNumerator = 5;
+    static constexpr std::size_t MaxRetainedResultCapacityRatioDenominator = 4;
+    static constexpr std::size_t MinWastedResultCapacityBytesToTrim = 16 * 1024 * 1024;
+
+    const std::size_t resultSize = searchResults_.size();
+    const std::size_t resultCapacity = searchResults_.capacity();
+    const std::size_t wastedCapacity = resultCapacity > resultSize
+        ? resultCapacity - resultSize
+        : 0;
+    const std::size_t wastedBytes =
+        wastedCapacity * sizeof(IndexController::RecordHandle);
+
+    if (resultSize > 0 &&
+        resultCapacity > (resultSize * MaxRetainedResultCapacityRatioNumerator) /
+                         MaxRetainedResultCapacityRatioDenominator &&
+        wastedBytes >= MinWastedResultCapacityBytesToTrim) {
+        searchResults_.shrink_to_fit();
+    }
+
     endResetModel();
 }
 

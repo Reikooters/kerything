@@ -278,7 +278,15 @@ public:
             directoryFsIndexToRecordIdx.clear();
             fsIndexToRecordIndices.clear();
 
-            directoryFsIndexToRecordIdx.reserve(fileRecords.size());
+            std::size_t directoryCount = 0;
+
+            for (const FileRecord& rec : fileRecords) {
+                if ((rec.flags & FileRecord_IsDir) != 0) {
+                    ++directoryCount;
+                }
+            }
+
+            directoryFsIndexToRecordIdx.reserve(directoryCount);
             fsIndexToRecordIndices.reserve(fileRecords.size());
 
             for (uint32_t i = 0; i < fileRecords.size(); ++i) {

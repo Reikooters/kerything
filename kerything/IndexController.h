@@ -74,6 +74,16 @@ public:
         }
     };
 
+    struct TrigramRange {
+        uint32_t trigram;
+        uint32_t offset;
+        uint32_t count;
+
+        bool operator<(const TrigramRange& other) const {
+            return trigram < other.trigram;
+        }
+    };
+
     struct DeviceIndex {
         quint64 indexId;
         QString deviceId; // stable persistent ID, e.g. partuuid:...
@@ -119,8 +129,12 @@ public:
         // Lowercase mirror of the string pool for sorting and searching
         std::vector<char> lowercaseStringPool;
 
-        // A single sorted vector of all trigram-record pairs
-        std::vector<TrigramEntry> flatIndex;
+        // Compact full-scan trigram index.
+        //
+        // trigramRanges maps trigram -> [offset, count] within trigramPostings.
+        // trigramPostings stores sorted record indices for each trigram.
+        std::vector<TrigramRange> trigramRanges;
+        std::vector<uint32_t> trigramPostings;
 
         // Trigrams added by live updates after the last full scan.
         //
@@ -439,7 +453,7 @@ public:
 
         void buildTrigramIndexParallel() {
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::cerr << "Building Flat Trigram Index in parallel..." << std::endl;
+            std::cerr << "Building compact trigram index in parallel..." << std::endl;
 #endif
 
             // Clear live delta trigram index.
@@ -455,14 +469,14 @@ public:
                 }
             }
 
-            flatIndex.resize(totalTrigrams);
+            std::vector<TrigramEntry> flatEntries;
+            flatEntries.resize(totalTrigrams);
 
-            // 2. Fill the flatIndex in parallel
-            // We divide the records into chunks to give to each thread
+            // 2. Fill the temporary flat index in parallel.
             const size_t numRecords = fileRecords.size();
             std::vector<size_t> startOffsets(numRecords);
 
-            // This part is serial but very fast (calculating where each record starts in flatIndex)
+            // This part is serial but very fast (calculating where each record starts in flatEntries)
             size_t currentOffset = 0;
             for (size_t i = 0; i < numRecords; ++i) {
                 startOffsets[i] = currentOffset;
@@ -486,30 +500,73 @@ public:
 
                 for (size_t j = 0; j <= name.length() - 3; ++j) {
                     uint32_t tri = (static_cast<uint32_t>(static_cast<unsigned char>(name[j])) << 16) |
-                                   (static_cast<uint32_t>(static_cast<unsigned char>(name[j+1])) << 8) |
-                                   (static_cast<uint32_t>(static_cast<unsigned char>(name[j+2])));
+                                   (static_cast<uint32_t>(static_cast<unsigned char>(name[j + 1])) << 8) |
+                                   (static_cast<uint32_t>(static_cast<unsigned char>(name[j + 2])));
 
-                    flatIndex[writePos++] = { tri, i };
+                    flatEntries[writePos++] = { tri, i };
                 }
             });
 
             // 3. Sort the entire index in parallel
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::cerr << "Sorting " << flatIndex.size() << " trigrams..." << std::endl;
+            std::cerr << "Sorting " << flatEntries.size() << " trigrams..." << std::endl;
 #endif
-            std::sort(std::execution::par, flatIndex.begin(), flatIndex.end());
+
+            std::sort(std::execution::par, flatEntries.begin(), flatEntries.end());
 
             // 4. Remove exact duplicates (same trigram in same file)
 #ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Removing duplicate trigrams..." << std::endl;
 #endif
-            auto last = std::unique(std::execution::par, flatIndex.begin(), flatIndex.end(), [](const auto& a, const auto& b) {
+
+            auto last = std::unique(std::execution::par, flatEntries.begin(), flatEntries.end(), [](const auto& a, const auto& b) {
                 return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
             });
-            flatIndex.erase(last, flatIndex.end());
+            flatEntries.erase(last, flatEntries.end());
 
-            // 5. Reclaim memory used by the duplicates which were removed
-            flatIndex.shrink_to_fit();
+            // 5. Compress the trigram index
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "Compressing trigram index..." << std::endl;
+#endif
+
+            trigramRanges.clear();
+            trigramPostings.clear();
+
+            if (!flatEntries.empty()) {
+                trigramPostings.reserve(flatEntries.size());
+
+                std::size_t i = 0;
+
+                while (i < flatEntries.size()) {
+                    const uint32_t trigram = flatEntries[i].trigram;
+                    const uint32_t offset = static_cast<uint32_t>(trigramPostings.size());
+
+                    do {
+                        trigramPostings.push_back(flatEntries[i].recordIdx);
+                        ++i;
+                    } while (i < flatEntries.size() && flatEntries[i].trigram == trigram);
+
+                    const uint32_t count =
+                        static_cast<uint32_t>(trigramPostings.size() - offset);
+
+                    trigramRanges.push_back({
+                        trigram,
+                        offset,
+                        count
+                    });
+                }
+            }
+
+            // 6. Reclaim memory
+            trigramRanges.shrink_to_fit();
+            trigramPostings.shrink_to_fit();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "Finished compact trigram index"
+                      << " ranges=" << trigramRanges.size()
+                      << " postings=" << trigramPostings.size()
+                      << "\n";
+#endif
         }
 
         void buildExtensionIndex()

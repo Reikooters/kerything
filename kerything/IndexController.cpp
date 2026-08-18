@@ -61,6 +61,7 @@ namespace {
         Clock::time_point start_;
     };
 
+    // Overload using TrigramEntry
     template <typename Fn>
     void forEachRecordIdxForTrigram(
         const std::vector<IndexController::TrigramEntry>& index,
@@ -78,6 +79,39 @@ namespace {
 
         for (auto it = range.first; it != range.second; ++it) {
             fn(it->recordIdx);
+        }
+    }
+
+    // Overload using compacted trigram index
+    template <typename Fn>
+    void forEachRecordIdxForTrigram(
+        const std::vector<IndexController::TrigramRange>& ranges,
+        const std::vector<uint32_t>& postings,
+        uint32_t trigram,
+        Fn&& fn)
+    {
+        const auto it = std::lower_bound(
+            ranges.begin(),
+            ranges.end(),
+            IndexController::TrigramRange{trigram, 0, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        if (it == ranges.end() || it->trigram != trigram) {
+            return;
+        }
+
+        const std::size_t begin = it->offset;
+        const std::size_t end = begin + it->count;
+
+        if (end > postings.size()) {
+            return;
+        }
+
+        for (std::size_t i = begin; i < end; ++i) {
+            fn(postings[i]);
         }
     }
 
@@ -140,6 +174,7 @@ namespace {
             : IndexController::contains(haystack, needle);
     }
 
+    // Overload using TrigramEntry
     bool containsTrigram(
         const std::vector<IndexController::TrigramEntry>& index,
         uint32_t trigram)
@@ -154,6 +189,64 @@ namespace {
         );
 
         return range.first != range.second;
+    }
+
+    // Overload using compacted trigram index
+    bool containsTrigram(
+        const std::vector<IndexController::TrigramRange>& ranges,
+        uint32_t trigram)
+    {
+        const auto it = std::lower_bound(
+            ranges.begin(),
+            ranges.end(),
+            IndexController::TrigramRange{trigram, 0, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        return it != ranges.end() && it->trigram == trigram;
+    }
+
+    void buildCompactTrigramIndexFromSortedEntries(
+        const std::vector<IndexController::TrigramEntry>& sortedEntries,
+        std::vector<IndexController::TrigramRange>& ranges,
+        std::vector<uint32_t>& postings)
+    {
+        ranges.clear();
+        postings.clear();
+
+        if (sortedEntries.empty()) {
+            ranges.shrink_to_fit();
+            postings.shrink_to_fit();
+            return;
+        }
+
+        postings.reserve(sortedEntries.size());
+
+        std::size_t i = 0;
+
+        while (i < sortedEntries.size()) {
+            const uint32_t trigram = sortedEntries[i].trigram;
+            const uint32_t offset = static_cast<uint32_t>(postings.size());
+
+            do {
+                postings.push_back(sortedEntries[i].recordIdx);
+                ++i;
+            } while (i < sortedEntries.size() && sortedEntries[i].trigram == trigram);
+
+            const uint32_t count =
+                static_cast<uint32_t>(postings.size() - offset);
+
+            ranges.push_back({
+                trigram,
+                offset,
+                count
+            });
+        }
+
+        ranges.shrink_to_fit();
+        postings.shrink_to_fit();
     }
 
     QByteArray liveEntryKey(quint64 parentInode, std::string_view name)
@@ -381,7 +474,8 @@ quint64 IndexController::addDevice(
             deviceIndex.stringPool.clear();
             deviceIndex.deletedRecordBitmap.clear();
             deviceIndex.lowercaseStringPool.clear();
-            deviceIndex.flatIndex.clear();
+            deviceIndex.trigramRanges.clear();
+            deviceIndex.trigramPostings.clear();
             deviceIndex.liveDeltaFlatIndex.clear();
             deviceIndex.recordsByExtension.clear();
             deviceIndex.extensionIndexEntryCount = 0;
@@ -1329,6 +1423,7 @@ QString IndexController::memoryStatsText() const
     out << "Type sizes:\n";
     out << "  sizeof(FileRecord): " << sizeof(FileRecord) << " bytes\n";
     out << "  sizeof(TrigramEntry): " << sizeof(TrigramEntry) << " bytes\n";
+    out << "  sizeof(TrigramRange): " << sizeof(TrigramRange) << " bytes\n";
     out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
     out << '\n';
 
@@ -1369,7 +1464,8 @@ QString IndexController::memoryStatsText() const
         const quint64 stringPoolBytes = vectorCapacityBytes(device.stringPool);
         const quint64 lowercaseStringPoolBytes = vectorCapacityBytes(device.lowercaseStringPool);
         const quint64 deletedBitmapBytes = vectorCapacityBytes(device.deletedRecordBitmap);
-        const quint64 flatIndexBytes = vectorCapacityBytes(device.flatIndex);
+        const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
+        const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
 
         quint64 fsIndexDuplicateVectorObjectBytes = 0;
@@ -1384,8 +1480,18 @@ QString IndexController::memoryStatsText() const
         }
 
         const std::size_t fsIndexStoredRecordRefs =
-            device.fsIndexToPrimaryRecordIdx.size() +
-            fsIndexDuplicateStoredRecordRefs;
+                device.fsIndexToPrimaryRecordIdx.size() +
+                fsIndexDuplicateStoredRecordRefs;
+
+        const quint64 fsIndexPrimaryPayloadBytes =
+            approximateUnorderedMapNodePayloadBytes(device.fsIndexToPrimaryRecordIdx);
+        const quint64 fsIndexPrimaryBucketBytes =
+            approximateUnorderedMapBucketBytes(device.fsIndexToPrimaryRecordIdx);
+        const quint64 fsIndexDuplicatePayloadBytes =
+            approximateUnorderedMapNodePayloadBytes(device.duplicateFsIndexToRecordIndices) +
+            fsIndexDuplicateVectorObjectBytes;
+        const quint64 fsIndexDuplicateBucketBytes =
+            approximateUnorderedMapBucketBytes(device.duplicateFsIndexToRecordIndices);
 
         quint64 extensionVectorObjectBytes = 0;
         quint64 extensionVectorStorageBytes = 0;
@@ -1399,15 +1505,16 @@ QString IndexController::memoryStatsText() const
         }
 
         const quint64 deviceVectorBytes =
-                fileRecordsBytes +
-                stringPoolBytes +
-                lowercaseStringPoolBytes +
-                deletedBitmapBytes +
-                flatIndexBytes +
-                liveDeltaFlatIndexBytes +
-                fsIndexDuplicateVectorStorageBytes +
-                vectorCapacityBytes(device.fsIndexLookupScratch) +
-                extensionVectorStorageBytes;
+            fileRecordsBytes +
+            stringPoolBytes +
+            lowercaseStringPoolBytes +
+            deletedBitmapBytes +
+            trigramRangesBytes +
+            trigramPostingsBytes +
+            liveDeltaFlatIndexBytes +
+            fsIndexDuplicateVectorStorageBytes +
+            vectorCapacityBytes(device.fsIndexLookupScratch) +
+            extensionVectorStorageBytes;
 
         const quint64 deviceApproxHashPayloadBytes =
             approximateUnorderedMapNodePayloadBytes(device.directoryFsIndexToRecordIdx) +
@@ -1428,7 +1535,7 @@ QString IndexController::memoryStatsText() const
         grandApproxHashBucketBytes += deviceApproxHashBucketBytes;
 
         grandRecords += device.fileRecords.size();
-        grandFlatTrigrams += device.flatIndex.size();
+        grandFlatTrigrams += device.trigramPostings.size();
         grandLiveDeltaTrigrams += device.liveDeltaFlatIndex.size();
         grandStringBytes += device.stringPool.size();
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
@@ -1473,18 +1580,25 @@ QString IndexController::memoryStatsText() const
             << formatBytes(lowercaseStringPoolBytes)
             << '\n';
         out << "    deletedRecordBitmap size/capacity: "
-            << device.deletedRecordBitmap.size()
+                << device.deletedRecordBitmap.size()
+                << '/'
+                << device.deletedRecordBitmap.capacity()
+                << " => "
+                << formatBytes(deletedBitmapBytes)
+                << '\n';
+        out << "    trigramRanges size/capacity: "
+            << device.trigramRanges.size()
             << '/'
-            << device.deletedRecordBitmap.capacity()
+            << device.trigramRanges.capacity()
             << " => "
-            << formatBytes(deletedBitmapBytes)
+            << formatBytes(trigramRangesBytes)
             << '\n';
-        out << "    flatIndex size/capacity: "
-            << device.flatIndex.size()
+        out << "    trigramPostings size/capacity: "
+            << device.trigramPostings.size()
             << '/'
-            << device.flatIndex.capacity()
+            << device.trigramPostings.capacity()
             << " => "
-            << formatBytes(flatIndexBytes)
+            << formatBytes(trigramPostingsBytes)
             << '\n';
         out << "    liveDeltaFlatIndex size/capacity: "
             << device.liveDeltaFlatIndex.size()
@@ -1502,14 +1616,26 @@ QString IndexController::memoryStatsText() const
                 << device.directoryFsIndexToRecordIdx.bucket_count()
                 << '\n';
         out << "    fsIndexToPrimaryRecordIdx entries/buckets: "
-            << device.fsIndexToPrimaryRecordIdx.size()
-            << '/'
-            << device.fsIndexToPrimaryRecordIdx.bucket_count()
+                << device.fsIndexToPrimaryRecordIdx.size()
+                << '/'
+                << device.fsIndexToPrimaryRecordIdx.bucket_count()
+                << '\n';
+        out << "      payload bytes, excluding allocator/node overhead: "
+            << formatBytes(fsIndexPrimaryPayloadBytes)
+            << '\n';
+        out << "      bucket bytes: "
+            << formatBytes(fsIndexPrimaryBucketBytes)
             << '\n';
         out << "    duplicateFsIndexToRecordIndices entries/buckets: "
             << device.duplicateFsIndexToRecordIndices.size()
             << '/'
             << device.duplicateFsIndexToRecordIndices.bucket_count()
+            << '\n';
+        out << "      payload bytes, excluding allocator/node overhead: "
+            << formatBytes(fsIndexDuplicatePayloadBytes)
+            << '\n';
+        out << "      bucket bytes: "
+            << formatBytes(fsIndexDuplicateBucketBytes)
             << '\n';
         out << "      stored record refs total: " << fsIndexStoredRecordRefs << '\n';
         out << "      primary record refs: " << device.fsIndexToPrimaryRecordIdx.size() << '\n';
@@ -1550,7 +1676,7 @@ QString IndexController::memoryStatsText() const
     out << "  file records: " << grandRecords << '\n';
     out << "  stringPool bytes used: " << grandStringBytes << '\n';
     out << "  lowercaseStringPool bytes used: " << grandLowercaseStringBytes << '\n';
-    out << "  flat trigram entries: " << grandFlatTrigrams << '\n';
+    out << "  trigram posting entries: " << grandFlatTrigrams << '\n';
     out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
     out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';
     out << "  extension stored record refs: " << grandExtensionStoredRecordRefs << '\n';
@@ -1742,20 +1868,21 @@ bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceInde
         return false;
     }
 
-    if (deviceIndex.flatIndex.empty()) {
+    if (deviceIndex.trigramPostings.empty()) {
         return true;
     }
 
     return deviceIndex.liveDeltaFlatIndex.size() >=
-           deviceIndex.flatIndex.size() / LiveDeltaRebuildRatioDivisor;
+           deviceIndex.trigramPostings.size() / LiveDeltaRebuildRatioDivisor;
 }
 
 void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
 {
 #ifdef KERYTHING_ENABLE_LOGGING
-    std::cerr << "Rebuilding trigram index after live updates"
+    std::cerr << "Rebuilding compact trigram index after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
-              << " flatIndex=" << deviceIndex.flatIndex.size()
+              << " ranges=" << deviceIndex.trigramRanges.size()
+              << " postings=" << deviceIndex.trigramPostings.size()
               << " liveDeltaFlatIndex=" << deviceIndex.liveDeltaFlatIndex.size()
               << "\n";
 #endif
@@ -1813,15 +1940,20 @@ void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceInd
     );
 
     rebuiltIndex.erase(last, rebuiltIndex.end());
-    rebuiltIndex.shrink_to_fit();
 
-    deviceIndex.flatIndex = std::move(rebuiltIndex);
+    buildCompactTrigramIndexFromSortedEntries(
+        rebuiltIndex,
+        deviceIndex.trigramRanges,
+        deviceIndex.trigramPostings
+    );
+
     deviceIndex.liveDeltaFlatIndex.clear();
 
 #ifdef KERYTHING_ENABLE_LOGGING
-    std::cerr << "Finished rebuilding trigram index after live updates"
+    std::cerr << "Finished rebuilding compact trigram index after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
-              << " flatIndex=" << deviceIndex.flatIndex.size()
+              << " ranges=" << deviceIndex.trigramRanges.size()
+              << " postings=" << deviceIndex.trigramPostings.size()
               << "\n";
 #endif
 }
@@ -2542,7 +2674,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     (static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 1])) << 8) |
                     static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 2]));
 
-                const bool foundInMainIndex = containsTrigram(indexPtr->flatIndex, tri);
+                const bool foundInMainIndex = containsTrigram(indexPtr->trigramRanges, tri);
                 const bool foundInLiveDeltaIndex = containsTrigram(indexPtr->liveDeltaFlatIndex, tri);
 
                 if (!foundInMainIndex && !foundInLiveDeltaIndex) {
@@ -2553,9 +2685,14 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
                 // 3. Intersect candidates (Candidate Filtering)
                 if (firstKeyword) {
-                    forEachRecordIdxForTrigram(indexPtr->flatIndex, tri, [&](uint32_t recordIdx) {
-                        candidates.push_back(recordIdx);
-                    });
+                    forEachRecordIdxForTrigram(
+                        indexPtr->trigramRanges,
+                        indexPtr->trigramPostings,
+                        tri,
+                        [&](uint32_t recordIdx) {
+                            candidates.push_back(recordIdx);
+                        }
+                    );
 
                     forEachRecordIdxForTrigram(indexPtr->liveDeltaFlatIndex, tri, [&](uint32_t recordIdx) {
                         candidates.push_back(recordIdx);
@@ -2571,9 +2708,14 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 } else {
                     std::vector<uint32_t> trigramRecordIndices;
 
-                    forEachRecordIdxForTrigram(indexPtr->flatIndex, tri, [&](uint32_t recordIdx) {
-                        trigramRecordIndices.push_back(recordIdx);
-                    });
+                    forEachRecordIdxForTrigram(
+                        indexPtr->trigramRanges,
+                        indexPtr->trigramPostings,
+                        tri,
+                        [&](uint32_t recordIdx) {
+                            trigramRecordIndices.push_back(recordIdx);
+                        }
+                    );
 
                     forEachRecordIdxForTrigram(indexPtr->liveDeltaFlatIndex, tri, [&](uint32_t recordIdx) {
                         trigramRecordIndices.push_back(recordIdx);

@@ -221,22 +221,24 @@ type:folders
 
 The following keyboard shortcuts are available in Kerything:
 
-| Shortcut                            | Action                                                                    |
-|:------------------------------------|:--------------------------------------------------------------------------|
-| `Ctrl + L` or `Alt + D` or `Ctrl+F` | Focus search bar and select all text                                      |
-| `Esc`                               | Focus search bar and clear all text                                       |
-| `Down / Up`                         | Move focus from search bar to the results table                           |
-| `Return`                            | Open selected file(s) with default applications                           |
-| `Ctrl + Return`                     | Open the folder containing the selected file                              |
-| `Ctrl + C`                          | Copy selected file(s) to clipboard (for pasting into another application) |
-| `Ctrl + Shift + C`                  | Copy selected file(s) file name(s) to clipboard                           |
-| `Ctrl + Alt + C`                    | Copy selected file(s) full absolute path(s) to clipboard                  |
-| `Alt + Shift + F4`                  | Open your default terminal in the folder of the selected file             |
-| `F5`                                | Refresh indexes                                                           |
-| `Ctrl + N`                          | Open a new window                                                         |
-| `Ctrl + W`                          | Close window                                                              |
-| `Ctrl + Shift + ,`                  | Open preferences                                                          |
-| `Ctrl + Q`                          | Exit the application (closes all windows)                                 |
+| Shortcut                              | Action                                                                    |
+|:--------------------------------------|:--------------------------------------------------------------------------|
+| `Ctrl + L` or `Alt + D` or `Ctrl + F` | Focus search bar and select all text                                      |
+| `Esc`                                 | Focus search bar and clear all text                                       |
+| `Ctrl + I`                            | Toggle case-sensitive filename matching                                   |
+| `Ctrl + B`                            | Toggle whole-word filename matching                                       |
+| `Down / Up`                           | Move focus from search bar to the results table                           |
+| `Return`                              | Open selected file(s) with default applications                           |
+| `Ctrl + Return`                       | Open the folder containing the selected file                              |
+| `Ctrl + C`                            | Copy selected file(s) to clipboard (for pasting into another application) |
+| `Ctrl + Shift + C`                    | Copy selected file(s) file name(s) to clipboard                           |
+| `Ctrl + Alt + C`                      | Copy selected file(s) full absolute path(s) to clipboard                  |
+| `Alt + Shift + F4`                    | Open your default terminal in the folder of the selected file             |
+| `F5`                                  | Refresh indexes                                                           |
+| `Ctrl + N`                            | Open a new window                                                         |
+| `Ctrl + W`                            | Close window                                                              |
+| `Ctrl + Shift + ,`                    | Open preferences                                                          |
+| `Ctrl + Q`                            | Exit the application (closes all windows)                                 |
 
 ## Building and Installation
 

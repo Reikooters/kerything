@@ -431,14 +431,16 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Match Case
     matchCaseAct_ = new QAction(QStringLiteral("Match Case"), this);
+    matchCaseAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_I));
     matchCaseAct_->setCheckable(true);
     matchCaseAct_->setChecked(matchCaseEnabled_);
     matchCaseAct_->setStatusTip(QStringLiteral("Match uppercase and lowercase letters exactly in file names"));
     connect(matchCaseAct_, &QAction::toggled, this, &MainWindow::setMatchCaseEnabled);
     addAction(matchCaseAct_);
 
-    // Whole Word
+    // Match Whole Word
     matchWholeWordAct_ = new QAction(QStringLiteral("Match Whole Word"), this);
+    matchWholeWordAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_B));
     matchWholeWordAct_->setCheckable(true);
     matchWholeWordAct_->setChecked(matchWholeWordEnabled_);
     matchWholeWordAct_->setStatusTip(QStringLiteral("Match complete words in file names"));

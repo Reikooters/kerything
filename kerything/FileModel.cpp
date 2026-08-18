@@ -346,11 +346,8 @@ void FileModel::setSearchHighlightTerms(
     }
 }
 
-void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newResults)
+void FileModel::trimSearchResultsOverCapacity()
 {
-    beginResetModel();
-    searchResults_ = std::move(newResults);
-
     // For the searchResults_ vector:
     // > if capacity > size * 1.25 and wasted capacity is at least 16 MiB
     // then shrink it to reclaim memory.
@@ -360,19 +357,33 @@ void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newR
 
     const std::size_t resultSize = searchResults_.size();
     const std::size_t resultCapacity = searchResults_.capacity();
+
+    if (resultSize == 0) {
+        if (resultCapacity > 0) {
+            std::vector<IndexController::RecordHandle>{}.swap(searchResults_);
+        }
+
+        return;
+    }
+
     const std::size_t wastedCapacity = resultCapacity > resultSize
         ? resultCapacity - resultSize
         : 0;
     const std::size_t wastedBytes =
         wastedCapacity * sizeof(IndexController::RecordHandle);
 
-    if (resultSize > 0 &&
-        resultCapacity > (resultSize * MaxRetainedResultCapacityRatioNumerator) /
+    if (resultCapacity > (resultSize * MaxRetainedResultCapacityRatioNumerator) /
                          MaxRetainedResultCapacityRatioDenominator &&
         wastedBytes >= MinWastedResultCapacityBytesToTrim) {
         searchResults_.shrink_to_fit();
     }
+}
 
+void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newResults)
+{
+    beginResetModel();
+    searchResults_ = std::move(newResults);
+    trimSearchResultsOverCapacity();
     endResetModel();
 }
 
@@ -392,6 +403,7 @@ void FileModel::setSortedSearchResults(
 
     beginResetModel();
     searchResults_ = std::move(newResults);
+    trimSearchResultsOverCapacity();
     endResetModel();
 }
 
@@ -536,6 +548,8 @@ void FileModel::sort(int column, Qt::SortOrder order) {
         order,
         sortScratch_
     );
+
+    trimSearchResultsOverCapacity();
 
     endResetModel();
 }

@@ -158,6 +158,7 @@ public:
 
 private:
     const IndexController::DeviceIndex* resolveDeviceIndex(const IndexController::RecordHandle& handle) const;
+    void trimSearchResultsOverCapacity();
 
     AppController* controller_ = nullptr;
     std::vector<IndexController::RecordHandle> searchResults_;

@@ -3592,7 +3592,16 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
     }
 
     results.swap(scratch.sortedResults);
+
+    // After the swap, scratch.sortedResults owns the old unsorted result buffer.
+    // Release it so we keep the fast linear gather path without retaining a
+    // second full RecordHandle vector between sorts.
     std::vector<RecordHandle>{}.swap(scratch.sortedResults);
+
+    // Numeric sort keys are only needed while sorting by size/date. Release them
+    // after the sorted order has been applied so sorting by date does not retain
+    // another full-result-sized scratch buffer.
+    std::vector<quint64>{}.swap(scratch.numericKeys);
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "sortSearchResults"

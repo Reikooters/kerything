@@ -302,6 +302,18 @@ namespace {
         using ValueType = typename Vector::value_type;
         return static_cast<quint64>(vector.capacity()) * sizeof(ValueType);
     }
+
+    QString formatModelBytesPerItem(quint64 bytes, std::size_t count)
+    {
+        if (count == 0) {
+            return QStringLiteral("n/a");
+        }
+
+        const double bytesPerItem =
+            static_cast<double>(bytes) / static_cast<double>(count);
+
+        return QStringLiteral("%1 B").arg(bytesPerItem, 0, 'f', 2);
+    }
 }
 
 FileModel::FileModel(AppController* controller, QObject *parent)
@@ -466,14 +478,50 @@ QString FileModel::memoryStatsText() const
     const quint64 resultsOrderBytes = modelVectorCapacityBytes(sortScratch_.resultsOrder);
     const quint64 sortedResultsBytes = modelVectorCapacityBytes(sortScratch_.sortedResults);
     const quint64 numericKeysBytes = modelVectorCapacityBytes(sortScratch_.numericKeys);
+    const quint64 sortScratchBytes =
+        resultsOrderBytes +
+        sortedResultsBytes +
+        numericKeysBytes;
+    const quint64 modelSubtotalBytes =
+        searchResultsBytes +
+        sortScratchBytes;
+
+    std::size_t maxPossibleResults = 0;
+
+    if (controller_ && controller_->indexController()) {
+        maxPossibleResults = controller_->indexController()->maxSearchResultCount();
+    }
+
+    const std::size_t excessSearchResultCapacity =
+        searchResults_.capacity() > searchResults_.size()
+            ? searchResults_.capacity() - searchResults_.size()
+            : 0;
+
+    const quint64 excessSearchResultCapacityBytes =
+        static_cast<quint64>(excessSearchResultCapacity) *
+        sizeof(IndexController::RecordHandle);
 
     out << "FileModel:\n";
+    out << "  max possible search result count from index: "
+        << maxPossibleResults
+        << '\n';
+
     out << "  searchResults size/capacity: "
         << searchResults_.size()
         << '/'
         << searchResults_.capacity()
         << " => "
         << formatModelBytes(searchResultsBytes)
+        << '\n';
+
+    out << "    excess searchResults capacity: "
+        << excessSearchResultCapacity
+        << " => "
+        << formatModelBytes(excessSearchResultCapacityBytes)
+        << '\n';
+
+    out << "    searchResults bytes per current row: "
+        << formatModelBytesPerItem(searchResultsBytes, searchResults_.size())
         << '\n';
 
     out << "  sortScratch.resultsOrder size/capacity: "
@@ -500,13 +548,70 @@ QString FileModel::memoryStatsText() const
         << formatModelBytes(numericKeysBytes)
         << '\n';
 
-    out << "  rough accounted model subtotal: "
+    out << "  retained sort scratch total: "
+        << formatModelBytes(sortScratchBytes)
+        << '\n';
+
+    out << "  releasable by trimSortScratch(): "
+        << formatModelBytes(sortScratchBytes)
+        << '\n';
+
+    const quint64 searchResultsIf16ByteHandles =
+        static_cast<quint64>(searchResults_.capacity()) * 16;
+    const quint64 sortedResultsIf16ByteHandles =
+        static_cast<quint64>(sortScratch_.sortedResults.capacity()) * 16;
+    const quint64 searchResultsIf8ByteHandles =
+        static_cast<quint64>(searchResults_.capacity()) * 8;
+    const quint64 sortedResultsIf8ByteHandles =
+        static_cast<quint64>(sortScratch_.sortedResults.capacity()) * 8;
+
+    out << "  RecordHandle what-if estimates:\n";
+    out << "    current sizeof(RecordHandle): "
+        << sizeof(IndexController::RecordHandle)
+        << " bytes\n";
+    out << "    searchResults if handles were 16 bytes: "
+        << formatModelBytes(searchResultsIf16ByteHandles)
+        << " (saving "
         << formatModelBytes(
-            searchResultsBytes +
-            resultsOrderBytes +
-            sortedResultsBytes +
-            numericKeysBytes
+            searchResultsBytes > searchResultsIf16ByteHandles
+                ? searchResultsBytes - searchResultsIf16ByteHandles
+                : 0
         )
+        << ")\n";
+    out << "    sortScratch.sortedResults if handles were 16 bytes: "
+        << formatModelBytes(sortedResultsIf16ByteHandles)
+        << " (saving "
+        << formatModelBytes(
+            sortedResultsBytes > sortedResultsIf16ByteHandles
+                ? sortedResultsBytes - sortedResultsIf16ByteHandles
+                : 0
+        )
+        << ")\n";
+    out << "    searchResults if handles were 8 bytes: "
+        << formatModelBytes(searchResultsIf8ByteHandles)
+        << " (saving "
+        << formatModelBytes(
+            searchResultsBytes > searchResultsIf8ByteHandles
+                ? searchResultsBytes - searchResultsIf8ByteHandles
+                : 0
+        )
+        << ")\n";
+    out << "    sortScratch.sortedResults if handles were 8 bytes: "
+        << formatModelBytes(sortedResultsIf8ByteHandles)
+        << " (saving "
+        << formatModelBytes(
+            sortedResultsBytes > sortedResultsIf8ByteHandles
+                ? sortedResultsBytes - sortedResultsIf8ByteHandles
+                : 0
+        )
+        << ")\n";
+
+    out << "  rough accounted model subtotal: "
+        << formatModelBytes(modelSubtotalBytes)
+        << '\n';
+
+    out << "  rough accounted model bytes per current row: "
+        << formatModelBytesPerItem(modelSubtotalBytes, searchResults_.size())
         << '\n';
 
     return text;

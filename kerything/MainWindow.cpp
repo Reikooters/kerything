@@ -1479,7 +1479,10 @@ void MainWindow::showMemoryStats()
         out << "===========================\n\n";
         out << "Notes:\n";
         out << "  - Vector figures use capacity, not just size.\n";
-        out << "  - Hash-map figures are approximate and exclude STL allocator/node overhead.\n";
+        out << "  - Hash-map payload figures exclude STL allocator/node overhead.\n";
+        out << "  - Hash-map node-overhead estimates are rough what-if ranges, not exact measurements.\n";
+        out << "  - glibc mallinfo2 figures describe the allocator, not individual containers.\n";
+        out << "  - /proc smaps_rollup is usually the best breakdown of RSS/PSS/private memory.\n";
         out << "  - Process RSS is the best top-level number; category subtotals are attribution aids.\n";
         out << "  - Some temporary allocations from sorting/searching may not be retained here.\n\n";
 

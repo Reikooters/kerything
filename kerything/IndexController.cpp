@@ -10,7 +10,12 @@
 #include <cctype>
 #include <limits>
 #include <numeric>
+#include <utility>
 #include <unistd.h>
+
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include <QFile>
 #include <QHash>
@@ -286,6 +291,18 @@ namespace {
         return QStringLiteral("%1 B").arg(bytes);
     }
 
+    QString formatBytesPerItem(quint64 bytes, std::size_t count)
+    {
+        if (count == 0) {
+            return QStringLiteral("n/a");
+        }
+
+        const double bytesPerItem =
+            static_cast<double>(bytes) / static_cast<double>(count);
+
+        return QStringLiteral("%1 B").arg(bytesPerItem, 0, 'f', 2);
+    }
+
     template <typename Vector>
     quint64 vectorCapacityBytes(const Vector& vector)
     {
@@ -305,11 +322,70 @@ namespace {
         return static_cast<quint64>(map.size()) * sizeof(typename Map::value_type);
     }
 
+    template <typename Map>
+    quint64 estimatedUnorderedMapNodeOverheadBytes(const Map& map, quint64 overheadPerNode)
+    {
+        return static_cast<quint64>(map.size()) * overheadPerNode;
+    }
+
+    template <typename Map>
+    void writeUnorderedMapOverheadEstimate(QTextStream& out, const Map& map, const QString& indent)
+    {
+        out << indent << "estimated node overhead only, assuming 16/24/32 bytes per node: "
+            << formatBytes(estimatedUnorderedMapNodeOverheadBytes(map, 16))
+            << " / "
+            << formatBytes(estimatedUnorderedMapNodeOverheadBytes(map, 24))
+            << " / "
+            << formatBytes(estimatedUnorderedMapNodeOverheadBytes(map, 32))
+            << '\n';
+
+        out << indent << "estimated payload + buckets + 24-byte node overhead: "
+            << formatBytes(
+                approximateUnorderedMapNodePayloadBytes(map) +
+                approximateUnorderedMapBucketBytes(map) +
+                estimatedUnorderedMapNodeOverheadBytes(map, 24)
+            )
+            << '\n';
+    }
+
+    QString allocatorMemoryText()
+    {
+        QString text;
+        QTextStream out(&text);
+
+        out << "Allocator memory:\n";
+
+#if defined(__GLIBC__)
+        const struct mallinfo2 info = mallinfo2();
+
+        out << "  glibc mallinfo2:\n";
+        out << "    arena: " << formatBytes(static_cast<quint64>(info.arena))
+            << " (non-mmapped heap space)\n";
+        out << "    ordblks: " << info.ordblks
+            << " (free chunks)\n";
+        out << "    hblks: " << info.hblks
+            << " (mmapped regions)\n";
+        out << "    hblkhd: " << formatBytes(static_cast<quint64>(info.hblkhd))
+            << " (mmapped region bytes)\n";
+        out << "    uordblks: " << formatBytes(static_cast<quint64>(info.uordblks))
+            << " (allocated bytes)\n";
+        out << "    fordblks: " << formatBytes(static_cast<quint64>(info.fordblks))
+            << " (free bytes retained by allocator)\n";
+        out << "    keepcost: " << formatBytes(static_cast<quint64>(info.keepcost))
+            << " (top-most releasable bytes estimate)\n";
+#else
+        out << "  unavailable: mallinfo2 is only reported for glibc builds\n";
+#endif
+
+        return text;
+    }
+
     QString processStatusMemoryText()
     {
         const qint64 pid = static_cast<qint64>(::getpid());
         const QString statusPath = QStringLiteral("/proc/%1/status").arg(pid);
         const QString statmPath = QStringLiteral("/proc/%1/statm").arg(pid);
+        const QString smapsRollupPath = QStringLiteral("/proc/%1/smaps_rollup").arg(pid);
 
         QString text;
         QTextStream out(&text);
@@ -411,6 +487,45 @@ namespace {
 
         if (dataBytes) {
             out << "    data + stack: " << formatBytes(*dataBytes) << '\n';
+        }
+
+        QFile smapsRollupFile(smapsRollupPath);
+
+        if (!smapsRollupFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out << "  " << smapsRollupPath << ": unavailable (could not be read)\n";
+            return text;
+        }
+
+        out << "  from " << smapsRollupPath << ":\n";
+
+        const QByteArray smapsRollupContents = smapsRollupFile.readAll();
+        const QList<QByteArray> smapsRollupLines = smapsRollupContents.split('\n');
+
+        bool foundSmapsRollupLine = false;
+
+        for (QByteArray line : smapsRollupLines) {
+            line = line.trimmed();
+
+            if (line.startsWith("Rss:") ||
+                line.startsWith("Pss:") ||
+                line.startsWith("Pss_Dirty:") ||
+                line.startsWith("Shared_Clean:") ||
+                line.startsWith("Shared_Dirty:") ||
+                line.startsWith("Private_Clean:") ||
+                line.startsWith("Private_Dirty:") ||
+                line.startsWith("Referenced:") ||
+                line.startsWith("Anonymous:") ||
+                line.startsWith("AnonHugePages:") ||
+                line.startsWith("Swap:") ||
+                line.startsWith("SwapPss:")) {
+                out << "    " << QString::fromUtf8(line) << '\n';
+                foundSmapsRollupLine = true;
+            }
+        }
+
+        if (!foundSmapsRollupLine) {
+            out << "    no selected smaps_rollup lines found";
+            out << " (read " << smapsRollupContents.size() << " bytes)\n";
         }
 
         return text;
@@ -1420,11 +1535,27 @@ QString IndexController::memoryStatsText() const
     out << processStatusMemoryText();
     out << '\n';
 
+    out << allocatorMemoryText();
+    out << '\n';
+
     out << "Type sizes:\n";
     out << "  sizeof(FileRecord): " << sizeof(FileRecord) << " bytes\n";
     out << "  sizeof(TrigramEntry): " << sizeof(TrigramEntry) << " bytes\n";
     out << "  sizeof(TrigramRange): " << sizeof(TrigramRange) << " bytes\n";
     out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
+    out << "  sizeof(std::vector<uint32_t>): " << sizeof(std::vector<uint32_t>) << " bytes\n";
+    out << "  sizeof(directoryFsIndexToRecordIdx::value_type): "
+        << sizeof(typename decltype(std::declval<DeviceIndex>().directoryFsIndexToRecordIdx)::value_type)
+        << " bytes\n";
+    out << "  sizeof(fsIndexToPrimaryRecordIdx::value_type): "
+        << sizeof(typename decltype(std::declval<DeviceIndex>().fsIndexToPrimaryRecordIdx)::value_type)
+        << " bytes\n";
+    out << "  sizeof(duplicateFsIndexToRecordIndices::value_type): "
+        << sizeof(typename decltype(std::declval<DeviceIndex>().duplicateFsIndexToRecordIndices)::value_type)
+        << " bytes\n";
+    out << "  sizeof(recordsByExtension::value_type): "
+        << sizeof(typename decltype(std::declval<DeviceIndex>().recordsByExtension)::value_type)
+        << " bytes\n";
     out << '\n';
 
     out << "IndexController:\n";
@@ -1444,6 +1575,7 @@ QString IndexController::memoryStatsText() const
     quint64 grandVectorBytes = 0;
     quint64 grandApproxHashPayloadBytes = 0;
     quint64 grandApproxHashBucketBytes = 0;
+    quint64 grandEstimatedHashNodeOverhead24Bytes = 0;
 
     std::size_t grandRecords = 0;
     std::size_t grandFlatTrigrams = 0;
@@ -1452,6 +1584,7 @@ QString IndexController::memoryStatsText() const
     std::size_t grandLowercaseStringBytes = 0;
     std::size_t grandFsIndexStoredRecordRefs = 0;
     std::size_t grandExtensionStoredRecordRefs = 0;
+    std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
     for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
         if (!deviceIndexPtr) {
@@ -1530,9 +1663,16 @@ QString IndexController::memoryStatsText() const
             approximateUnorderedMapBucketBytes(device.duplicateFsIndexToRecordIndices) +
             approximateUnorderedMapBucketBytes(device.recordsByExtension);
 
+        const quint64 deviceEstimatedHashNodeOverhead24Bytes =
+            estimatedUnorderedMapNodeOverheadBytes(device.directoryFsIndexToRecordIdx, 24) +
+            estimatedUnorderedMapNodeOverheadBytes(device.fsIndexToPrimaryRecordIdx, 24) +
+            estimatedUnorderedMapNodeOverheadBytes(device.duplicateFsIndexToRecordIndices, 24) +
+            estimatedUnorderedMapNodeOverheadBytes(device.recordsByExtension, 24);
+
         grandVectorBytes += deviceVectorBytes;
         grandApproxHashPayloadBytes += deviceApproxHashPayloadBytes;
         grandApproxHashBucketBytes += deviceApproxHashBucketBytes;
+        grandEstimatedHashNodeOverhead24Bytes += deviceEstimatedHashNodeOverhead24Bytes;
 
         grandRecords += device.fileRecords.size();
         grandFlatTrigrams += device.trigramPostings.size();
@@ -1541,6 +1681,15 @@ QString IndexController::memoryStatsText() const
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
         grandFsIndexStoredRecordRefs += fsIndexStoredRecordRefs;
         grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
+
+        if (device.isReady && device.isSearchable()) {
+            const std::size_t mountMultiplier = device.mountPoints.isEmpty()
+                ? 1
+                : static_cast<std::size_t>(device.mountPoints.size());
+
+            maxSearchResultsFromReadySearchableDevices +=
+                device.fileRecords.size() * mountMultiplier;
+        }
 
         out << "Device indexId=" << device.indexId << ":\n";
         out << "  label: " << device.label << '\n';
@@ -1615,6 +1764,12 @@ QString IndexController::memoryStatsText() const
                 << '/'
                 << device.directoryFsIndexToRecordIdx.bucket_count()
                 << '\n';
+        writeUnorderedMapOverheadEstimate(
+            out,
+            device.directoryFsIndexToRecordIdx,
+            QStringLiteral("      ")
+        );
+
         out << "    fsIndexToPrimaryRecordIdx entries/buckets: "
                 << device.fsIndexToPrimaryRecordIdx.size()
                 << '/'
@@ -1626,6 +1781,12 @@ QString IndexController::memoryStatsText() const
         out << "      bucket bytes: "
             << formatBytes(fsIndexPrimaryBucketBytes)
             << '\n';
+        writeUnorderedMapOverheadEstimate(
+            out,
+            device.fsIndexToPrimaryRecordIdx,
+            QStringLiteral("      ")
+        );
+
         out << "    duplicateFsIndexToRecordIndices entries/buckets: "
             << device.duplicateFsIndexToRecordIndices.size()
             << '/'
@@ -1637,6 +1798,11 @@ QString IndexController::memoryStatsText() const
         out << "      bucket bytes: "
             << formatBytes(fsIndexDuplicateBucketBytes)
             << '\n';
+        writeUnorderedMapOverheadEstimate(
+            out,
+            device.duplicateFsIndexToRecordIndices,
+            QStringLiteral("      ")
+        );
         out << "      stored record refs total: " << fsIndexStoredRecordRefs << '\n';
         out << "      primary record refs: " << device.fsIndexToPrimaryRecordIdx.size() << '\n';
         out << "      duplicate record refs: " << fsIndexDuplicateStoredRecordRefs << '\n';
@@ -1654,6 +1820,11 @@ QString IndexController::memoryStatsText() const
             << '/'
             << device.recordsByExtension.bucket_count()
             << '\n';
+        writeUnorderedMapOverheadEstimate(
+            out,
+            device.recordsByExtension,
+            QStringLiteral("      ")
+        );
         out << "      stored record refs: " << extensionStoredRecordRefs << '\n';
         out << "      extensionIndexEntryCount: " << device.extensionIndexEntryCount << '\n';
         out << "      extensionIndexLiveDeltaEntries: " << device.extensionIndexLiveDeltaEntries << '\n';
@@ -1667,8 +1838,19 @@ QString IndexController::memoryStatsText() const
             << formatBytes(deviceApproxHashPayloadBytes)
             << '\n';
         out << "    hash bucket bytes: " << formatBytes(deviceApproxHashBucketBytes) << '\n';
+        out << "    estimated hash node overhead, assuming 24 bytes per node: "
+            << formatBytes(deviceEstimatedHashNodeOverhead24Bytes)
+            << '\n';
         out << "    rough accounted subtotal: "
             << formatBytes(deviceVectorBytes + deviceApproxHashPayloadBytes + deviceApproxHashBucketBytes)
+            << '\n';
+        out << "    rough subtotal including 24-byte/node hash overhead estimate: "
+            << formatBytes(
+                deviceVectorBytes +
+                deviceApproxHashPayloadBytes +
+                deviceApproxHashBucketBytes +
+                deviceEstimatedHashNodeOverhead24Bytes
+            )
             << "\n\n";
     }
 
@@ -1685,8 +1867,83 @@ QString IndexController::memoryStatsText() const
         << formatBytes(grandApproxHashPayloadBytes)
         << '\n';
     out << "  hash bucket bytes: " << formatBytes(grandApproxHashBucketBytes) << '\n';
+    out << "  estimated hash node overhead, assuming 24 bytes per node: "
+        << formatBytes(grandEstimatedHashNodeOverhead24Bytes)
+        << '\n';
     out << "  rough accounted index subtotal: "
         << formatBytes(grandVectorBytes + grandApproxHashPayloadBytes + grandApproxHashBucketBytes)
+        << '\n';
+    out << "  rough index subtotal including 24-byte/node hash overhead estimate: "
+        << formatBytes(
+            grandVectorBytes +
+            grandApproxHashPayloadBytes +
+            grandApproxHashBucketBytes +
+            grandEstimatedHashNodeOverhead24Bytes
+        )
+        << '\n';
+
+    out << '\n';
+    out << "  per-record averages:\n";
+    out << "    stringPool used bytes per record: "
+        << formatBytesPerItem(grandStringBytes, grandRecords)
+        << '\n';
+    out << "    lowercaseStringPool used bytes per record: "
+        << formatBytesPerItem(grandLowercaseStringBytes, grandRecords)
+        << '\n';
+    out << "    trigram postings per record: ";
+
+    if (grandRecords == 0) {
+        out << "n/a\n";
+    } else {
+        out << QStringLiteral("%1")
+            .arg(
+                static_cast<double>(grandFlatTrigrams) /
+                static_cast<double>(grandRecords),
+                0,
+                'f',
+                2
+            )
+            << '\n';
+    }
+
+    out << "    vector capacity bytes per record: "
+        << formatBytesPerItem(grandVectorBytes, grandRecords)
+        << '\n';
+    out << "    rough accounted index bytes per record: "
+        << formatBytesPerItem(
+            grandVectorBytes + grandApproxHashPayloadBytes + grandApproxHashBucketBytes,
+            grandRecords
+        )
+        << '\n';
+    out << "    rough index bytes per record including 24-byte/node hash overhead estimate: "
+        << formatBytesPerItem(
+            grandVectorBytes +
+            grandApproxHashPayloadBytes +
+            grandApproxHashBucketBytes +
+            grandEstimatedHashNodeOverhead24Bytes,
+            grandRecords
+        )
+        << '\n';
+
+    out << '\n';
+    out << "  search result handle what-if for ready/searchable indexes:\n";
+    out << "    max result handles: " << maxSearchResultsFromReadySearchableDevices << '\n';
+    out << "    at current sizeof(RecordHandle) "
+        << sizeof(RecordHandle)
+        << " bytes: "
+        << formatBytes(
+            static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) *
+            sizeof(RecordHandle)
+        )
+        << '\n';
+    out << "    at 16 bytes per handle: "
+        << formatBytes(static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) * 16)
+        << '\n';
+    out << "    at 12 bytes per handle: "
+        << formatBytes(static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) * 12)
+        << '\n';
+    out << "    at 8 bytes per handle: "
+        << formatBytes(static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) * 8)
         << '\n';
 
     return text;
@@ -2491,15 +2748,23 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     std::vector<RecordHandle> results;
 
     auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
+        if (index.indexId > std::numeric_limits<uint32_t>::max() ||
+            index.generation > std::numeric_limits<uint32_t>::max()) {
+            return;
+            }
+
+        const auto indexId = static_cast<uint32_t>(index.indexId);
+        const auto generation = static_cast<uint32_t>(index.generation);
+
         if (index.mountPoints.isEmpty()) {
-            results.emplace_back(index.indexId, index.generation, recordIdx, 0xFFFFFFFF);
+            results.emplace_back(indexId, generation, recordIdx, 0xFFFFFFFF);
             return;
         }
 
         for (int mountPointIdx = 0; mountPointIdx < index.mountPoints.size(); ++mountPointIdx) {
             results.emplace_back(
-                index.indexId,
-                index.generation,
+                indexId,
+                generation,
                 recordIdx,
                 static_cast<uint32_t>(mountPointIdx)
             );

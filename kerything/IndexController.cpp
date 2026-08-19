@@ -2318,10 +2318,11 @@ bool IndexController::appendTrigramsForRecord(
         return false;
     }
 
-    const std::string_view name(
-        &deviceIndex.lowercaseStringPool[record.nameOffset],
-        record.nameLen
-    );
+    const std::string_view name = deviceIndex.lowercaseRecordName(record);
+
+    if (name.size() < 3) {
+        return false;
+    }
 
     std::unordered_set<uint32_t> uniqueTrigrams;
     uniqueTrigrams.reserve(record.nameLen);
@@ -3117,19 +3118,15 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     return;
                 }
 
-                if (rec.nameOffset + rec.nameLen > index.lowercaseStringPool.size()) {
+                const std::string_view name = index.lowercaseRecordName(rec);
+                if (name.empty()) {
                     return;
                 }
-
-                const std::string_view name(
-                    &index.lowercaseStringPool[rec.nameOffset],
-                    rec.nameLen
-                );
 
                 if (hasExtensionFilter &&
                     !matchesFileExtensionFilter(rec, name, extensionFilter)) {
                     return;
-                }
+                    }
 
                 appendResult(index, i);
             };
@@ -3281,14 +3278,12 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 return;
             }
 
-            if (rec.nameOffset + rec.nameLen > indexPtr->lowercaseStringPool.size()) {
+            const std::string_view lowercaseName =
+                indexPtr->lowercaseRecordName(rec);
+
+            if (lowercaseName.empty()) {
                 return;
             }
-
-            const std::string_view lowercaseName(
-                &indexPtr->lowercaseStringPool[rec.nameOffset],
-                rec.nameLen
-            );
 
             if (hasExtensionFilter &&
                 !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) {
@@ -3303,10 +3298,20 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 return;
             }
 
-            const std::string_view name(
-                &searchStringPool[rec.nameOffset],
-                rec.nameLen
-            );
+            std::string_view name;
+
+            if (options.matchCase) {
+                if (rec.nameOffset + rec.nameLen > indexPtr->stringPool.size()) {
+                    return;
+                }
+
+                name = std::string_view(
+                    &indexPtr->stringPool[rec.nameOffset],
+                    rec.nameLen
+                );
+            } else {
+                name = lowercaseName;
+            }
 
             for (const auto& queryKeyword : queryKeywords) {
                 const std::string& kw = options.matchCase
@@ -3436,11 +3441,11 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 }
 
                 const auto& record = device->fileRecords[handle.recordIdx];
-                if (record.nameOffset + record.nameLen <= device->lowercaseStringPool.size()) {
-                    key.nameKey = std::string_view(
-                        &device->lowercaseStringPool[record.nameOffset],
-                        record.nameLen
-                    );
+                const std::string_view lowercaseName =
+                    device->lowercaseRecordName(record);
+
+                if (!lowercaseName.empty()) {
+                    key.nameKey = lowercaseName;
                     key.valid = true;
                 }
             }

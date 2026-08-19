@@ -294,6 +294,27 @@ public:
             return std::string_view(&stringPool[record.nameOffset], record.nameLen);
         }
 
+        [[nodiscard]] std::string_view lowercaseRecordName(uint32_t recordIdx) const
+        {
+            if (recordIdx >= fileRecords.size()) {
+                return {};
+            }
+
+            return lowercaseRecordName(fileRecords[recordIdx]);
+        }
+
+        [[nodiscard]] std::string_view lowercaseRecordName(const FileRecord& record) const
+        {
+            if (record.nameOffset + record.nameLen > lowercaseStringPool.size()) {
+                return {};
+            }
+
+            return std::string_view(
+                &lowercaseStringPool[record.nameOffset],
+                record.nameLen
+            );
+        }
+
         void rebuildFsIndexMaps() {
             directoryFsIndexToRecordIdx.clear();
             fsIndexToPrimaryRecordIdx.clear();
@@ -401,8 +422,8 @@ public:
 #endif
 
             auto compareCaseInsensitive = [&](const FileRecord& a, const FileRecord& b) {
-                std::string_view s1(&lowercaseStringPool[a.nameOffset], a.nameLen);
-                std::string_view s2(&lowercaseStringPool[b.nameOffset], b.nameLen);
+                const std::string_view s1 = lowercaseRecordName(a);
+                const std::string_view s2 = lowercaseRecordName(b);
 
                 return std::lexicographical_compare(
                     s1.begin(), s1.end(),
@@ -495,7 +516,11 @@ public:
                     return;
                 }
 
-                std::string_view name(&lowercaseStringPool[rec.nameOffset], rec.nameLen);
+                const std::string_view name = lowercaseRecordName(rec);
+                if (name.size() < 3) {
+                    return;
+                }
+
                 size_t writePos = startOffsets[i];
 
                 for (size_t j = 0; j <= name.length() - 3; ++j) {
@@ -589,14 +614,10 @@ public:
                     continue;
                 }
 
-                if (record.nameOffset + record.nameLen > lowercaseStringPool.size()) {
+                const std::string_view name = lowercaseRecordName(record);
+                if (name.empty()) {
                     continue;
                 }
-
-                const std::string_view name(
-                    &lowercaseStringPool[record.nameOffset],
-                    record.nameLen
-                );
 
                 if (!finalExtension(name).empty()) {
                     ++fileCountWithExtension;
@@ -640,14 +661,10 @@ public:
                 return false;
             }
 
-            if (record.nameOffset + record.nameLen > lowercaseStringPool.size()) {
+            const std::string_view name = lowercaseRecordName(record);
+            if (name.empty()) {
                 return false;
             }
-
-            const std::string_view name(
-                &lowercaseStringPool[record.nameOffset],
-                record.nameLen
-            );
 
             const std::string_view extension = finalExtension(name);
 

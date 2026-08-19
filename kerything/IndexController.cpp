@@ -1778,6 +1778,29 @@ bool IndexController::matchesFileExtensionFilter(
     return extensions.contains(extension);
 }
 
+std::size_t IndexController::maxSearchResultCount() const
+{
+    std::shared_lock lock(indexMutex_);
+
+    std::size_t total = 0;
+
+    for (const auto& [indexId, indexPtr] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
+            continue;
+        }
+
+        const std::size_t mountMultiplier = indexPtr->mountPoints.isEmpty()
+            ? 1
+            : static_cast<std::size_t>(indexPtr->mountPoints.size());
+
+        total += indexPtr->fileRecords.size() * mountMultiplier;
+    }
+
+    return total;
+}
+
 quint8 IndexController::fileRecordFlagsFromLiveUpdateOperation(
     const LiveUpdateOperation& operation)
 {

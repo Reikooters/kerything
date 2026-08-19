@@ -3,6 +3,7 @@
 
 #include <execution>
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <QBuffer>
 #include <QIcon>
@@ -348,17 +349,28 @@ void FileModel::setSearchHighlightTerms(
 
 void FileModel::trimSearchResultsOverCapacity()
 {
-    // For the searchResults_ vector:
-    // > if capacity > size * 1.25 and wasted capacity is at least 16 MiB
-    // then shrink it to reclaim memory.
-    static constexpr std::size_t MaxRetainedResultCapacityRatioNumerator = 5;
-    static constexpr std::size_t MaxRetainedResultCapacityRatioDenominator = 4;
-    static constexpr std::size_t MinWastedResultCapacityBytesToTrim = 16 * 1024 * 1024;
+    // Keep enough capacity for a broad search over the current index, not just
+    // for the current query. During interactive typing, the current result count
+    // can swing from millions to thousands and back again.
+    static constexpr std::size_t RetainedResultSlackBytes = 4 * 1024 * 1024;
+    static constexpr std::size_t MinExcessResultCapacityBytesToTrim = 4 * 1024 * 1024;
 
     const std::size_t resultSize = searchResults_.size();
     const std::size_t resultCapacity = searchResults_.capacity();
 
-    if (resultSize == 0) {
+    const std::size_t retainedSlackHandles =
+        RetainedResultSlackBytes / sizeof(IndexController::RecordHandle);
+
+    const std::size_t minExcessHandlesToTrim =
+        MinExcessResultCapacityBytesToTrim / sizeof(IndexController::RecordHandle);
+
+    std::size_t indexResultCapacityFloor = 0;
+
+    if (controller_ && controller_->indexController()) {
+        indexResultCapacityFloor = controller_->indexController()->maxSearchResultCount();
+    }
+
+    if (resultSize == 0 && indexResultCapacityFloor == 0) {
         if (resultCapacity > 0) {
             std::vector<IndexController::RecordHandle>{}.swap(searchResults_);
         }
@@ -366,17 +378,21 @@ void FileModel::trimSearchResultsOverCapacity()
         return;
     }
 
-    const std::size_t wastedCapacity = resultCapacity > resultSize
-        ? resultCapacity - resultSize
-        : 0;
-    const std::size_t wastedBytes =
-        wastedCapacity * sizeof(IndexController::RecordHandle);
+    const std::size_t retainedCapacity =
+        std::max(resultSize, indexResultCapacityFloor) + retainedSlackHandles;
 
-    if (resultCapacity > (resultSize * MaxRetainedResultCapacityRatioNumerator) /
-                         MaxRetainedResultCapacityRatioDenominator &&
-        wastedBytes >= MinWastedResultCapacityBytesToTrim) {
-        searchResults_.shrink_to_fit();
+    if (resultCapacity <= retainedCapacity + minExcessHandlesToTrim) {
+        return;
     }
+
+    std::vector<IndexController::RecordHandle> trimmed;
+    trimmed.reserve(retainedCapacity);
+    trimmed.assign(
+        std::make_move_iterator(searchResults_.begin()),
+        std::make_move_iterator(searchResults_.end())
+    );
+
+    searchResults_.swap(trimmed);
 }
 
 void FileModel::setSearchResults(std::vector<IndexController::RecordHandle> newResults)

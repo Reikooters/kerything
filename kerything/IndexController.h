@@ -873,6 +873,14 @@ public:
         const ExtensionSet& extensions
     );
 
+    /**
+     * @brief Returns the current upper bound for displayed search-result handles.
+     *
+     * This includes only ready/searchable indexes and accounts for mount-point
+     * multiplication, because one indexed record can produce one row per mount point.
+     */
+    [[nodiscard]] std::size_t maxSearchResultCount() const;
+
 Q_SIGNALS:
     void deviceRemoved(quint64 indexId);
 

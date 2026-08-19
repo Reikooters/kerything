@@ -3151,6 +3151,10 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
         return results;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
+    const auto sortStart = Clock::now();
+#endif
+
     static constexpr std::size_t ParallelSortThreshold = 500;
 
     auto handleLess = [](const RecordHandle& a, const RecordHandle& b) {
@@ -3361,13 +3365,28 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
         return results;
     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
+    const auto applyStart = Clock::now();
+#endif
+
     scratch.sortedResults.resize(results.size());
 
-    for (size_t i = 0; i < resultsOrder.size(); ++i) {
+    for (std::size_t i = 0; i < resultsOrder.size(); ++i) {
         scratch.sortedResults[i] = std::move(results[resultsOrder[i]]);
     }
 
     results.swap(scratch.sortedResults);
+    std::vector<RecordHandle>{}.swap(scratch.sortedResults);
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "sortSearchResults"
+              << " results=" << results.size()
+              << " column=" << column
+              << " applyOrderMs=" << elapsedMsSince(applyStart)
+              << " totalMs=" << elapsedMsSince(sortStart)
+              << "\n";
+#endif
+
     return results;
 }
 

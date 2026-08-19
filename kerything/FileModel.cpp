@@ -606,6 +606,14 @@ QString FileModel::memoryStatsText() const
         )
         << ")\n";
 
+    const quint64 temporaryFullSortGatherBufferBytes =
+        static_cast<quint64>(searchResults_.size()) *
+        sizeof(IndexController::RecordHandle);
+
+    out << "  temporary full-result gather buffer used during sort: up to "
+        << formatModelBytes(temporaryFullSortGatherBufferBytes)
+        << '\n';
+
     out << "  rough accounted model subtotal: "
         << formatModelBytes(modelSubtotalBytes)
         << '\n';

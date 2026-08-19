@@ -757,8 +757,8 @@ public:
     };
 
     struct RecordHandle {
-        quint64 indexId;
-        quint64 generation;
+        uint32_t indexId;
+        uint32_t generation;
         uint32_t recordIdx;
 
         // Index into DeviceIndex::mountPoints.

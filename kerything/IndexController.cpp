@@ -2751,7 +2751,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         if (index.indexId > std::numeric_limits<uint32_t>::max() ||
             index.generation > std::numeric_limits<uint32_t>::max()) {
             return;
-            }
+        }
 
         const auto indexId = static_cast<uint32_t>(index.indexId);
         const auto generation = static_cast<uint32_t>(index.generation);

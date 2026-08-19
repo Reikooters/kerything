@@ -310,6 +310,81 @@ namespace {
         return static_cast<quint64>(vector.capacity()) * sizeof(ValueType);
     }
 
+    struct LowercasePoolOpportunity {
+        std::size_t validRecords = 0;
+        std::size_t invalidStringRefs = 0;
+
+        std::size_t recordsWithAsciiUppercase = 0;
+        std::size_t recordsWithoutAsciiUppercase = 0;
+
+        std::size_t nameBytesWithAsciiUppercase = 0;
+        std::size_t nameBytesWithoutAsciiUppercase = 0;
+        std::size_t asciiUppercaseByteCount = 0;
+
+        [[nodiscard]] std::size_t sparseLowercasePoolBytes() const noexcept
+        {
+            return nameBytesWithAsciiUppercase;
+        }
+
+        [[nodiscard]] std::size_t totalNameBytes() const noexcept
+        {
+            return nameBytesWithAsciiUppercase + nameBytesWithoutAsciiUppercase;
+        }
+    };
+
+    bool containsAsciiUppercase(std::string_view text, std::size_t* uppercaseByteCount = nullptr)
+    {
+        bool found = false;
+
+        for (const unsigned char c : text) {
+            if (c >= 'A' && c <= 'Z') {
+                found = true;
+
+                if (uppercaseByteCount) {
+                    ++(*uppercaseByteCount);
+                }
+            }
+        }
+
+        return found;
+    }
+
+    LowercasePoolOpportunity calculateLowercasePoolOpportunity(
+        const IndexController::DeviceIndex& device)
+    {
+        LowercasePoolOpportunity opportunity;
+
+        for (const FileRecord& record : device.fileRecords) {
+            if (record.nameOffset + record.nameLen > device.stringPool.size()) {
+                ++opportunity.invalidStringRefs;
+                continue;
+            }
+
+            ++opportunity.validRecords;
+
+            const std::string_view name(
+                &device.stringPool[record.nameOffset],
+                record.nameLen
+            );
+
+            std::size_t uppercaseByteCount = 0;
+            const bool hasAsciiUppercase =
+                containsAsciiUppercase(name, &uppercaseByteCount);
+
+            opportunity.asciiUppercaseByteCount += uppercaseByteCount;
+
+            if (hasAsciiUppercase) {
+                ++opportunity.recordsWithAsciiUppercase;
+                opportunity.nameBytesWithAsciiUppercase += record.nameLen;
+            } else {
+                ++opportunity.recordsWithoutAsciiUppercase;
+                opportunity.nameBytesWithoutAsciiUppercase += record.nameLen;
+            }
+        }
+
+        return opportunity;
+    }
+
     template <typename Map>
     quint64 approximateUnorderedMapBucketBytes(const Map& map)
     {
@@ -1586,6 +1661,14 @@ QString IndexController::memoryStatsText() const
     std::size_t grandExtensionStoredRecordRefs = 0;
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
+    std::size_t grandLowercaseValidRecords = 0;
+    std::size_t grandLowercaseInvalidStringRefs = 0;
+    std::size_t grandRecordsWithAsciiUppercase = 0;
+    std::size_t grandRecordsWithoutAsciiUppercase = 0;
+    std::size_t grandNameBytesWithAsciiUppercase = 0;
+    std::size_t grandNameBytesWithoutAsciiUppercase = 0;
+    std::size_t grandAsciiUppercaseByteCount = 0;
+
     for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
         if (!deviceIndexPtr) {
             continue;
@@ -1600,6 +1683,28 @@ QString IndexController::memoryStatsText() const
         const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
         const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
+
+        const LowercasePoolOpportunity lowercaseOpportunity =
+            calculateLowercasePoolOpportunity(device);
+
+        const quint64 sparseLowercasePoolBytes =
+            static_cast<quint64>(lowercaseOpportunity.sparseLowercasePoolBytes());
+
+        const quint64 lowercasePoolOnlySavingBytes =
+            lowercaseStringPoolBytes > sparseLowercasePoolBytes
+                ? lowercaseStringPoolBytes - sparseLowercasePoolBytes
+                : 0;
+
+        const quint64 perRecordUint32MetadataBytes =
+            static_cast<quint64>(device.fileRecords.size()) * sizeof(uint32_t);
+
+        const quint64 sparseLowercaseWithPerRecordUint32Bytes =
+            sparseLowercasePoolBytes + perRecordUint32MetadataBytes;
+
+        const quint64 lowercaseSavingWithPerRecordUint32Bytes =
+            lowercaseStringPoolBytes > sparseLowercaseWithPerRecordUint32Bytes
+                ? lowercaseStringPoolBytes - sparseLowercaseWithPerRecordUint32Bytes
+                : 0;
 
         quint64 fsIndexDuplicateVectorObjectBytes = 0;
         quint64 fsIndexDuplicateVectorStorageBytes = 0;
@@ -1682,6 +1787,14 @@ QString IndexController::memoryStatsText() const
         grandFsIndexStoredRecordRefs += fsIndexStoredRecordRefs;
         grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
 
+        grandLowercaseValidRecords += lowercaseOpportunity.validRecords;
+        grandLowercaseInvalidStringRefs += lowercaseOpportunity.invalidStringRefs;
+        grandRecordsWithAsciiUppercase += lowercaseOpportunity.recordsWithAsciiUppercase;
+        grandRecordsWithoutAsciiUppercase += lowercaseOpportunity.recordsWithoutAsciiUppercase;
+        grandNameBytesWithAsciiUppercase += lowercaseOpportunity.nameBytesWithAsciiUppercase;
+        grandNameBytesWithoutAsciiUppercase += lowercaseOpportunity.nameBytesWithoutAsciiUppercase;
+        grandAsciiUppercaseByteCount += lowercaseOpportunity.asciiUppercaseByteCount;
+
         if (device.isReady && device.isSearchable()) {
             const std::size_t mountMultiplier = device.mountPoints.isEmpty()
                 ? 1
@@ -1727,6 +1840,44 @@ QString IndexController::memoryStatsText() const
             << device.lowercaseStringPool.capacity()
             << " => "
             << formatBytes(lowercaseStringPoolBytes)
+            << '\n';
+        out << "      sparse lowercase opportunity:\n";
+        out << "        valid records measured: "
+            << lowercaseOpportunity.validRecords
+            << '\n';
+        out << "        invalid string refs skipped: "
+            << lowercaseOpportunity.invalidStringRefs
+            << '\n';
+        out << "        records with ASCII uppercase: "
+            << lowercaseOpportunity.recordsWithAsciiUppercase
+            << '\n';
+        out << "        records without ASCII uppercase: "
+            << lowercaseOpportunity.recordsWithoutAsciiUppercase
+            << '\n';
+        out << "        ASCII uppercase bytes: "
+            << lowercaseOpportunity.asciiUppercaseByteCount
+            << '\n';
+        out << "        name bytes needing lowercase copy: "
+            << lowercaseOpportunity.nameBytesWithAsciiUppercase
+            << " => "
+            << formatBytes(static_cast<quint64>(lowercaseOpportunity.nameBytesWithAsciiUppercase))
+            << '\n';
+        out << "        name bytes reusable from original stringPool: "
+            << lowercaseOpportunity.nameBytesWithoutAsciiUppercase
+            << " => "
+            << formatBytes(static_cast<quint64>(lowercaseOpportunity.nameBytesWithoutAsciiUppercase))
+            << '\n';
+        out << "        estimated sparse lowercase pool bytes: "
+            << formatBytes(sparseLowercasePoolBytes)
+            << '\n';
+        out << "        estimated saving, pool only: "
+            << formatBytes(lowercasePoolOnlySavingBytes)
+            << '\n';
+        out << "        estimated per-record uint32 metadata: "
+            << formatBytes(perRecordUint32MetadataBytes)
+            << '\n';
+        out << "        estimated saving, pool plus per-record uint32 metadata: "
+            << formatBytes(lowercaseSavingWithPerRecordUint32Bytes)
             << '\n';
         out << "    deletedRecordBitmap size/capacity: "
                 << device.deletedRecordBitmap.size()
@@ -1923,6 +2074,71 @@ QString IndexController::memoryStatsText() const
             grandEstimatedHashNodeOverhead24Bytes,
             grandRecords
         )
+        << '\n';
+
+    const quint64 grandSparseLowercasePoolBytes =
+        static_cast<quint64>(grandNameBytesWithAsciiUppercase);
+
+    const quint64 grandLowercasePoolCurrentBytes =
+        static_cast<quint64>(grandLowercaseStringBytes);
+
+    const quint64 grandLowercasePoolOnlySavingBytes =
+        grandLowercasePoolCurrentBytes > grandSparseLowercasePoolBytes
+            ? grandLowercasePoolCurrentBytes - grandSparseLowercasePoolBytes
+            : 0;
+
+    const quint64 grandPerRecordUint32MetadataBytes =
+        static_cast<quint64>(grandRecords) * sizeof(uint32_t);
+
+    const quint64 grandSparseLowercaseWithPerRecordUint32Bytes =
+        grandSparseLowercasePoolBytes + grandPerRecordUint32MetadataBytes;
+
+    const quint64 grandLowercaseSavingWithPerRecordUint32Bytes =
+        grandLowercasePoolCurrentBytes > grandSparseLowercaseWithPerRecordUint32Bytes
+            ? grandLowercasePoolCurrentBytes - grandSparseLowercaseWithPerRecordUint32Bytes
+            : 0;
+
+    out << '\n';
+    out << "  sparse lowercase pool opportunity:\n";
+    out << "    valid records measured: "
+        << grandLowercaseValidRecords
+        << '\n';
+    out << "    invalid string refs skipped: "
+        << grandLowercaseInvalidStringRefs
+        << '\n';
+    out << "    records with ASCII uppercase: "
+        << grandRecordsWithAsciiUppercase
+        << '\n';
+    out << "    records without ASCII uppercase: "
+        << grandRecordsWithoutAsciiUppercase
+        << '\n';
+    out << "    ASCII uppercase bytes: "
+        << grandAsciiUppercaseByteCount
+        << '\n';
+    out << "    name bytes needing lowercase copy: "
+        << grandNameBytesWithAsciiUppercase
+        << " => "
+        << formatBytes(static_cast<quint64>(grandNameBytesWithAsciiUppercase))
+        << '\n';
+    out << "    name bytes reusable from original stringPool: "
+        << grandNameBytesWithoutAsciiUppercase
+        << " => "
+        << formatBytes(static_cast<quint64>(grandNameBytesWithoutAsciiUppercase))
+        << '\n';
+    out << "    current lowercaseStringPool used bytes: "
+        << formatBytes(grandLowercasePoolCurrentBytes)
+        << '\n';
+    out << "    estimated sparse lowercase pool bytes: "
+        << formatBytes(grandSparseLowercasePoolBytes)
+        << '\n';
+    out << "    estimated saving, pool only: "
+        << formatBytes(grandLowercasePoolOnlySavingBytes)
+        << '\n';
+    out << "    estimated per-record uint32 metadata: "
+        << formatBytes(grandPerRecordUint32MetadataBytes)
+        << '\n';
+    out << "    estimated saving, pool plus per-record uint32 metadata: "
+        << formatBytes(grandLowercaseSavingWithPerRecordUint32Bytes)
         << '\n';
 
     out << '\n';

@@ -664,6 +664,7 @@ quint64 IndexController::addDevice(
             deviceIndex.stringPool.clear();
             deviceIndex.deletedRecordBitmap.clear();
             deviceIndex.lowercaseStringPool.clear();
+            deviceIndex.lowercaseNameOffsetByRecord.clear();
             deviceIndex.trigramRanges.clear();
             deviceIndex.trigramPostings.clear();
             deviceIndex.liveDeltaFlatIndex.clear();
@@ -1140,6 +1141,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         );
 
         std::size_t stringBytesToAppend = 0;
+        std::size_t lowercaseStringBytesToAppend = 0;
         std::size_t estimatedTrigramsToAppend = 0;
 
         for (const LiveUpdateOperation& operation : pendingUpserts) {
@@ -1147,6 +1149,19 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             const std::size_t nameSize = static_cast<std::size_t>(nameUtf8.size());
 
             stringBytesToAppend += nameSize;
+
+            bool hasAsciiUppercase = false;
+
+            for (const unsigned char c : nameUtf8) {
+                if (c >= 'A' && c <= 'Z') {
+                    hasAsciiUppercase = true;
+                    break;
+                }
+            }
+
+            if (hasAsciiUppercase) {
+                lowercaseStringBytesToAppend += nameSize;
+            }
 
             if (nameSize >= 3) {
                 estimatedTrigramsToAppend += nameSize - 2;
@@ -1166,7 +1181,11 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         );
 
         targetIndex->lowercaseStringPool.reserve(
-            targetIndex->lowercaseStringPool.size() + stringBytesToAppend
+            targetIndex->lowercaseStringPool.size() + lowercaseStringBytesToAppend
+        );
+
+        targetIndex->lowercaseNameOffsetByRecord.reserve(
+            targetIndex->lowercaseNameOffsetByRecord.size() + pendingUpserts.size()
         );
 
         targetIndex->liveDeltaFlatIndex.reserve(
@@ -1182,6 +1201,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                   << " reserved upsert storage"
                   << " pendingUpserts=" << pendingUpserts.size()
                   << " stringBytesToAppend=" << stringBytesToAppend
+                  << " lowercaseStringBytesToAppend=" << lowercaseStringBytesToAppend
                   << " estimatedTrigramsToAppend=" << estimatedTrigramsToAppend
                   << " fileRecords size/capacity="
                   << targetIndex->fileRecords.size()
@@ -1657,6 +1677,7 @@ QString IndexController::memoryStatsText() const
     std::size_t grandLiveDeltaTrigrams = 0;
     std::size_t grandStringBytes = 0;
     std::size_t grandLowercaseStringBytes = 0;
+    std::size_t grandLowercaseNameOffsetEntries = 0;
     std::size_t grandFsIndexStoredRecordRefs = 0;
     std::size_t grandExtensionStoredRecordRefs = 0;
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
@@ -1679,6 +1700,8 @@ QString IndexController::memoryStatsText() const
         const quint64 fileRecordsBytes = vectorCapacityBytes(device.fileRecords);
         const quint64 stringPoolBytes = vectorCapacityBytes(device.stringPool);
         const quint64 lowercaseStringPoolBytes = vectorCapacityBytes(device.lowercaseStringPool);
+        const quint64 lowercaseNameOffsetByRecordBytes =
+            vectorCapacityBytes(device.lowercaseNameOffsetByRecord);
         const quint64 deletedBitmapBytes = vectorCapacityBytes(device.deletedRecordBitmap);
         const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
         const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
@@ -1746,6 +1769,7 @@ QString IndexController::memoryStatsText() const
             fileRecordsBytes +
             stringPoolBytes +
             lowercaseStringPoolBytes +
+            lowercaseNameOffsetByRecordBytes +
             deletedBitmapBytes +
             trigramRangesBytes +
             trigramPostingsBytes +
@@ -1784,6 +1808,7 @@ QString IndexController::memoryStatsText() const
         grandLiveDeltaTrigrams += device.liveDeltaFlatIndex.size();
         grandStringBytes += device.stringPool.size();
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
+        grandLowercaseNameOffsetEntries += device.lowercaseNameOffsetByRecord.size();
         grandFsIndexStoredRecordRefs += fsIndexStoredRecordRefs;
         grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
 
@@ -1840,6 +1865,13 @@ QString IndexController::memoryStatsText() const
             << device.lowercaseStringPool.capacity()
             << " => "
             << formatBytes(lowercaseStringPoolBytes)
+            << '\n';
+        out << "    lowercaseNameOffsetByRecord size/capacity: "
+            << device.lowercaseNameOffsetByRecord.size()
+            << '/'
+            << device.lowercaseNameOffsetByRecord.capacity()
+            << " => "
+            << formatBytes(lowercaseNameOffsetByRecordBytes)
             << '\n';
         out << "      sparse lowercase opportunity:\n";
         out << "        valid records measured: "
@@ -2009,6 +2041,9 @@ QString IndexController::memoryStatsText() const
     out << "  file records: " << grandRecords << '\n';
     out << "  stringPool bytes used: " << grandStringBytes << '\n';
     out << "  lowercaseStringPool bytes used: " << grandLowercaseStringBytes << '\n';
+    out << "  lowercaseNameOffsetByRecord entries: "
+        << grandLowercaseNameOffsetEntries
+        << '\n';
     out << "  trigram posting entries: " << grandFlatTrigrams << '\n';
     out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
     out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';
@@ -2082,20 +2117,26 @@ QString IndexController::memoryStatsText() const
     const quint64 grandLowercasePoolCurrentBytes =
         static_cast<quint64>(grandLowercaseStringBytes);
 
+    const quint64 grandOldFullLowercaseMirrorBytes =
+        static_cast<quint64>(
+            grandNameBytesWithAsciiUppercase +
+            grandNameBytesWithoutAsciiUppercase
+        );
+
     const quint64 grandLowercasePoolOnlySavingBytes =
-        grandLowercasePoolCurrentBytes > grandSparseLowercasePoolBytes
-            ? grandLowercasePoolCurrentBytes - grandSparseLowercasePoolBytes
+        grandOldFullLowercaseMirrorBytes > grandLowercasePoolCurrentBytes
+            ? grandOldFullLowercaseMirrorBytes - grandLowercasePoolCurrentBytes
             : 0;
 
     const quint64 grandPerRecordUint32MetadataBytes =
         static_cast<quint64>(grandRecords) * sizeof(uint32_t);
 
     const quint64 grandSparseLowercaseWithPerRecordUint32Bytes =
-        grandSparseLowercasePoolBytes + grandPerRecordUint32MetadataBytes;
+        grandLowercasePoolCurrentBytes + grandPerRecordUint32MetadataBytes;
 
     const quint64 grandLowercaseSavingWithPerRecordUint32Bytes =
-        grandLowercasePoolCurrentBytes > grandSparseLowercaseWithPerRecordUint32Bytes
-            ? grandLowercasePoolCurrentBytes - grandSparseLowercaseWithPerRecordUint32Bytes
+        grandOldFullLowercaseMirrorBytes > grandSparseLowercaseWithPerRecordUint32Bytes
+            ? grandOldFullLowercaseMirrorBytes - grandSparseLowercaseWithPerRecordUint32Bytes
             : 0;
 
     out << '\n';
@@ -2125,13 +2166,21 @@ QString IndexController::memoryStatsText() const
         << " => "
         << formatBytes(static_cast<quint64>(grandNameBytesWithoutAsciiUppercase))
         << '\n';
-    out << "    current lowercaseStringPool used bytes: "
+    out << "    current sparse lowercaseStringPool used bytes: "
         << formatBytes(grandLowercasePoolCurrentBytes)
         << '\n';
-    out << "    estimated sparse lowercase pool bytes: "
+    out << "    measured name bytes requiring lowercase copies: "
         << formatBytes(grandSparseLowercasePoolBytes)
         << '\n';
-    out << "    estimated saving, pool only: "
+    out << "    old full lowercase mirror would have used: "
+        << formatBytes(
+            static_cast<quint64>(
+                grandNameBytesWithAsciiUppercase +
+                grandNameBytesWithoutAsciiUppercase
+            )
+        )
+        << '\n';
+    out << "    estimated saving vs old full lowercase mirror, pool only: "
         << formatBytes(grandLowercasePoolOnlySavingBytes)
         << '\n';
     out << "    estimated per-record uint32 metadata: "
@@ -2299,6 +2348,41 @@ void IndexController::updateFileRecordMetadataFromLiveUpdateOperation(
     record.flags = fileRecordFlagsFromLiveUpdateOperation(operation);
 }
 
+uint32_t IndexController::appendSparseLowercaseName(
+    DeviceIndex& deviceIndex,
+    std::string_view name)
+{
+    bool hasAsciiUppercase = false;
+
+    for (const unsigned char c : name) {
+        if (c >= 'A' && c <= 'Z') {
+            hasAsciiUppercase = true;
+            break;
+        }
+    }
+
+    if (!hasAsciiUppercase) {
+        return DeviceIndex::NoLowercaseNameOverride;
+    }
+
+    const uint32_t lowercaseOffset =
+        static_cast<uint32_t>(deviceIndex.lowercaseStringPool.size());
+
+    deviceIndex.lowercaseStringPool.reserve(
+        deviceIndex.lowercaseStringPool.size() + name.size()
+    );
+
+    for (const unsigned char c : name) {
+        deviceIndex.lowercaseStringPool.push_back(
+            (c >= 'A' && c <= 'Z')
+                ? static_cast<char>(c | 32)
+                : static_cast<char>(c)
+        );
+    }
+
+    return lowercaseOffset;
+}
+
 bool IndexController::appendTrigramsForRecord(
     DeviceIndex& deviceIndex,
     uint32_t recordIdx,
@@ -2310,15 +2394,11 @@ bool IndexController::appendTrigramsForRecord(
 
     const FileRecord& record = deviceIndex.fileRecords[recordIdx];
 
-    if (record.nameOffset + record.nameLen > deviceIndex.lowercaseStringPool.size()) {
-        return false;
-    }
-
     if (record.nameLen < 3) {
         return false;
     }
 
-    const std::string_view name = deviceIndex.lowercaseRecordName(record);
+    const std::string_view name = deviceIndex.lowercaseRecordName(record, recordIdx);
 
     if (name.size() < 3) {
         return false;
@@ -2394,10 +2474,9 @@ void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceInd
             continue;
         }
 
-        const FileRecord& record = deviceIndex.fileRecords[recordIdx];
-        if (record.nameLen >= 3 &&
-            record.nameOffset + record.nameLen <= deviceIndex.lowercaseStringPool.size()) {
-            estimatedTrigrams += record.nameLen - 2;
+        const std::string_view name = deviceIndex.lowercaseRecordName(recordIdx);
+        if (name.size() >= 3) {
+            estimatedTrigrams += name.size() - 2;
         }
     }
 
@@ -2550,6 +2629,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     const std::size_t oldFileRecordCapacity = deviceIndex.fileRecords.capacity();
     const std::size_t oldStringPoolCapacity = deviceIndex.stringPool.capacity();
     const std::size_t oldLowercaseStringPoolCapacity = deviceIndex.lowercaseStringPool.capacity();
+    const std::size_t oldLowercaseNameOffsetCapacity = deviceIndex.lowercaseNameOffsetByRecord.capacity();
     const std::size_t oldDeletedBitmapCapacity = deviceIndex.deletedRecordBitmap.capacity();
     const std::size_t oldLiveDeltaCapacity = deviceIndex.liveDeltaFlatIndex.capacity();
 
@@ -2593,17 +2673,16 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         nameUtf8.end()
     );
 
-    deviceIndex.lowercaseStringPool.reserve(
-        deviceIndex.lowercaseStringPool.size() + static_cast<std::size_t>(nameUtf8.size())
+    const std::string_view nameView(
+        nameUtf8.constData(),
+        static_cast<std::size_t>(nameUtf8.size())
     );
 
-    for (const unsigned char c : nameUtf8) {
-        deviceIndex.lowercaseStringPool.push_back(
-            (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 32) : static_cast<char>(c)
-        );
-    }
+    const uint32_t lowercaseNameOffset =
+        appendSparseLowercaseName(deviceIndex, nameView);
 
     deviceIndex.fileRecords.push_back(record);
+    deviceIndex.lowercaseNameOffsetByRecord.push_back(lowercaseNameOffset);
     deviceIndex.deletedRecordBitmap.push_back(0);
 
     const auto [primaryIt, inserted] =
@@ -2624,11 +2703,12 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
 
 #ifdef KERYTHING_ENABLE_LOGGING
     if (elapsedMs >= 25 ||
-        oldFileRecordCapacity != deviceIndex.fileRecords.capacity() ||
-        oldStringPoolCapacity != deviceIndex.stringPool.capacity() ||
-        oldLowercaseStringPoolCapacity != deviceIndex.lowercaseStringPool.capacity() ||
-        oldDeletedBitmapCapacity != deviceIndex.deletedRecordBitmap.capacity() ||
-        oldLiveDeltaCapacity != deviceIndex.liveDeltaFlatIndex.capacity()) {
+    oldFileRecordCapacity != deviceIndex.fileRecords.capacity() ||
+    oldStringPoolCapacity != deviceIndex.stringPool.capacity() ||
+    oldLowercaseStringPoolCapacity != deviceIndex.lowercaseStringPool.capacity() ||
+    oldLowercaseNameOffsetCapacity != deviceIndex.lowercaseNameOffsetByRecord.capacity() ||
+    oldDeletedBitmapCapacity != deviceIndex.deletedRecordBitmap.capacity() ||
+    oldLiveDeltaCapacity != deviceIndex.liveDeltaFlatIndex.capacity()) {
         std::cerr << "appendRecordFromLiveUpdateOperation"
                   << " name=" << operation.name.toStdString()
                   << " elapsed=" << elapsedMs << "ms"
@@ -2644,6 +2724,10 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
                   << oldLowercaseStringPoolCapacity
                   << " -> "
                   << deviceIndex.lowercaseStringPool.capacity()
+                  << " lowercaseNameOffsetByRecord capacity "
+                  << oldLowercaseNameOffsetCapacity
+                  << " -> "
+                  << deviceIndex.lowercaseNameOffsetByRecord.capacity()
                   << " deletedBitmap capacity "
                   << oldDeletedBitmapCapacity
                   << " -> "
@@ -2768,15 +2852,23 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
         nameUtf8.end()
     );
 
-    deviceIndex.lowercaseStringPool.reserve(
-        deviceIndex.lowercaseStringPool.size() + static_cast<std::size_t>(nameUtf8.size())
+    const std::string_view nameView(
+        nameUtf8.constData(),
+        static_cast<std::size_t>(nameUtf8.size())
     );
 
-    for (const unsigned char c : nameUtf8) {
-        deviceIndex.lowercaseStringPool.push_back(
-            (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 32) : static_cast<char>(c)
+    const uint32_t lowercaseNameOffset =
+        appendSparseLowercaseName(deviceIndex, nameView);
+
+    if (recordIdx >= deviceIndex.lowercaseNameOffsetByRecord.size()) {
+        deviceIndex.lowercaseNameOffsetByRecord.resize(
+            deviceIndex.fileRecords.size(),
+            DeviceIndex::NoLowercaseNameOverride
         );
     }
+
+    deviceIndex.lowercaseNameOffsetByRecord[recordIdx] =
+        lowercaseNameOffset;
 
     record.parentFsIndex = operation.parentInode;
     record.parentRecordIdx = parentRecordIdx;
@@ -3279,7 +3371,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             }
 
             const std::string_view lowercaseName =
-                indexPtr->lowercaseRecordName(rec);
+                indexPtr->lowercaseRecordName(rec, recordIdx);
 
             if (lowercaseName.empty()) {
                 return;
@@ -3287,14 +3379,6 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
             if (hasExtensionFilter &&
                 !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) {
-                return;
-            }
-
-            const std::vector<char>& searchStringPool = options.matchCase
-                    ? indexPtr->stringPool
-                    : indexPtr->lowercaseStringPool;
-
-            if (rec.nameOffset + rec.nameLen > searchStringPool.size()) {
                 return;
             }
 

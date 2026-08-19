@@ -126,8 +126,15 @@ public:
         std::unordered_map<uint64_t, std::vector<uint32_t>> duplicateFsIndexToRecordIndices;
         mutable std::vector<uint32_t> fsIndexLookupScratch;
 
-        // Lowercase mirror of the string pool for sorting and searching
+        // Lowercase mirror of names that require ASCII case folding.
+        //
+        // lowercaseNameOffsetByRecord[recordIdx] == NoLowercaseNameOverride means
+        // the original stringPool name already contains no ASCII uppercase bytes
+        // and can be used directly for case-insensitive search/sort.
+        static constexpr uint32_t NoLowercaseNameOverride = 0xFFFFFFFF;
+
         std::vector<char> lowercaseStringPool;
+        std::vector<uint32_t> lowercaseNameOffsetByRecord;
 
         // Compact full-scan trigram index.
         //
@@ -300,19 +307,52 @@ public:
                 return {};
             }
 
-            return lowercaseRecordName(fileRecords[recordIdx]);
+            return lowercaseRecordName(fileRecords[recordIdx], recordIdx);
         }
 
-        [[nodiscard]] std::string_view lowercaseRecordName(const FileRecord& record) const
-        {
-            if (record.nameOffset + record.nameLen > lowercaseStringPool.size()) {
+        [[nodiscard]] std::string_view lowercaseRecordName(
+            const FileRecord& record,
+            uint32_t recordIdx
+        ) const {
+            if (recordIdx >= lowercaseNameOffsetByRecord.size()) {
+                return {};
+            }
+
+            const uint32_t lowercaseOffset = lowercaseNameOffsetByRecord[recordIdx];
+
+            if (lowercaseOffset == NoLowercaseNameOverride) {
+                if (record.nameOffset + record.nameLen > stringPool.size()) {
+                    return {};
+                }
+
+                return std::string_view(
+                    &stringPool[record.nameOffset],
+                    record.nameLen
+                );
+            }
+
+            if (lowercaseOffset + record.nameLen > lowercaseStringPool.size()) {
                 return {};
             }
 
             return std::string_view(
-                &lowercaseStringPool[record.nameOffset],
+                &lowercaseStringPool[lowercaseOffset],
                 record.nameLen
             );
+        }
+
+        [[nodiscard]] std::string_view lowercaseRecordName(const FileRecord& record) const
+        {
+            const auto recordPtr = &record;
+            const auto begin = fileRecords.data();
+            const auto end = begin + fileRecords.size();
+
+            if (recordPtr < begin || recordPtr >= end) {
+                return {};
+            }
+
+            const uint32_t recordIdx = static_cast<uint32_t>(recordPtr - begin);
+            return lowercaseRecordName(record, recordIdx);
         }
 
         void rebuildFsIndexMaps() {
@@ -401,15 +441,87 @@ public:
         }
 
         void buildLowercaseStringPool() {
-            // Reserve memory once
-            lowercaseStringPool.resize(stringPool.size());
+            lowercaseStringPool.clear();
+            lowercaseNameOffsetByRecord.clear();
 
-            // Convert the string pool to lowercase in parallel and store it in lowercaseStringPool
-            std::transform(std::execution::par_unseq, stringPool.begin(), stringPool.end(),
-                      lowercaseStringPool.begin(),
-                           [](unsigned char c) {
-                               return (c >= 'A' && c <= 'Z') ? (c | 32) : c;
-                           });
+            lowercaseNameOffsetByRecord.resize(
+                fileRecords.size(),
+                NoLowercaseNameOverride
+            );
+
+            std::size_t bytesNeedingLowercaseCopy = 0;
+
+            for (const FileRecord& record : fileRecords) {
+                if (record.nameOffset + record.nameLen > stringPool.size()) {
+                    continue;
+                }
+
+                const std::string_view name(
+                    &stringPool[record.nameOffset],
+                    record.nameLen
+                );
+
+                bool hasAsciiUppercase = false;
+
+                for (const unsigned char c : name) {
+                    if (c >= 'A' && c <= 'Z') {
+                        hasAsciiUppercase = true;
+                        break;
+                    }
+                }
+
+                if (hasAsciiUppercase) {
+                    bytesNeedingLowercaseCopy += record.nameLen;
+                }
+            }
+
+            lowercaseStringPool.reserve(bytesNeedingLowercaseCopy);
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                const FileRecord& record = fileRecords[recordIdx];
+
+                if (record.nameOffset + record.nameLen > stringPool.size()) {
+                    continue;
+                }
+
+                const std::string_view name(
+                    &stringPool[record.nameOffset],
+                    record.nameLen
+                );
+
+                bool hasAsciiUppercase = false;
+
+                for (const unsigned char c : name) {
+                    if (c >= 'A' && c <= 'Z') {
+                        hasAsciiUppercase = true;
+                        break;
+                    }
+                }
+
+                if (!hasAsciiUppercase) {
+                    lowercaseNameOffsetByRecord[recordIdx] =
+                        NoLowercaseNameOverride;
+                    continue;
+                }
+
+                const uint32_t lowercaseOffset =
+                    static_cast<uint32_t>(lowercaseStringPool.size());
+
+                lowercaseNameOffsetByRecord[recordIdx] = lowercaseOffset;
+
+                for (const unsigned char c : name) {
+                    lowercaseStringPool.push_back(
+                        (c >= 'A' && c <= 'Z')
+                            ? static_cast<char>(c | 32)
+                            : static_cast<char>(c)
+                    );
+                }
+            }
+
+            lowercaseStringPool.shrink_to_fit();
+            lowercaseNameOffsetByRecord.shrink_to_fit();
         }
 
         void sortByNameAscendingParallel() {
@@ -464,12 +576,25 @@ public:
             // 3. Reorder records. parentRecordIdx is intentionally not remapped here,
             // because parent pointers are resolved after this sort.
             std::vector<FileRecord> newRecords(fileRecords.size());
+            std::vector<uint32_t> newLowercaseNameOffsetByRecord(
+                lowercaseNameOffsetByRecord.size(),
+                NoLowercaseNameOverride
+            );
+
             for (size_t i = 0; i < p.size(); ++i) {
                 newRecords[i] = fileRecords[p[i]];
                 newRecords[i].parentRecordIdx = 0xFFFFFFFF;
+
+                if (p[i] < lowercaseNameOffsetByRecord.size() &&
+                    i < newLowercaseNameOffsetByRecord.size()) {
+                    newLowercaseNameOffsetByRecord[i] =
+                        lowercaseNameOffsetByRecord[p[i]];
+                }
             }
 
             fileRecords = std::move(newRecords);
+            lowercaseNameOffsetByRecord =
+                std::move(newLowercaseNameOffsetByRecord);
         }
 
         void buildTrigramIndexParallel() {
@@ -516,7 +641,7 @@ public:
                     return;
                 }
 
-                const std::string_view name = lowercaseRecordName(rec);
+                const std::string_view name = lowercaseRecordName(rec, i);
                 if (name.size() < 3) {
                     return;
                 }
@@ -614,7 +739,9 @@ public:
                     continue;
                 }
 
-                const std::string_view name = lowercaseRecordName(record);
+                const std::string_view name =
+                    lowercaseRecordName(record, recordIdx);
+
                 if (name.empty()) {
                     continue;
                 }
@@ -661,7 +788,9 @@ public:
                 return false;
             }
 
-            const std::string_view name = lowercaseRecordName(record);
+            const std::string_view name =
+                lowercaseRecordName(record, recordIdx);
+
             if (name.empty()) {
                 return false;
             }
@@ -915,6 +1044,10 @@ private:
     static void updateFileRecordMetadataFromLiveUpdateOperation(
         FileRecord& record,
         const LiveUpdateOperation& operation
+    );
+    static uint32_t appendSparseLowercaseName(
+        DeviceIndex& deviceIndex,
+        std::string_view name
     );
     static bool appendTrigramsForRecord(
         DeviceIndex& deviceIndex,

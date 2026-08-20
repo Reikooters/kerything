@@ -22,19 +22,19 @@
 #include "IndexController.h"
 
 namespace {
-    constexpr uint32_t NoMountPoint = 0xFFFFFFFF;
+    constexpr uint8_t NoMountPoint = IndexController::RecordHandle::NoMountPoint;
 
     bool hasMountedPath(
         const IndexController::DeviceIndex& deviceIndex,
         const IndexController::RecordHandle& handle
     ) {
         return handle.mountPointIdx != NoMountPoint &&
-               handle.mountPointIdx < static_cast<uint32_t>(deviceIndex.mountPoints.size());
+               handle.mountPointIdx < static_cast<uint8_t>(deviceIndex.mountPoints.size());
     }
 
     QString displayVolumeName(const IndexController::DeviceIndex& deviceIndex) {
         const QString label = deviceIndex.label.trimmed();
-        if (!label.isEmpty() && label != QStringLiteral("TODO")) {
+        if (!label.isEmpty()) {
             return label;
         }
 
@@ -560,10 +560,10 @@ QString FileModel::memoryStatsText() const
         static_cast<quint64>(searchResults_.capacity()) * 16;
     const quint64 sortedResultsIf16ByteHandles =
         static_cast<quint64>(sortScratch_.sortedResults.capacity()) * 16;
-    const quint64 searchResultsIf8ByteHandles =
-        static_cast<quint64>(searchResults_.capacity()) * 8;
-    const quint64 sortedResultsIf8ByteHandles =
-        static_cast<quint64>(sortScratch_.sortedResults.capacity()) * 8;
+    const quint64 searchResultsIf12ByteHandles =
+        static_cast<quint64>(searchResults_.capacity()) * 12;
+    const quint64 sortedResultsIf12ByteHandles =
+        static_cast<quint64>(sortScratch_.sortedResults.capacity()) * 12;
 
     out << "  RecordHandle what-if estimates:\n";
     out << "    current sizeof(RecordHandle): "
@@ -571,37 +571,37 @@ QString FileModel::memoryStatsText() const
         << " bytes\n";
     out << "    searchResults if handles were 16 bytes: "
         << formatModelBytes(searchResultsIf16ByteHandles)
-        << " (saving "
+        << " (current saving "
         << formatModelBytes(
-            searchResultsBytes > searchResultsIf16ByteHandles
-                ? searchResultsBytes - searchResultsIf16ByteHandles
+            searchResultsIf16ByteHandles > searchResultsBytes
+                ? searchResultsIf16ByteHandles - searchResultsBytes
                 : 0
         )
         << ")\n";
     out << "    sortScratch.sortedResults if handles were 16 bytes: "
         << formatModelBytes(sortedResultsIf16ByteHandles)
-        << " (saving "
+        << " (current saving "
         << formatModelBytes(
-            sortedResultsBytes > sortedResultsIf16ByteHandles
-                ? sortedResultsBytes - sortedResultsIf16ByteHandles
+            sortedResultsIf16ByteHandles > sortedResultsBytes
+                ? sortedResultsIf16ByteHandles - sortedResultsBytes
                 : 0
         )
         << ")\n";
-    out << "    searchResults if handles were 8 bytes: "
-        << formatModelBytes(searchResultsIf8ByteHandles)
-        << " (saving "
+    out << "    searchResults if handles were 12 bytes: "
+        << formatModelBytes(searchResultsIf12ByteHandles)
+        << " (current saving "
         << formatModelBytes(
-            searchResultsBytes > searchResultsIf8ByteHandles
-                ? searchResultsBytes - searchResultsIf8ByteHandles
+            searchResultsIf12ByteHandles > searchResultsBytes
+                ? searchResultsIf12ByteHandles - searchResultsBytes
                 : 0
         )
         << ")\n";
-    out << "    sortScratch.sortedResults if handles were 8 bytes: "
-        << formatModelBytes(sortedResultsIf8ByteHandles)
-        << " (saving "
+    out << "    sortScratch.sortedResults if handles were 12 bytes: "
+        << formatModelBytes(sortedResultsIf12ByteHandles)
+        << " (current saving "
         << formatModelBytes(
-            sortedResultsBytes > sortedResultsIf8ByteHandles
-                ? sortedResultsBytes - sortedResultsIf8ByteHandles
+            sortedResultsIf12ByteHandles > sortedResultsBytes
+                ? sortedResultsIf12ByteHandles - sortedResultsBytes
                 : 0
         )
         << ")\n";
@@ -652,7 +652,7 @@ const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexCon
             return nullptr;
         }
 
-        if (deviceIndex->generation != handle.generation) {
+        if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
             return nullptr;
         }
 

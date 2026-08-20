@@ -6,6 +6,7 @@
 
 #include <execution>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <QObject>
 #include <QStringList>
@@ -903,14 +904,20 @@ public:
     };
 
     struct RecordHandle {
-        uint32_t indexId;
-        uint32_t generation;
-        uint32_t recordIdx;
+        static constexpr uint16_t MaxIndexId = std::numeric_limits<uint16_t>::max();
+        static constexpr uint8_t NoMountPoint = std::numeric_limits<uint8_t>::max();
+        static constexpr uint8_t MaxMountPointIdx = NoMountPoint - 1;
+
+        uint32_t recordIdx = 0;
+        uint16_t indexId = 0;
+        uint8_t generation = 0; // use only the low 8 bits to save memory, this makes generation wrap modulo 256.
 
         // Index into DeviceIndex::mountPoints.
-        // 0xFFFFFFFF means no current mount point is available.
-        uint32_t mountPointIdx = 0xFFFFFFFF;
+        // NoMountPoint means no current mount point is available.
+        uint8_t mountPointIdx = NoMountPoint;
     };
+
+    static_assert(sizeof(RecordHandle) == 8);
 
     struct SortScratch {
         std::vector<uint32_t> resultsOrder;

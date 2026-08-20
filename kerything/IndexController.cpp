@@ -2242,15 +2242,24 @@ QString IndexController::memoryStatsText() const
             sizeof(RecordHandle)
         )
         << '\n';
-    out << "    at 16 bytes per handle: "
+    out << "    if handles were 16 bytes: "
         << formatBytes(static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) * 16)
-        << '\n';
-    out << "    at 12 bytes per handle: "
+        << " (saving "
+        << formatBytes(
+            static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) *
+            (16 - sizeof(RecordHandle))
+        )
+        << " at current size)\n";
+    out << "    if handles were 12 bytes: "
         << formatBytes(static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) * 12)
-        << '\n';
-    out << "    at 8 bytes per handle: "
-        << formatBytes(static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) * 8)
-        << '\n';
+        << " (saving "
+        << formatBytes(
+            sizeof(RecordHandle) < 12
+                ? static_cast<quint64>(maxSearchResultsFromReadySearchableDevices) *
+                  (12 - sizeof(RecordHandle))
+                : 0
+        )
+        << " at current size)\n";
 
     return text;
 }
@@ -3098,26 +3107,35 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     std::vector<RecordHandle> results;
 
     auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
-        if (index.indexId > std::numeric_limits<uint32_t>::max() ||
-            index.generation > std::numeric_limits<uint32_t>::max()) {
+        if (index.indexId > RecordHandle::MaxIndexId) {
             return;
         }
 
-        const auto indexId = static_cast<uint32_t>(index.indexId);
-        const auto generation = static_cast<uint32_t>(index.generation);
+        const auto indexId = static_cast<uint16_t>(index.indexId);
+        const auto generation = static_cast<uint8_t>(index.generation);
 
         if (index.mountPoints.isEmpty()) {
-            results.emplace_back(indexId, generation, recordIdx, 0xFFFFFFFF);
+            results.push_back({
+                recordIdx,
+                indexId,
+                generation,
+                RecordHandle::NoMountPoint
+            });
             return;
         }
 
-        for (int mountPointIdx = 0; mountPointIdx < index.mountPoints.size(); ++mountPointIdx) {
-            results.emplace_back(
+        const int mountPointCount = std::min<int>(
+            index.mountPoints.size(),
+            RecordHandle::MaxMountPointIdx + 1
+        );
+
+        for (int mountPointIdx = 0; mountPointIdx < mountPointCount; ++mountPointIdx) {
+            results.push_back({
+                recordIdx,
                 indexId,
                 generation,
-                recordIdx,
-                static_cast<uint32_t>(mountPointIdx)
-            );
+                static_cast<uint8_t>(mountPointIdx)
+            });
         }
     };
 
@@ -3625,9 +3643,11 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 }
 
                 const auto* device = it->second.get();
-                if (!device || !device->isReady || device->generation != handle.generation
-                    || handle.recordIdx >= device->fileRecords.size()
-                    || device->isDeletedRecord(handle.recordIdx)) {
+                if (!device ||
+                    !device->isReady ||
+                    static_cast<uint8_t>(device->generation) != handle.generation ||
+                    handle.recordIdx >= device->fileRecords.size() ||
+                    device->isDeletedRecord(handle.recordIdx)) {
                     continue;
                 }
 
@@ -3685,21 +3705,23 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 }
 
                 const auto* device = it->second.get();
-                if (!device || !device->isReady || device->generation != handle.generation
-                    || handle.recordIdx >= device->fileRecords.size()
-                    || device->isDeletedRecord(handle.recordIdx)) {
+                if (!device ||
+                    !device->isReady ||
+                    static_cast<uint8_t>(device->generation) != handle.generation ||
+                    handle.recordIdx >= device->fileRecords.size() ||
+                    device->isDeletedRecord(handle.recordIdx)) {
                     continue;
                 }
 
                 const auto& record = device->fileRecords[handle.recordIdx];
                 key.pathKey = device->getFullPath(record.parentRecordIdx);
 
-                if (handle.mountPointIdx != 0xFFFFFFFF &&
-                    handle.mountPointIdx < static_cast<uint32_t>(device->mountPoints.size())) {
+                if (handle.mountPointIdx != RecordHandle::NoMountPoint &&
+                    handle.mountPointIdx < static_cast<uint8_t>(device->mountPoints.size())) {
                     const QString mountPoint = device->mountPoints.at(static_cast<int>(handle.mountPointIdx));
                     key.pathKey = (mountPoint + QStringLiteral("/") + QString::fromStdString(key.pathKey))
                         .toStdString();
-                }
+                    }
 
                 key.valid = true;
             }
@@ -3746,9 +3768,11 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 }
 
                 const auto* device = it->second.get();
-                if (!device || !device->isReady || device->generation != handle.generation
-                    || handle.recordIdx >= device->fileRecords.size()
-                    || device->isDeletedRecord(handle.recordIdx)) {
+                if (!device ||
+                    !device->isReady ||
+                    static_cast<uint8_t>(device->generation) != handle.generation ||
+                    handle.recordIdx >= device->fileRecords.size() ||
+                    device->isDeletedRecord(handle.recordIdx)) {
                     continue;
                 }
 

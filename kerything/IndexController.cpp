@@ -125,6 +125,11 @@ namespace {
         std::string lowercaseText;
     };
 
+    struct QueryTrigram {
+        uint32_t trigram = 0;
+        std::size_t postingCount = 0;
+    };
+
     bool isAsciiWordCharacter(unsigned char c) noexcept
     {
         return std::isalnum(c) || c == '_';
@@ -211,6 +216,42 @@ namespace {
         );
 
         return it != ranges.end() && it->trigram == trigram;
+    }
+
+    std::size_t trigramPostingCount(
+        const std::vector<IndexController::TrigramEntry>& index,
+        uint32_t trigram)
+    {
+        const auto range = std::equal_range(
+            index.begin(),
+            index.end(),
+            IndexController::TrigramEntry{trigram, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        return static_cast<std::size_t>(std::distance(range.first, range.second));
+    }
+
+    std::size_t trigramPostingCount(
+        const std::vector<IndexController::TrigramRange>& ranges,
+        uint32_t trigram)
+    {
+        const auto it = std::lower_bound(
+            ranges.begin(),
+            ranges.end(),
+            IndexController::TrigramRange{trigram, 0, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        if (it == ranges.end() || it->trigram != trigram) {
+            return 0;
+        }
+
+        return it->count;
     }
 
     void buildCompactTrigramIndexFromSortedEntries(
@@ -3245,9 +3286,13 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             continue;
         }
 
-        // 2. Candidate Filtering via Trigrams
+        // 2. Candidate filtering via trigrams.
+        //
+        // For each keyword, process its trigrams from rarest to most common.
+        // Starting with the smallest postings list keeps the candidate vector
+        // small and reduces both temporary memory and refinement work.
         std::vector<uint32_t> candidates;
-        bool firstKeyword = true;
+        bool firstTrigram = true;
         bool trigramsUsed = false; // Track if we actually used the index
         bool skipDevice = false;
 
@@ -3255,41 +3300,98 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             const std::string& kw = queryKeyword.lowercaseText;
 
             if (kw.length() < 3) {
-                // Skip short words for now, as they won't be in our trigram index
+                // Short keywords cannot use the trigram index and are handled
+                // later during refinement.
                 continue;
             }
 
-            // Generate all trigrams for this keyword and intersect them
+            std::vector<QueryTrigram> keywordTrigrams;
+            keywordTrigrams.reserve(kw.length() - 2);
+
             for (size_t i = 0; i <= kw.length() - 3; ++i) {
-                trigramsUsed = true;
-                uint32_t tri =
+                const uint32_t tri =
                     (static_cast<uint32_t>(static_cast<unsigned char>(kw[i])) << 16) |
                     (static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 1])) << 8) |
                     static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 2]));
 
-                const bool foundInMainIndex = containsTrigram(indexPtr->trigramRanges, tri);
-                const bool foundInLiveDeltaIndex = containsTrigram(indexPtr->liveDeltaFlatIndex, tri);
+                keywordTrigrams.push_back({
+                    tri,
+                    trigramPostingCount(indexPtr->trigramRanges, tri) +
+                    trigramPostingCount(indexPtr->liveDeltaFlatIndex, tri)
+                });
+            }
 
-                if (!foundInMainIndex && !foundInLiveDeltaIndex) {
-                    // No matches for this trigram on this device.
+            std::sort(
+                keywordTrigrams.begin(),
+                keywordTrigrams.end(),
+                [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
+                    if (lhs.trigram != rhs.trigram) {
+                        return lhs.trigram < rhs.trigram;
+                    }
+
+                    return lhs.postingCount < rhs.postingCount;
+                }
+            );
+
+            keywordTrigrams.erase(
+                std::unique(
+                    keywordTrigrams.begin(),
+                    keywordTrigrams.end(),
+                    [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
+                        return lhs.trigram == rhs.trigram;
+                    }
+                ),
+                keywordTrigrams.end()
+            );
+
+            for (QueryTrigram& queryTrigram : keywordTrigrams) {
+                queryTrigram.postingCount =
+                    trigramPostingCount(indexPtr->trigramRanges, queryTrigram.trigram) +
+                    trigramPostingCount(indexPtr->liveDeltaFlatIndex, queryTrigram.trigram);
+            }
+
+            std::sort(
+                keywordTrigrams.begin(),
+                keywordTrigrams.end(),
+                [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
+                    if (lhs.postingCount != rhs.postingCount) {
+                        return lhs.postingCount < rhs.postingCount;
+                    }
+
+                    return lhs.trigram < rhs.trigram;
+                }
+            );
+
+            for (const QueryTrigram& queryTrigram : keywordTrigrams) {
+                trigramsUsed = true;
+
+                if (queryTrigram.postingCount == 0) {
+                    // A required trigram is absent from this device, so this
+                    // keyword cannot match anything on the device.
                     skipDevice = true;
                     break;
                 }
 
                 // 3. Intersect candidates (Candidate Filtering)
-                if (firstKeyword) {
+                if (firstTrigram) {
+                    candidates.reserve(queryTrigram.postingCount);
+
                     forEachRecordIdxForTrigram(
                         indexPtr->trigramRanges,
                         indexPtr->trigramPostings,
-                        tri,
+                        queryTrigram.trigram,
                         [&](uint32_t recordIdx) {
                             candidates.push_back(recordIdx);
                         }
                     );
 
-                    forEachRecordIdxForTrigram(indexPtr->liveDeltaFlatIndex, tri, [&](uint32_t recordIdx) {
-                        candidates.push_back(recordIdx);
-                    });
+                    forEachRecordIdxForTrigram(
+                        indexPtr->liveDeltaFlatIndex,
+                        queryTrigram.trigram,
+                        [&](uint32_t recordIdx) {
+                            candidates.push_back(recordIdx);
+                        }
+                    );
 
                     std::sort(candidates.begin(), candidates.end());
                     candidates.erase(
@@ -3297,22 +3399,27 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                         candidates.end()
                     );
 
-                    firstKeyword = false;
+                    firstTrigram = false;
                 } else {
                     std::vector<uint32_t> trigramRecordIndices;
+                    trigramRecordIndices.reserve(queryTrigram.postingCount);
 
                     forEachRecordIdxForTrigram(
                         indexPtr->trigramRanges,
                         indexPtr->trigramPostings,
-                        tri,
+                        queryTrigram.trigram,
                         [&](uint32_t recordIdx) {
                             trigramRecordIndices.push_back(recordIdx);
                         }
                     );
 
-                    forEachRecordIdxForTrigram(indexPtr->liveDeltaFlatIndex, tri, [&](uint32_t recordIdx) {
-                        trigramRecordIndices.push_back(recordIdx);
-                    });
+                    forEachRecordIdxForTrigram(
+                        indexPtr->liveDeltaFlatIndex,
+                        queryTrigram.trigram,
+                        [&](uint32_t recordIdx) {
+                            trigramRecordIndices.push_back(recordIdx);
+                        }
+                    );
 
                     std::sort(trigramRecordIndices.begin(), trigramRecordIndices.end());
                     trigramRecordIndices.erase(

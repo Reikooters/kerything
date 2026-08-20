@@ -33,12 +33,12 @@ namespace {
     }
 
     QString displayVolumeName(const IndexController::DeviceIndex& deviceIndex) {
-        const QString label = deviceIndex.label.trimmed();
-        if (!label.isEmpty()) {
+        QString label = deviceIndex.label.trimmed();
+        if (!label.isEmpty() && label != QStringLiteral("TODO")) {
             return label;
         }
 
-        const QString deviceId = deviceIndex.deviceId.trimmed();
+        QString deviceId = deviceIndex.deviceId.trimmed();
         if (!deviceId.isEmpty()) {
             static constexpr qsizetype MaxDeviceIdDisplayLength = 24;
 
@@ -49,7 +49,7 @@ namespace {
             return deviceId.left(MaxDeviceIdDisplayLength - 1) + QStringLiteral("…");
         }
 
-        const QString devNode = deviceIndex.devNode.trimmed();
+        QString devNode = deviceIndex.devNode.trimmed();
         if (!devNode.isEmpty()) {
             return devNode;
         }

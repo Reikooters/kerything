@@ -2454,8 +2454,8 @@ bool IndexController::appendTrigramsForRecord(
         return false;
     }
 
-    std::unordered_set<uint32_t> uniqueTrigrams;
-    uniqueTrigrams.reserve(record.nameLen);
+    std::vector<uint32_t> uniqueTrigrams;
+    uniqueTrigrams.reserve(name.size() - 2);
 
     for (std::size_t i = 0; i <= name.size() - 3; ++i) {
         const uint32_t trigram =
@@ -2463,8 +2463,15 @@ bool IndexController::appendTrigramsForRecord(
             (static_cast<uint32_t>(static_cast<unsigned char>(name[i + 1])) << 8) |
             static_cast<uint32_t>(static_cast<unsigned char>(name[i + 2]));
 
-        uniqueTrigrams.insert(trigram);
+        uniqueTrigrams.push_back(trigram);
     }
+
+    std::sort(uniqueTrigrams.begin(), uniqueTrigrams.end());
+
+    uniqueTrigrams.erase(
+        std::unique(uniqueTrigrams.begin(), uniqueTrigrams.end()),
+        uniqueTrigrams.end()
+    );
 
     if (uniqueTrigrams.empty()) {
         return false;

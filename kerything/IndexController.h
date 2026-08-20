@@ -117,7 +117,7 @@ public:
 
         std::vector<FileRecord> fileRecords;
         std::vector<char> stringPool;
-        std::vector<uint8_t> deletedRecordBitmap;
+        std::vector<uint64_t> deletedRecordBits;
         std::unordered_map<uint64_t, uint32_t> directoryFsIndexToRecordIdx;
 
         // Most filesystem indices appear exactly once. Keep the common case as a
@@ -171,20 +171,44 @@ public:
         // have left stale references behind.
         std::size_t extensionIndexLiveDeltaEntries = 0;
 
+        [[nodiscard]] static std::size_t deletedRecordWordCount(std::size_t recordCount) noexcept
+        {
+            return (recordCount + 63) / 64;
+        }
+
+        void resizeDeletedRecordBitsForRecordCount(std::size_t recordCount)
+        {
+            deletedRecordBits.resize(deletedRecordWordCount(recordCount), 0);
+        }
+
+        void reserveDeletedRecordBitsForRecordCount(std::size_t recordCount)
+        {
+            deletedRecordBits.reserve(deletedRecordWordCount(recordCount));
+        }
+
         [[nodiscard]] bool isDeletedRecord(uint32_t recordIdx) const noexcept
         {
-            return recordIdx < deletedRecordBitmap.size() &&
-                   deletedRecordBitmap[recordIdx] != 0;
+            const std::size_t wordIdx = recordIdx / 64;
+
+            if (wordIdx >= deletedRecordBits.size()) {
+                return false;
+            }
+
+            const uint64_t mask = uint64_t{1} << (recordIdx % 64);
+            return (deletedRecordBits[wordIdx] & mask) != 0;
         }
 
         void markDeletedRecord(uint32_t recordIdx)
         {
-            if (recordIdx >= deletedRecordBitmap.size()) {
-                deletedRecordBitmap.resize(fileRecords.size(), 0);
+            const std::size_t wordIdx = recordIdx / 64;
+
+            if (wordIdx >= deletedRecordBits.size()) {
+                resizeDeletedRecordBitsForRecordCount(fileRecords.size());
             }
 
-            if (recordIdx < deletedRecordBitmap.size()) {
-                deletedRecordBitmap[recordIdx] = 1;
+            if (wordIdx < deletedRecordBits.size()) {
+                const uint64_t mask = uint64_t{1} << (recordIdx % 64);
+                deletedRecordBits[wordIdx] |= mask;
             }
         }
 
@@ -220,9 +244,7 @@ public:
                 return 0;
             }
 
-            if (deletedRecordBitmap.size() < fileRecords.size()) {
-                deletedRecordBitmap.resize(fileRecords.size(), 0);
-            }
+            resizeDeletedRecordBitsForRecordCount(fileRecords.size());
 
             if (isDeletedRecord(rootRecordIdx)) {
                 logSlowDeleteTree(0);
@@ -232,7 +254,7 @@ public:
             const FileRecord& rootRecord = fileRecords[rootRecordIdx];
 
             if ((rootRecord.flags & FileRecord_IsDir) == 0) {
-                deletedRecordBitmap[rootRecordIdx] = 1;
+                markDeletedRecord(rootRecordIdx);
                 logSlowDeleteTree(1);
                 return 1;
             }
@@ -259,7 +281,7 @@ public:
 
                 const FileRecord& currentRecord = fileRecords[currentRecordIdx];
 
-                deletedRecordBitmap[currentRecordIdx] = 1;
+                markDeletedRecord(currentRecordIdx);
                 ++deletedCount;
 
                 if ((currentRecord.flags & FileRecord_IsDir) == 0) {

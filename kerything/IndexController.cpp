@@ -703,7 +703,7 @@ quint64 IndexController::addDevice(
             deviceIndex.isReady = false;
             deviceIndex.fileRecords.clear();
             deviceIndex.stringPool.clear();
-            deviceIndex.deletedRecordBitmap.clear();
+            deviceIndex.deletedRecordBits.clear();
             deviceIndex.lowercaseStringPool.clear();
             deviceIndex.lowercaseNameOffsetByRecord.clear();
             deviceIndex.trigramRanges.clear();
@@ -908,7 +908,7 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     // Insert the new records into the device index.
     // Parent pointers are resolved once after the full scan has completed.
     deviceIndex.fileRecords.insert(deviceIndex.fileRecords.end(), records.begin(), records.end());
-    deviceIndex.deletedRecordBitmap.resize(deviceIndex.fileRecords.size(), 0);
+    deviceIndex.resizeDeletedRecordBitsForRecordCount(deviceIndex.fileRecords.size());
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: The index now contains " << deviceIndex.fileRecords.size()
@@ -1213,8 +1213,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             targetIndex->fileRecords.size() + pendingUpserts.size()
         );
 
-        targetIndex->deletedRecordBitmap.reserve(
-            targetIndex->deletedRecordBitmap.size() + pendingUpserts.size()
+        targetIndex->reserveDeletedRecordBitsForRecordCount(
+            targetIndex->fileRecords.size() + pendingUpserts.size()
         );
 
         targetIndex->stringPool.reserve(
@@ -1743,7 +1743,7 @@ QString IndexController::memoryStatsText() const
         const quint64 lowercaseStringPoolBytes = vectorCapacityBytes(device.lowercaseStringPool);
         const quint64 lowercaseNameOffsetByRecordBytes =
             vectorCapacityBytes(device.lowercaseNameOffsetByRecord);
-        const quint64 deletedBitmapBytes = vectorCapacityBytes(device.deletedRecordBitmap);
+        const quint64 deletedBitsBytes = vectorCapacityBytes(device.deletedRecordBits);
         const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
         const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
@@ -1811,7 +1811,7 @@ QString IndexController::memoryStatsText() const
             stringPoolBytes +
             lowercaseStringPoolBytes +
             lowercaseNameOffsetByRecordBytes +
-            deletedBitmapBytes +
+            deletedBitsBytes +
             trigramRangesBytes +
             trigramPostingsBytes +
             liveDeltaFlatIndexBytes +
@@ -1952,13 +1952,13 @@ QString IndexController::memoryStatsText() const
         out << "        estimated saving, pool plus per-record uint32 metadata: "
             << formatBytes(lowercaseSavingWithPerRecordUint32Bytes)
             << '\n';
-        out << "    deletedRecordBitmap size/capacity: "
-                << device.deletedRecordBitmap.size()
-                << '/'
-                << device.deletedRecordBitmap.capacity()
-                << " => "
-                << formatBytes(deletedBitmapBytes)
-                << '\n';
+        out << "    deletedRecordBits words size/capacity: "
+            << device.deletedRecordBits.size()
+            << '/'
+            << device.deletedRecordBits.capacity()
+            << " => "
+            << formatBytes(deletedBitsBytes)
+            << '\n';
         out << "    trigramRanges size/capacity: "
             << device.trigramRanges.size()
             << '/'
@@ -1984,10 +1984,10 @@ QString IndexController::memoryStatsText() const
 
         out << "  maps:\n";
         out << "    directoryFsIndexToRecordIdx entries/buckets: "
-                << device.directoryFsIndexToRecordIdx.size()
-                << '/'
-                << device.directoryFsIndexToRecordIdx.bucket_count()
-                << '\n';
+            << device.directoryFsIndexToRecordIdx.size()
+            << '/'
+            << device.directoryFsIndexToRecordIdx.bucket_count()
+            << '\n';
         writeUnorderedMapOverheadEstimate(
             out,
             device.directoryFsIndexToRecordIdx,
@@ -1995,10 +1995,10 @@ QString IndexController::memoryStatsText() const
         );
 
         out << "    fsIndexToPrimaryRecordIdx entries/buckets: "
-                << device.fsIndexToPrimaryRecordIdx.size()
-                << '/'
-                << device.fsIndexToPrimaryRecordIdx.bucket_count()
-                << '\n';
+            << device.fsIndexToPrimaryRecordIdx.size()
+            << '/'
+            << device.fsIndexToPrimaryRecordIdx.bucket_count()
+            << '\n';
         out << "      payload bytes, excluding allocator/node overhead: "
             << formatBytes(fsIndexPrimaryPayloadBytes)
             << '\n';
@@ -2687,7 +2687,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     const std::size_t oldStringPoolCapacity = deviceIndex.stringPool.capacity();
     const std::size_t oldLowercaseStringPoolCapacity = deviceIndex.lowercaseStringPool.capacity();
     const std::size_t oldLowercaseNameOffsetCapacity = deviceIndex.lowercaseNameOffsetByRecord.capacity();
-    const std::size_t oldDeletedBitmapCapacity = deviceIndex.deletedRecordBitmap.capacity();
+    const std::size_t oldDeletedBitsCapacity = deviceIndex.deletedRecordBits.capacity();
     const std::size_t oldLiveDeltaCapacity = deviceIndex.liveDeltaFlatIndex.capacity();
 
     if (operation.inode == 0 || operation.name.isEmpty()) {
@@ -2740,7 +2740,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
 
     deviceIndex.fileRecords.push_back(record);
     deviceIndex.lowercaseNameOffsetByRecord.push_back(lowercaseNameOffset);
-    deviceIndex.deletedRecordBitmap.push_back(0);
+    deviceIndex.resizeDeletedRecordBitsForRecordCount(deviceIndex.fileRecords.size());
 
     const auto [primaryIt, inserted] =
                 deviceIndex.fsIndexToPrimaryRecordIdx.emplace(record.fsIndex, recordIdx);
@@ -2764,7 +2764,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     oldStringPoolCapacity != deviceIndex.stringPool.capacity() ||
     oldLowercaseStringPoolCapacity != deviceIndex.lowercaseStringPool.capacity() ||
     oldLowercaseNameOffsetCapacity != deviceIndex.lowercaseNameOffsetByRecord.capacity() ||
-    oldDeletedBitmapCapacity != deviceIndex.deletedRecordBitmap.capacity() ||
+    oldDeletedBitsCapacity != deviceIndex.deletedRecordBits.capacity() ||
     oldLiveDeltaCapacity != deviceIndex.liveDeltaFlatIndex.capacity()) {
         std::cerr << "appendRecordFromLiveUpdateOperation"
                   << " name=" << operation.name.toStdString()
@@ -2785,10 +2785,10 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
                   << oldLowercaseNameOffsetCapacity
                   << " -> "
                   << deviceIndex.lowercaseNameOffsetByRecord.capacity()
-                  << " deletedBitmap capacity "
-                  << oldDeletedBitmapCapacity
+                  << " deletedRecordBits capacity "
+                  << oldDeletedBitsCapacity
                   << " -> "
-                  << deviceIndex.deletedRecordBitmap.capacity()
+                  << deviceIndex.deletedRecordBits.capacity()
                   << " liveDelta capacity "
                   << oldLiveDeltaCapacity
                   << " -> "

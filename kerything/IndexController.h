@@ -120,11 +120,32 @@ public:
         std::vector<uint64_t> deletedRecordBits;
         std::unordered_map<uint64_t, uint32_t> directoryFsIndexToRecordIdx;
 
-        // Most filesystem indices appear exactly once. Keep the common case as a
-        // compact inode -> record index map, and only allocate vectors for true
-        // duplicates such as hard links.
-        std::unordered_map<uint64_t, uint32_t> fsIndexToPrimaryRecordIdx;
-        std::unordered_map<uint64_t, std::vector<uint32_t>> duplicateFsIndexToRecordIndices;
+        struct FsIndexRecordRef {
+            uint64_t fsIndex = 0;
+            uint32_t recordIdx = 0;
+
+            [[nodiscard]] bool operator<(const FsIndexRecordRef& other) const noexcept
+            {
+                if (fsIndex != other.fsIndex) {
+                    return fsIndex < other.fsIndex;
+                }
+
+                return recordIdx < other.recordIdx;
+            }
+        };
+
+        // Full-scan inode -> record-index references, sorted by fsIndex then recordIdx.
+        //
+        // Hard links are represented naturally as adjacent entries with the same
+        // fsIndex. Deleted/stale records are filtered during lookup.
+        std::vector<FsIndexRecordRef> fsIndexRecordRefs;
+
+        // Inode refs added by live updates after the last full rebuild.
+        //
+        // Kept separate so live updates do not need to re-sort the large full-scan
+        // vector after every create/rename/hard-link event.
+        std::vector<FsIndexRecordRef> liveFsIndexRecordRefs;
+
         mutable std::vector<uint32_t> fsIndexLookupScratch;
 
         // Lowercase mirror of names that require ASCII case folding.
@@ -378,10 +399,54 @@ public:
             return lowercaseRecordName(record, recordIdx);
         }
 
+        static void sortAndDeduplicateFsIndexRecordRefs(
+            std::vector<FsIndexRecordRef>& refs
+        ) {
+            std::sort(refs.begin(), refs.end());
+
+            refs.erase(
+                std::unique(
+                    refs.begin(),
+                    refs.end(),
+                    [](const FsIndexRecordRef& lhs, const FsIndexRecordRef& rhs) {
+                        return lhs.fsIndex == rhs.fsIndex &&
+                               lhs.recordIdx == rhs.recordIdx;
+                    }
+                ),
+                refs.end()
+            );
+        }
+
+        void appendFsIndexRefsForLookup(
+            const std::vector<FsIndexRecordRef>& refs,
+            uint64_t fsIndex
+        ) const {
+            const auto range = std::equal_range(
+                refs.begin(),
+                refs.end(),
+                FsIndexRecordRef{fsIndex, 0},
+                [](const FsIndexRecordRef& lhs, const FsIndexRecordRef& rhs) {
+                    return lhs.fsIndex < rhs.fsIndex;
+                }
+            );
+
+            for (auto it = range.first; it != range.second; ++it) {
+                if (it->recordIdx >= fileRecords.size()) {
+                    continue;
+                }
+
+                if (isDeletedRecord(it->recordIdx)) {
+                    continue;
+                }
+
+                fsIndexLookupScratch.push_back(it->recordIdx);
+            }
+        }
+
         void rebuildFsIndexMaps() {
             directoryFsIndexToRecordIdx.clear();
-            fsIndexToPrimaryRecordIdx.clear();
-            duplicateFsIndexToRecordIndices.clear();
+            fsIndexRecordRefs.clear();
+            liveFsIndexRecordRefs.clear();
             fsIndexLookupScratch.clear();
 
             std::size_t directoryCount = 0;
@@ -393,26 +458,19 @@ public:
             }
 
             directoryFsIndexToRecordIdx.reserve(directoryCount);
-            fsIndexToPrimaryRecordIdx.reserve(fileRecords.size());
+            fsIndexRecordRefs.reserve(fileRecords.size());
 
-            for (uint32_t i = 0; i < fileRecords.size(); ++i) {
+            for (uint32_t i = 0; i < static_cast<uint32_t>(fileRecords.size()); ++i) {
                 if (isDeletedRecord(i)) {
                     continue;
                 }
 
                 const FileRecord& rec = fileRecords[i];
 
-                // Full inode/filesystem-index map.
-                //
-                // The common case is one FileRecord per fsIndex. Additional entries
-                // for the same fsIndex are rare and are stored separately to avoid
-                // millions of tiny std::vector allocations.
-                const auto [primaryIt, inserted] =
-                    fsIndexToPrimaryRecordIdx.emplace(rec.fsIndex, i);
-
-                if (!inserted) {
-                    duplicateFsIndexToRecordIndices[rec.fsIndex].push_back(i);
-                }
+                fsIndexRecordRefs.push_back({
+                    rec.fsIndex,
+                    i
+                });
 
                 // Directory-only map used for parent resolution.
                 // Normal ext4 does not allow arbitrary hard-linked directories, so a
@@ -421,6 +479,10 @@ public:
                     directoryFsIndexToRecordIdx.emplace(rec.fsIndex, i);
                 }
             }
+
+            sortAndDeduplicateFsIndexRecordRefs(fsIndexRecordRefs);
+            fsIndexRecordRefs.shrink_to_fit();
+            liveFsIndexRecordRefs.shrink_to_fit();
         }
 
         /**
@@ -904,20 +966,27 @@ public:
         }
 
         [[nodiscard]] const std::vector<uint32_t>* recordIndicesForFsIndex(uint64_t fsIndex) const {
-            const auto primaryIt = fsIndexToPrimaryRecordIdx.find(fsIndex);
-            if (primaryIt == fsIndexToPrimaryRecordIdx.end()) {
+            fsIndexLookupScratch.clear();
+
+            appendFsIndexRefsForLookup(fsIndexRecordRefs, fsIndex);
+            appendFsIndexRefsForLookup(liveFsIndexRecordRefs, fsIndex);
+
+            if (fsIndexLookupScratch.empty()) {
                 return nullptr;
             }
 
-            fsIndexLookupScratch.clear();
-            fsIndexLookupScratch.push_back(primaryIt->second);
+            if (fsIndexLookupScratch.size() > 1) {
+                std::sort(
+                    fsIndexLookupScratch.begin(),
+                    fsIndexLookupScratch.end()
+                );
 
-            const auto duplicateIt = duplicateFsIndexToRecordIndices.find(fsIndex);
-            if (duplicateIt != duplicateFsIndexToRecordIndices.end()) {
-                fsIndexLookupScratch.insert(
-                    fsIndexLookupScratch.end(),
-                    duplicateIt->second.begin(),
-                    duplicateIt->second.end()
+                fsIndexLookupScratch.erase(
+                    std::unique(
+                        fsIndexLookupScratch.begin(),
+                        fsIndexLookupScratch.end()
+                    ),
+                    fsIndexLookupScratch.end()
                 );
             }
 
@@ -1092,6 +1161,9 @@ private:
     );
     static bool shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
     static void rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
+    static void sortLiveFsIndexRecordRefs(DeviceIndex& deviceIndex);
+    static bool shouldRebuildFsIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
+    static void rebuildFsIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
     static bool appendRecordFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,
         const LiveUpdateOperation& operation

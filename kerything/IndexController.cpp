@@ -1658,25 +1658,42 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 }
 
 void IndexController::setReadyState(quint32 requestId, bool isReady) {
-    std::unique_lock lock(indexMutex_);
+    bool shouldTrimAllocator = false;
 
-    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
-    if (existingIndexIdIt == indexIdByRequestId_.end()) {
-        std::cerr << "IndexController: setReadyState: No device index for requestId=" << requestId << "\n";
-        return;
+    {
+        std::unique_lock lock(indexMutex_);
+
+        const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+        if (existingIndexIdIt == indexIdByRequestId_.end()) {
+            std::cerr << "IndexController: setReadyState: No device index for requestId=" << requestId << "\n";
+            return;
+        }
+
+        const quint64 existingIndexId = existingIndexIdIt->second;
+
+        const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+        if (existingDeviceIndexIt == indexByIndexId_.end()) {
+            std::cerr << "IndexController: setReadyState: No device index for indexId=" << existingIndexId
+                      << " requestId=" << requestId << "\n";
+            return;
+        }
+
+        DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+
+        const bool becameReady = isReady && !deviceIndex.isReady;
+        deviceIndex.isReady = isReady;
+
+        if (becameReady) {
+            deviceIndex.compactDeletedRecordBits();
+            shouldTrimAllocator = true;
+        }
     }
 
-    const quint64 existingIndexId = existingIndexIdIt->second;
-
-    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
-    if (existingDeviceIndexIt == indexByIndexId_.end()) {
-        std::cerr << "IndexController: setReadyState: No device index for indexId=" << existingIndexId
-                  << " requestId=" << requestId << "\n";
-        return;
+#if defined(__GLIBC__)
+    if (shouldTrimAllocator) {
+        ::malloc_trim(0);
     }
-
-    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
-    deviceIndex.isReady = isReady;
+#endif
 }
 
 QString IndexController::memoryStatsText() const

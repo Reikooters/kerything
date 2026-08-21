@@ -207,6 +207,33 @@ public:
             deletedRecordBits.reserve(deletedRecordWordCount(recordCount));
         }
 
+        void compactDeletedRecordBits(std::size_t slackRecords = 4096)
+        {
+            const std::size_t requiredWords =
+                deletedRecordWordCount(fileRecords.size());
+
+            const std::size_t slackWords =
+                deletedRecordWordCount(slackRecords);
+
+            const std::size_t targetCapacity =
+                requiredWords + slackWords;
+
+            if (deletedRecordBits.capacity() <= targetCapacity) {
+                return;
+            }
+
+            std::vector<uint64_t> compacted;
+            compacted.reserve(targetCapacity);
+            compacted.assign(
+                deletedRecordBits.begin(),
+                deletedRecordBits.begin() + static_cast<std::ptrdiff_t>(
+                    std::min(requiredWords, deletedRecordBits.size())
+                )
+            );
+
+            deletedRecordBits.swap(compacted);
+        }
+
         [[nodiscard]] bool isDeletedRecord(uint32_t recordIdx) const noexcept
         {
             const std::size_t wordIdx = recordIdx / 64;

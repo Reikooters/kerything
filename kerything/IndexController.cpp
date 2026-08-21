@@ -373,6 +373,138 @@ namespace {
         }
     };
 
+
+    struct TrigramDistributionStats {
+        std::size_t rangeCount = 0;
+        std::size_t postingCount = 0;
+
+        uint32_t minPostingListSize = 0;
+        uint32_t p50PostingListSize = 0;
+        uint32_t p90PostingListSize = 0;
+        uint32_t p95PostingListSize = 0;
+        uint32_t p99PostingListSize = 0;
+        uint32_t maxPostingListSize = 0;
+
+        std::size_t top10PostingEntries = 0;
+        std::size_t top100PostingEntries = 0;
+        std::size_t postingListsWithOneEntry = 0;
+        std::size_t postingListsWithAtLeast1024Entries = 0;
+        std::size_t postingListsWithAtLeast65536Entries = 0;
+
+        quint64 estimatedVarintDeltaBytes = 0;
+        quint64 estimatedVarintDeltaSavingBytes = 0;
+    };
+
+    [[nodiscard]] std::size_t unsignedVarintByteCount(uint32_t value) noexcept
+    {
+        std::size_t bytes = 1;
+
+        while (value >= 0x80) {
+            value >>= 7;
+            ++bytes;
+        }
+
+        return bytes;
+    }
+
+    TrigramDistributionStats calculateTrigramDistributionStats(
+        const std::vector<IndexController::TrigramRange>& ranges,
+        const std::vector<uint32_t>& postings)
+    {
+        TrigramDistributionStats stats;
+        stats.rangeCount = ranges.size();
+        stats.postingCount = postings.size();
+
+        if (ranges.empty()) {
+            return stats;
+        }
+
+        std::vector<uint32_t> counts;
+        counts.reserve(ranges.size());
+
+        for (const IndexController::TrigramRange& range : ranges) {
+            counts.push_back(range.count);
+
+            if (range.count == 1) {
+                ++stats.postingListsWithOneEntry;
+            }
+
+            if (range.count >= 1024) {
+                ++stats.postingListsWithAtLeast1024Entries;
+            }
+
+            if (range.count >= 65536) {
+                ++stats.postingListsWithAtLeast65536Entries;
+            }
+
+            if (range.offset >= postings.size()) {
+                continue;
+            }
+
+            const std::size_t begin = range.offset;
+            const std::size_t end = std::min<std::size_t>(
+                postings.size(),
+                begin + range.count
+            );
+
+            uint32_t previousRecordIdx = 0;
+
+            for (std::size_t i = begin; i < end; ++i) {
+                const uint32_t recordIdx = postings[i];
+                const uint32_t delta = i == begin
+                    ? recordIdx
+                    : recordIdx - previousRecordIdx;
+
+                stats.estimatedVarintDeltaBytes +=
+                    unsignedVarintByteCount(delta);
+
+                previousRecordIdx = recordIdx;
+            }
+        }
+
+        std::sort(counts.begin(), counts.end());
+
+        auto percentile = [&](double ratio) -> uint32_t {
+            if (counts.empty()) {
+                return 0;
+            }
+
+            const std::size_t index = std::min<std::size_t>(
+                counts.size() - 1,
+                static_cast<std::size_t>(
+                    static_cast<double>(counts.size() - 1) * ratio
+                )
+            );
+
+            return counts[index];
+        };
+
+        stats.minPostingListSize = counts.front();
+        stats.p50PostingListSize = percentile(0.50);
+        stats.p90PostingListSize = percentile(0.90);
+        stats.p95PostingListSize = percentile(0.95);
+        stats.p99PostingListSize = percentile(0.99);
+        stats.maxPostingListSize = counts.back();
+
+        for (std::size_t i = 0; i < counts.size() && i < 10; ++i) {
+            stats.top10PostingEntries += counts[counts.size() - 1 - i];
+        }
+
+        for (std::size_t i = 0; i < counts.size() && i < 100; ++i) {
+            stats.top100PostingEntries += counts[counts.size() - 1 - i];
+        }
+
+        const quint64 rawPostingBytes =
+            static_cast<quint64>(postings.capacity()) * sizeof(uint32_t);
+
+        stats.estimatedVarintDeltaSavingBytes =
+            rawPostingBytes > stats.estimatedVarintDeltaBytes
+                ? rawPostingBytes - stats.estimatedVarintDeltaBytes
+                : 0;
+
+        return stats;
+    }
+
     bool containsAsciiUppercase(std::string_view text, std::size_t* uppercaseByteCount = nullptr)
     {
         bool found = false;
@@ -1755,6 +1887,9 @@ QString IndexController::memoryStatsText() const
     std::size_t grandExtensionStoredRecordRefs = 0;
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
+    quint64 grandTrigramPostingsCapacityBytes = 0;
+    quint64 grandEstimatedVarintDeltaBytes = 0;
+
     std::size_t grandLowercaseValidRecords = 0;
     std::size_t grandLowercaseInvalidStringRefs = 0;
     std::size_t grandRecordsWithAsciiUppercase = 0;
@@ -1781,6 +1916,15 @@ QString IndexController::memoryStatsText() const
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
         const quint64 fsIndexRecordRefsBytes = vectorCapacityBytes(device.fsIndexRecordRefs);
         const quint64 liveFsIndexRecordRefsBytes = vectorCapacityBytes(device.liveFsIndexRecordRefs);
+
+        const TrigramDistributionStats trigramStats =
+            calculateTrigramDistributionStats(
+                device.trigramRanges,
+                device.trigramPostings
+            );
+
+        grandTrigramPostingsCapacityBytes += trigramPostingsBytes;
+        grandEstimatedVarintDeltaBytes += trigramStats.estimatedVarintDeltaBytes;
 
         const LowercasePoolOpportunity lowercaseOpportunity =
             calculateLowercasePoolOpportunity(device);
@@ -1980,6 +2124,48 @@ QString IndexController::memoryStatsText() const
             << " => "
             << formatBytes(trigramPostingsBytes)
             << '\n';
+
+        out << "      trigram posting distribution:\n";
+        out << "        unique trigrams/ranges: "
+            << trigramStats.rangeCount
+            << '\n';
+        out << "        posting entries: "
+            << trigramStats.postingCount
+            << '\n';
+        out << "        posting-list size min/p50/p90/p95/p99/max: "
+            << trigramStats.minPostingListSize
+            << '/'
+            << trigramStats.p50PostingListSize
+            << '/'
+            << trigramStats.p90PostingListSize
+            << '/'
+            << trigramStats.p95PostingListSize
+            << '/'
+            << trigramStats.p99PostingListSize
+            << '/'
+            << trigramStats.maxPostingListSize
+            << '\n';
+        out << "        posting lists with 1 entry: "
+            << trigramStats.postingListsWithOneEntry
+            << '\n';
+        out << "        posting lists with >=1024 entries: "
+            << trigramStats.postingListsWithAtLeast1024Entries
+            << '\n';
+        out << "        posting lists with >=65536 entries: "
+            << trigramStats.postingListsWithAtLeast65536Entries
+            << '\n';
+        out << "        entries in top 10/top 100 largest posting lists: "
+            << trigramStats.top10PostingEntries
+            << '/'
+            << trigramStats.top100PostingEntries
+            << '\n';
+        out << "        estimated varint-delta posting bytes: "
+            << formatBytes(trigramStats.estimatedVarintDeltaBytes)
+            << '\n';
+        out << "        estimated varint-delta saving vs current capacity: "
+            << formatBytes(trigramStats.estimatedVarintDeltaSavingBytes)
+            << '\n';
+
         out << "    liveDeltaFlatIndex size/capacity: "
             << device.liveDeltaFlatIndex.size()
             << '/'
@@ -2071,6 +2257,19 @@ QString IndexController::memoryStatsText() const
         << grandLowercaseNameOffsetEntries
         << '\n';
     out << "  trigram posting entries: " << grandFlatTrigrams << '\n';
+    out << "  trigram posting capacity bytes: "
+        << formatBytes(grandTrigramPostingsCapacityBytes)
+        << '\n';
+    out << "  estimated varint-delta trigram posting bytes: "
+        << formatBytes(grandEstimatedVarintDeltaBytes)
+        << '\n';
+    out << "  estimated varint-delta trigram posting saving: "
+        << formatBytes(
+            grandTrigramPostingsCapacityBytes > grandEstimatedVarintDeltaBytes
+                ? grandTrigramPostingsCapacityBytes - grandEstimatedVarintDeltaBytes
+                : 0
+        )
+        << '\n';
     out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
     out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';
     out << "  extension stored record refs: " << grandExtensionStoredRecordRefs << '\n';

@@ -66,6 +66,54 @@ namespace {
         Clock::time_point start_;
     };
 
+    void appendUnsignedVarint(uint32_t value, std::vector<uint8_t>& out)
+    {
+        while (value >= 0x80) {
+            out.push_back(static_cast<uint8_t>((value & 0x7F) | 0x80));
+            value >>= 7;
+        }
+
+        out.push_back(static_cast<uint8_t>(value));
+    }
+
+    bool readUnsignedVarint(
+        const std::vector<uint8_t>& bytes,
+        std::size_t& offset,
+        std::size_t end,
+        uint32_t& value
+    ) {
+        value = 0;
+        uint32_t shift = 0;
+
+        while (offset < end && shift <= 28) {
+            const uint8_t byte = bytes[offset++];
+            value |= static_cast<uint32_t>(byte & 0x7F) << shift;
+
+            if ((byte & 0x80) == 0) {
+                return true;
+            }
+
+            shift += 7;
+        }
+
+        return false;
+    }
+
+    void appendCompressedPosting(
+        std::vector<uint8_t>& postings,
+        uint32_t recordIdx,
+        uint32_t& previousRecordIdx,
+        bool& firstPosting
+    ) {
+        const uint32_t encodedValue = firstPosting
+            ? recordIdx
+            : recordIdx - previousRecordIdx;
+
+        appendUnsignedVarint(encodedValue, postings);
+        previousRecordIdx = recordIdx;
+        firstPosting = false;
+    }
+
     // Overload using TrigramEntry
     template <typename Fn>
     void forEachRecordIdxForTrigram(
@@ -91,7 +139,7 @@ namespace {
     template <typename Fn>
     void forEachRecordIdxForTrigram(
         const std::vector<IndexController::TrigramRange>& ranges,
-        const std::vector<uint32_t>& postings,
+        const std::vector<uint8_t>& postings,
         uint32_t trigram,
         Fn&& fn)
     {
@@ -108,15 +156,32 @@ namespace {
             return;
         }
 
-        const std::size_t begin = it->offset;
-        const std::size_t end = begin + it->count;
+        std::size_t readOffset = it->offset;
 
-        if (end > postings.size()) {
+        if (readOffset > postings.size()) {
             return;
         }
 
-        for (std::size_t i = begin; i < end; ++i) {
-            fn(postings[i]);
+        uint32_t previousRecordIdx = 0;
+
+        for (uint32_t decodedCount = 0; decodedCount < it->count; ++decodedCount) {
+            uint32_t encodedValue = 0;
+
+            if (!readUnsignedVarint(
+                    postings,
+                    readOffset,
+                    postings.size(),
+                    encodedValue
+                )) {
+                return;
+                }
+
+            const uint32_t recordIdx = decodedCount == 0
+                ? encodedValue
+                : previousRecordIdx + encodedValue;
+
+            previousRecordIdx = recordIdx;
+            fn(recordIdx);
         }
     }
 
@@ -254,10 +319,22 @@ namespace {
         return it->count;
     }
 
+    std::size_t totalDecodedTrigramPostingCount(
+        const std::vector<IndexController::TrigramRange>& ranges
+    ) {
+        std::size_t total = 0;
+
+        for (const IndexController::TrigramRange& range : ranges) {
+            total += range.count;
+        }
+
+        return total;
+    }
+
     void buildCompactTrigramIndexFromSortedEntries(
         const std::vector<IndexController::TrigramEntry>& sortedEntries,
         std::vector<IndexController::TrigramRange>& ranges,
-        std::vector<uint32_t>& postings)
+        std::vector<uint8_t>& postings)
     {
         ranges.clear();
         postings.clear();
@@ -268,7 +345,11 @@ namespace {
             return;
         }
 
-        postings.reserve(sortedEntries.size());
+        // Varint-delta encoded postings are usually much smaller than the raw
+        // uint32_t posting stream. Reserving the raw byte size prevents repeated
+        // reallocations during the first build while still allowing shrink_to_fit()
+        // to release the unused tail below.
+        postings.reserve(sortedEntries.size() * sizeof(uint32_t));
 
         std::size_t i = 0;
 
@@ -276,13 +357,21 @@ namespace {
             const uint32_t trigram = sortedEntries[i].trigram;
             const uint32_t offset = static_cast<uint32_t>(postings.size());
 
+            uint32_t count = 0;
+            uint32_t previousRecordIdx = 0;
+            bool firstPosting = true;
+
             do {
-                postings.push_back(sortedEntries[i].recordIdx);
+                appendCompressedPosting(
+                    postings,
+                    sortedEntries[i].recordIdx,
+                    previousRecordIdx,
+                    firstPosting
+                );
+
+                ++count;
                 ++i;
             } while (i < sortedEntries.size() && sortedEntries[i].trigram == trigram);
-
-            const uint32_t count =
-                static_cast<uint32_t>(postings.size() - offset);
 
             ranges.push_back({
                 trigram,
@@ -373,7 +462,6 @@ namespace {
         }
     };
 
-
     struct TrigramDistributionStats {
         std::size_t rangeCount = 0;
         std::size_t postingCount = 0;
@@ -391,29 +479,18 @@ namespace {
         std::size_t postingListsWithAtLeast1024Entries = 0;
         std::size_t postingListsWithAtLeast65536Entries = 0;
 
-        quint64 estimatedVarintDeltaBytes = 0;
-        quint64 estimatedVarintDeltaSavingBytes = 0;
+        quint64 rawUint32PostingBytes = 0;
+        quint64 compressedPostingBytes = 0;
+        quint64 compressedPostingSavingBytes = 0;
     };
-
-    [[nodiscard]] std::size_t unsignedVarintByteCount(uint32_t value) noexcept
-    {
-        std::size_t bytes = 1;
-
-        while (value >= 0x80) {
-            value >>= 7;
-            ++bytes;
-        }
-
-        return bytes;
-    }
 
     TrigramDistributionStats calculateTrigramDistributionStats(
         const std::vector<IndexController::TrigramRange>& ranges,
-        const std::vector<uint32_t>& postings)
+        const std::vector<uint8_t>& postings)
     {
         TrigramDistributionStats stats;
         stats.rangeCount = ranges.size();
-        stats.postingCount = postings.size();
+        stats.compressedPostingBytes = postings.capacity();
 
         if (ranges.empty()) {
             return stats;
@@ -424,6 +501,7 @@ namespace {
 
         for (const IndexController::TrigramRange& range : ranges) {
             counts.push_back(range.count);
+            stats.postingCount += range.count;
 
             if (range.count == 1) {
                 ++stats.postingListsWithOneEntry;
@@ -435,30 +513,6 @@ namespace {
 
             if (range.count >= 65536) {
                 ++stats.postingListsWithAtLeast65536Entries;
-            }
-
-            if (range.offset >= postings.size()) {
-                continue;
-            }
-
-            const std::size_t begin = range.offset;
-            const std::size_t end = std::min<std::size_t>(
-                postings.size(),
-                begin + range.count
-            );
-
-            uint32_t previousRecordIdx = 0;
-
-            for (std::size_t i = begin; i < end; ++i) {
-                const uint32_t recordIdx = postings[i];
-                const uint32_t delta = i == begin
-                    ? recordIdx
-                    : recordIdx - previousRecordIdx;
-
-                stats.estimatedVarintDeltaBytes +=
-                    unsignedVarintByteCount(delta);
-
-                previousRecordIdx = recordIdx;
             }
         }
 
@@ -494,12 +548,12 @@ namespace {
             stats.top100PostingEntries += counts[counts.size() - 1 - i];
         }
 
-        const quint64 rawPostingBytes =
-            static_cast<quint64>(postings.capacity()) * sizeof(uint32_t);
+        stats.rawUint32PostingBytes =
+            static_cast<quint64>(stats.postingCount) * sizeof(uint32_t);
 
-        stats.estimatedVarintDeltaSavingBytes =
-            rawPostingBytes > stats.estimatedVarintDeltaBytes
-                ? rawPostingBytes - stats.estimatedVarintDeltaBytes
+        stats.compressedPostingSavingBytes =
+            stats.rawUint32PostingBytes > stats.compressedPostingBytes
+                ? stats.rawUint32PostingBytes - stats.compressedPostingBytes
                 : 0;
 
         return stats;
@@ -1888,7 +1942,7 @@ QString IndexController::memoryStatsText() const
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
     quint64 grandTrigramPostingsCapacityBytes = 0;
-    quint64 grandEstimatedVarintDeltaBytes = 0;
+    quint64 grandRawUint32TrigramPostingBytes = 0;
 
     std::size_t grandLowercaseValidRecords = 0;
     std::size_t grandLowercaseInvalidStringRefs = 0;
@@ -1924,7 +1978,7 @@ QString IndexController::memoryStatsText() const
             );
 
         grandTrigramPostingsCapacityBytes += trigramPostingsBytes;
-        grandEstimatedVarintDeltaBytes += trigramStats.estimatedVarintDeltaBytes;
+        grandRawUint32TrigramPostingBytes += trigramStats.rawUint32PostingBytes;
 
         const LowercasePoolOpportunity lowercaseOpportunity =
             calculateLowercasePoolOpportunity(device);
@@ -1996,7 +2050,7 @@ QString IndexController::memoryStatsText() const
         grandEstimatedHashNodeOverhead24Bytes += deviceEstimatedHashNodeOverhead24Bytes;
 
         grandRecords += device.fileRecords.size();
-        grandFlatTrigrams += device.trigramPostings.size();
+        grandFlatTrigrams += trigramStats.postingCount;
         grandLiveDeltaTrigrams += device.liveDeltaFlatIndex.size();
         grandStringBytes += device.stringPool.size();
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
@@ -2123,13 +2177,12 @@ QString IndexController::memoryStatsText() const
             << device.trigramPostings.capacity()
             << " => "
             << formatBytes(trigramPostingsBytes)
-            << '\n';
-
+            << " compressed bytes\n";
         out << "      trigram posting distribution:\n";
         out << "        unique trigrams/ranges: "
             << trigramStats.rangeCount
             << '\n';
-        out << "        posting entries: "
+        out << "        decoded posting entries: "
             << trigramStats.postingCount
             << '\n';
         out << "        posting-list size min/p50/p90/p95/p99/max: "
@@ -2159,11 +2212,11 @@ QString IndexController::memoryStatsText() const
             << '/'
             << trigramStats.top100PostingEntries
             << '\n';
-        out << "        estimated varint-delta posting bytes: "
-            << formatBytes(trigramStats.estimatedVarintDeltaBytes)
+        out << "        raw uint32 posting bytes would be: "
+            << formatBytes(trigramStats.rawUint32PostingBytes)
             << '\n';
-        out << "        estimated varint-delta saving vs current capacity: "
-            << formatBytes(trigramStats.estimatedVarintDeltaSavingBytes)
+        out << "        compressed posting saving vs raw uint32: "
+            << formatBytes(trigramStats.compressedPostingSavingBytes)
             << '\n';
 
         out << "    liveDeltaFlatIndex size/capacity: "
@@ -2257,16 +2310,16 @@ QString IndexController::memoryStatsText() const
         << grandLowercaseNameOffsetEntries
         << '\n';
     out << "  trigram posting entries: " << grandFlatTrigrams << '\n';
-    out << "  trigram posting capacity bytes: "
+    out << "  compressed trigram posting capacity bytes: "
         << formatBytes(grandTrigramPostingsCapacityBytes)
         << '\n';
-    out << "  estimated varint-delta trigram posting bytes: "
-        << formatBytes(grandEstimatedVarintDeltaBytes)
+    out << "  raw uint32 trigram posting bytes would be: "
+        << formatBytes(grandRawUint32TrigramPostingBytes)
         << '\n';
-    out << "  estimated varint-delta trigram posting saving: "
+    out << "  compressed trigram posting saving vs raw uint32: "
         << formatBytes(
-            grandTrigramPostingsCapacityBytes > grandEstimatedVarintDeltaBytes
-                ? grandTrigramPostingsCapacityBytes - grandEstimatedVarintDeltaBytes
+            grandRawUint32TrigramPostingBytes > grandTrigramPostingsCapacityBytes
+                ? grandRawUint32TrigramPostingBytes - grandTrigramPostingsCapacityBytes
                 : 0
         )
         << '\n';
@@ -2686,12 +2739,15 @@ bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceInde
         return false;
     }
 
-    if (deviceIndex.trigramPostings.empty()) {
+    const std::size_t mainPostingCount =
+        totalDecodedTrigramPostingCount(deviceIndex.trigramRanges);
+
+    if (mainPostingCount == 0) {
         return true;
     }
 
     return deviceIndex.liveDeltaFlatIndex.size() >=
-           deviceIndex.trigramPostings.size() / LiveDeltaRebuildRatioDivisor;
+           mainPostingCount / LiveDeltaRebuildRatioDivisor;
 }
 
 void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
@@ -2700,7 +2756,7 @@ void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceInd
     std::cerr << "Rebuilding compact trigram index after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
               << " ranges=" << deviceIndex.trigramRanges.size()
-              << " postings=" << deviceIndex.trigramPostings.size()
+              << " compressedPostingBytes=" << deviceIndex.trigramPostings.size()
               << " liveDeltaFlatIndex=" << deviceIndex.liveDeltaFlatIndex.size()
               << "\n";
 #endif
@@ -2770,7 +2826,7 @@ void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceInd
     std::cerr << "Finished rebuilding compact trigram index after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
               << " ranges=" << deviceIndex.trigramRanges.size()
-              << " postings=" << deviceIndex.trigramPostings.size()
+              << " compressedPostingBytes=" << deviceIndex.trigramPostings.size()
               << "\n";
 #endif
 }

@@ -160,10 +160,14 @@ public:
 
         // Compact full-scan trigram index.
         //
-        // trigramRanges maps trigram -> [offset, count] within trigramPostings.
-        // trigramPostings stores sorted record indices for each trigram.
+        // trigramRanges maps trigram -> [byte offset, decoded count] within
+        // trigramPostings.
+        //
+        // trigramPostings stores each trigram's sorted record indices as:
+        //   first recordIdx as unsigned varint,
+        //   then recordIdx deltas as unsigned varints.
         std::vector<TrigramRange> trigramRanges;
-        std::vector<uint32_t> trigramPostings;
+        std::vector<uint8_t> trigramPostings;
 
         // Trigrams added by live updates after the last full scan.
         //
@@ -795,7 +799,7 @@ public:
             trigramPostings.clear();
 
             if (!flatEntries.empty()) {
-                trigramPostings.reserve(flatEntries.size());
+                trigramPostings.reserve(flatEntries.size() * sizeof(uint32_t));
 
                 std::size_t i = 0;
 
@@ -803,13 +807,31 @@ public:
                     const uint32_t trigram = flatEntries[i].trigram;
                     const uint32_t offset = static_cast<uint32_t>(trigramPostings.size());
 
+                    uint32_t count = 0;
+                    uint32_t previousRecordIdx = 0;
+                    bool firstPosting = true;
+
                     do {
-                        trigramPostings.push_back(flatEntries[i].recordIdx);
+                        const uint32_t recordIdx = flatEntries[i].recordIdx;
+                        const uint32_t encodedValue = firstPosting
+                            ? recordIdx
+                            : recordIdx - previousRecordIdx;
+
+                        uint32_t value = encodedValue;
+                        while (value >= 0x80) {
+                            trigramPostings.push_back(
+                                static_cast<uint8_t>((value & 0x7F) | 0x80)
+                            );
+                            value >>= 7;
+                        }
+
+                        trigramPostings.push_back(static_cast<uint8_t>(value));
+
+                        previousRecordIdx = recordIdx;
+                        firstPosting = false;
+                        ++count;
                         ++i;
                     } while (i < flatEntries.size() && flatEntries[i].trigram == trigram);
-
-                    const uint32_t count =
-                        static_cast<uint32_t>(trigramPostings.size() - offset);
 
                     trigramRanges.push_back({
                         trigram,
@@ -826,7 +848,7 @@ public:
 #ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "Finished compact trigram index"
                       << " ranges=" << trigramRanges.size()
-                      << " postings=" << trigramPostings.size()
+                      << " compressedPostingBytes=" << trigramPostings.size()
                       << "\n";
 #endif
         }

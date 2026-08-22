@@ -484,6 +484,82 @@ namespace {
         quint64 compressedPostingSavingBytes = 0;
     };
 
+    struct CompressedTrigramValidationStats {
+        std::size_t rangesChecked = 0;
+        std::size_t invalidOffsets = 0;
+        std::size_t decodeFailures = 0;
+        std::size_t nonMonotonicLists = 0;
+        std::size_t outOfRangeRecordRefs = 0;
+        std::size_t trailingBytesInRanges = 0;
+    };
+
+    CompressedTrigramValidationStats validateCompressedTrigramIndex(
+        const std::vector<IndexController::TrigramRange>& ranges,
+        const std::vector<uint8_t>& postings,
+        std::size_t fileRecordCount)
+    {
+        CompressedTrigramValidationStats stats;
+        stats.rangesChecked = ranges.size();
+
+        for (std::size_t rangeIdx = 0; rangeIdx < ranges.size(); ++rangeIdx) {
+            const IndexController::TrigramRange& range = ranges[rangeIdx];
+
+            if (range.offset > postings.size()) {
+                ++stats.invalidOffsets;
+                ++stats.decodeFailures;
+                continue;
+            }
+
+            const std::size_t rangeEnd =
+                rangeIdx + 1 < ranges.size()
+                    ? static_cast<std::size_t>(ranges[rangeIdx + 1].offset)
+                    : postings.size();
+
+            if (rangeEnd < range.offset || rangeEnd > postings.size()) {
+                ++stats.invalidOffsets;
+                ++stats.decodeFailures;
+                continue;
+            }
+
+            std::size_t readOffset = range.offset;
+            uint32_t previousRecordIdx = 0;
+
+            for (uint32_t decodedCount = 0; decodedCount < range.count; ++decodedCount) {
+                uint32_t encodedValue = 0;
+
+                if (!readUnsignedVarint(
+                        postings,
+                        readOffset,
+                        rangeEnd,
+                        encodedValue
+                    )) {
+                    ++stats.decodeFailures;
+                    break;
+                }
+
+                const uint32_t recordIdx = decodedCount == 0
+                    ? encodedValue
+                    : previousRecordIdx + encodedValue;
+
+                if (decodedCount != 0 && recordIdx < previousRecordIdx) {
+                    ++stats.nonMonotonicLists;
+                }
+
+                if (recordIdx >= fileRecordCount) {
+                    ++stats.outOfRangeRecordRefs;
+                }
+
+                previousRecordIdx = recordIdx;
+            }
+
+            if (readOffset != rangeEnd) {
+                ++stats.trailingBytesInRanges;
+            }
+        }
+
+        return stats;
+    }
+
     TrigramDistributionStats calculateTrigramDistributionStats(
         const std::vector<IndexController::TrigramRange>& ranges,
         const std::vector<uint8_t>& postings)
@@ -1944,6 +2020,13 @@ QString IndexController::memoryStatsText() const
     quint64 grandTrigramPostingsCapacityBytes = 0;
     quint64 grandRawUint32TrigramPostingBytes = 0;
 
+    std::size_t grandCompressedTrigramRangesChecked = 0;
+    std::size_t grandCompressedTrigramInvalidOffsets = 0;
+    std::size_t grandCompressedTrigramDecodeFailures = 0;
+    std::size_t grandCompressedTrigramNonMonotonicLists = 0;
+    std::size_t grandCompressedTrigramOutOfRangeRecordRefs = 0;
+    std::size_t grandCompressedTrigramTrailingBytesInRanges = 0;
+
     std::size_t grandLowercaseValidRecords = 0;
     std::size_t grandLowercaseInvalidStringRefs = 0;
     std::size_t grandRecordsWithAsciiUppercase = 0;
@@ -1977,8 +2060,22 @@ QString IndexController::memoryStatsText() const
                 device.trigramPostings
             );
 
+        const CompressedTrigramValidationStats trigramValidationStats =
+            validateCompressedTrigramIndex(
+                device.trigramRanges,
+                device.trigramPostings,
+                device.fileRecords.size()
+            );
+
         grandTrigramPostingsCapacityBytes += trigramPostingsBytes;
         grandRawUint32TrigramPostingBytes += trigramStats.rawUint32PostingBytes;
+
+        grandCompressedTrigramRangesChecked += trigramValidationStats.rangesChecked;
+        grandCompressedTrigramInvalidOffsets += trigramValidationStats.invalidOffsets;
+        grandCompressedTrigramDecodeFailures += trigramValidationStats.decodeFailures;
+        grandCompressedTrigramNonMonotonicLists += trigramValidationStats.nonMonotonicLists;
+        grandCompressedTrigramOutOfRangeRecordRefs += trigramValidationStats.outOfRangeRecordRefs;
+        grandCompressedTrigramTrailingBytesInRanges += trigramValidationStats.trailingBytesInRanges;
 
         const LowercasePoolOpportunity lowercaseOpportunity =
             calculateLowercasePoolOpportunity(device);
@@ -2218,6 +2315,25 @@ QString IndexController::memoryStatsText() const
         out << "        compressed posting saving vs raw uint32: "
             << formatBytes(trigramStats.compressedPostingSavingBytes)
             << '\n';
+        out << "      compressed trigram validation:\n";
+        out << "        ranges checked: "
+            << trigramValidationStats.rangesChecked
+            << '\n';
+        out << "        invalid offsets: "
+            << trigramValidationStats.invalidOffsets
+            << '\n';
+        out << "        decode failures: "
+            << trigramValidationStats.decodeFailures
+            << '\n';
+        out << "        non-monotonic lists: "
+            << trigramValidationStats.nonMonotonicLists
+            << '\n';
+        out << "        out-of-range record refs: "
+            << trigramValidationStats.outOfRangeRecordRefs
+            << '\n';
+        out << "        trailing bytes in ranges: "
+            << trigramValidationStats.trailingBytesInRanges
+            << '\n';
 
         out << "    liveDeltaFlatIndex size/capacity: "
             << device.liveDeltaFlatIndex.size()
@@ -2322,6 +2438,25 @@ QString IndexController::memoryStatsText() const
                 ? grandRawUint32TrigramPostingBytes - grandTrigramPostingsCapacityBytes
                 : 0
         )
+        << '\n';
+    out << "  compressed trigram validation:\n";
+    out << "    ranges checked: "
+        << grandCompressedTrigramRangesChecked
+        << '\n';
+    out << "    invalid offsets: "
+        << grandCompressedTrigramInvalidOffsets
+        << '\n';
+    out << "    decode failures: "
+        << grandCompressedTrigramDecodeFailures
+        << '\n';
+    out << "    non-monotonic lists: "
+        << grandCompressedTrigramNonMonotonicLists
+        << '\n';
+    out << "    out-of-range record refs: "
+        << grandCompressedTrigramOutOfRangeRecordRefs
+        << '\n';
+    out << "    trailing bytes in ranges: "
+        << grandCompressedTrigramTrailingBytesInRanges
         << '\n';
     out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
     out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';

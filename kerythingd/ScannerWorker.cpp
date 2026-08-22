@@ -6,6 +6,10 @@
 #include "FileRecord.h"
 #include "ThrottledProgressReporter.h"
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 ScannerWorker::ScannerWorker(QObject* parent)
     : QObject(parent)
 {
@@ -78,4 +82,8 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
     }
 
     currentJob_.reset();
+
+#if defined(__GLIBC__)
+    ::malloc_trim(0);
+#endif
 }

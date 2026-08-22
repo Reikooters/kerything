@@ -69,12 +69,10 @@ int FanotifyHandleResolver::openMountFd(QString* errorText) const
 }
 
 int FanotifyHandleResolver::openHandle(
-    const QString& handleHex,
+    const QByteArray& handleBytes,
     qint32 handleType,
     QString* errorText) const
 {
-    const QByteArray handleBytes = QByteArray::fromHex(handleHex.toLatin1());
-
     if (handleBytes.isEmpty()) {
         if (errorText) {
             *errorText = QStringLiteral("empty fanotify file handle");
@@ -131,11 +129,11 @@ int FanotifyHandleResolver::openHandle(
 }
 
 ResolvedFanotifyHandle FanotifyHandleResolver::resolveObjectHandle(
-    const QString& handleHex,
+    const QByteArray& handleBytes,
     qint32 handleType) const
 {
     QString errorText;
-    const int fd = openHandle(handleHex, handleType, &errorText);
+    const int fd = openHandle(handleBytes, handleType, &errorText);
 
     if (fd < 0) {
         ResolvedFanotifyHandle resolved;
@@ -156,7 +154,7 @@ ResolvedFanotifyHandle FanotifyHandleResolver::resolveObjectHandle(
 }
 
 ResolvedFanotifyHandle FanotifyHandleResolver::resolveChildByParentHandleAndName(
-    const QString& parentHandleHex,
+    const QByteArray& parentHandleBytes,
     qint32 parentHandleType,
     const QString& name) const
 {
@@ -167,7 +165,7 @@ ResolvedFanotifyHandle FanotifyHandleResolver::resolveChildByParentHandleAndName
     }
 
     QString errorText;
-    const int parentFd = openHandle(parentHandleHex, parentHandleType, &errorText);
+    const int parentFd = openHandle(parentHandleBytes, parentHandleType, &errorText);
 
     if (parentFd < 0) {
         ResolvedFanotifyHandle resolved;

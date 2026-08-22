@@ -251,8 +251,8 @@ inline QByteArray makeLiveUpdateBatchPayload(
 
         for (const LiveUpdateEventInfo& info : event.infos) {
             out << info.infoType
-                << info.fsidHex
-                << info.handleHex
+                << info.fsid
+                << info.handle
                 << info.handleType
                 << info.name;
         }
@@ -300,8 +300,8 @@ parseLiveUpdateBatchPayload(const QByteArray& payload)
             LiveUpdateEventInfo info;
 
             in >> info.infoType
-               >> info.fsidHex
-               >> info.handleHex
+               >> info.fsid
+               >> info.handle
                >> info.handleType
                >> info.name;
 

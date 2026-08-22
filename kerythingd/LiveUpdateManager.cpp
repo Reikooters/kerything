@@ -61,7 +61,7 @@ namespace {
         operation.name = entryInfo->name;
 
         const ResolvedFanotifyHandle parent =
-            resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
+            resolver.resolveObjectHandle(entryInfo->handle, entryInfo->handleType);
 
         if (parent.ok) {
             operation.parentInode = parent.inode;
@@ -94,7 +94,7 @@ namespace {
 
         const ResolvedFanotifyHandle child =
             resolver.resolveChildByParentHandleAndName(
-                entryInfo->handleHex,
+                entryInfo->handle,
                 entryInfo->handleType,
                 entryInfo->name
             );
@@ -107,7 +107,7 @@ namespace {
         }
 
         const ResolvedFanotifyHandle parent =
-            resolver.resolveObjectHandle(entryInfo->handleHex, entryInfo->handleType);
+            resolver.resolveObjectHandle(entryInfo->handle, entryInfo->handleType);
 
         if (parent.ok) {
             operation.parentInode = parent.inode;
@@ -185,7 +185,7 @@ namespace {
             }
 
             const ResolvedFanotifyHandle object =
-                resolver.resolveObjectHandle(objectInfo->handleHex, objectInfo->handleType);
+                resolver.resolveObjectHandle(objectInfo->handle, objectInfo->handleType);
 
             if (!object.ok) {
                 operation.kind = LiveUpdateOperationKind::Ignored;
@@ -479,11 +479,11 @@ void LiveUpdateManager::logEventBatch(
             std::cout << " infoType="
                       << info.infoType.toStdString()
                       << " fsid="
-                      << info.fsidHex.toStdString()
+                      << info.fsid.toHex().constData()
                       << " handleType="
                       << info.handleType
                       << " handle="
-                      << info.handleHex.toStdString();
+                      << info.handle.toHex().constData();
 
             if (!info.name.isEmpty()) {
                 std::cout << " name="

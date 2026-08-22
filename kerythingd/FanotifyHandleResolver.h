@@ -4,6 +4,7 @@
 #ifndef KERYTHINGD_FANOTIFYHANDLERESOLVER_H
 #define KERYTHINGD_FANOTIFYHANDLERESOLVER_H
 
+#include <QByteArray>
 #include <QString>
 #include <QtGlobal>
 
@@ -26,12 +27,12 @@ public:
     ~FanotifyHandleResolver();
 
     [[nodiscard]] ResolvedFanotifyHandle resolveObjectHandle(
-        const QString& handleHex,
+        const QByteArray& handleBytes,
         qint32 handleType
     ) const;
 
     [[nodiscard]] ResolvedFanotifyHandle resolveChildByParentHandleAndName(
-        const QString& parentHandleHex,
+        const QByteArray& parentHandleBytes,
         qint32 parentHandleType,
         const QString& name
     ) const;
@@ -39,7 +40,7 @@ public:
 private:
     [[nodiscard]] int openMountFd(QString* errorText = nullptr) const;
     [[nodiscard]] int openHandle(
-        const QString& handleHex,
+        const QByteArray& handleBytes,
         qint32 handleType,
         QString* errorText = nullptr
     ) const;

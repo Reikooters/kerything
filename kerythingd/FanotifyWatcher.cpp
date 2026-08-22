@@ -19,10 +19,12 @@ namespace {
     constexpr size_t EventBufferSize = 256 * 1024;
     constexpr std::size_t MaxPendingEvents = 4096;
 
-    QString bytesToHex(const unsigned char* data, int size)
+    QByteArray bytesToByteArray(const void* data, int size)
     {
-        QByteArray bytes(reinterpret_cast<const char*>(data), size);
-        return QString::fromLatin1(bytes.toHex());
+        return QByteArray(
+            reinterpret_cast<const char*>(data),
+            size
+        );
     }
 
     const char* boundedStringEnd(const char* begin, const char* end)
@@ -38,8 +40,8 @@ namespace {
 
     struct FanotifyNameInfo {
         QString infoType;
-        QString fsidHex;
-        QString handleHex;
+        QByteArray fsid;
+        QByteArray handle;
         qint32 handleType = 0;
         QString name;
     };
@@ -131,13 +133,13 @@ namespace {
 
                 FanotifyNameInfo nameInfo;
                 nameInfo.infoType = infoTypeName;
-                nameInfo.fsidHex = bytesToHex(
-                    reinterpret_cast<const unsigned char*>(&fid->fsid),
+                nameInfo.fsid = bytesToByteArray(
+                    &fid->fsid,
                     sizeof(fid->fsid)
                 );
                 nameInfo.handleType = fileHandle->handle_type;
-                nameInfo.handleHex = bytesToHex(
-                    reinterpret_cast<const unsigned char*>(fileHandle->f_handle),
+                nameInfo.handle = bytesToByteArray(
+                    fileHandle->f_handle,
                     fileHandle->handle_bytes
                 );
 
@@ -382,8 +384,8 @@ void FanotifyWatcher::captureEvent(const fanotify_event_metadata* metadata)
     for (const FanotifyNameInfo& info : parsedInfo.nameInfos) {
         LiveUpdateEventInfo pendingInfo;
         pendingInfo.infoType = info.infoType;
-        pendingInfo.fsidHex = info.fsidHex;
-        pendingInfo.handleHex = info.handleHex;
+        pendingInfo.fsid = info.fsid;
+        pendingInfo.handle = info.handle;
         pendingInfo.handleType = info.handleType;
         pendingInfo.name = info.name;
 

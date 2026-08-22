@@ -474,8 +474,12 @@ bool AppController::start() {
                     std::cout << "  normalized kind="
                               << normalizedLiveUpdateKindToString(normalized.kind).toStdString()
                               << " name=" << normalized.name.toStdString()
-                              << " parentHandle=" << normalized.parentHandleHex.toStdString()
-                              << " objectHandle=" << normalized.objectHandleHex.toStdString()
+                              << " fsid="
+                              << QString::fromLatin1(normalized.fsid.toHex()).toStdString()
+                              << " parentHandle="
+                              << QString::fromLatin1(normalized.parentHandle.toHex()).toStdString()
+                              << " objectHandle="
+                              << QString::fromLatin1(normalized.objectHandle.toHex()).toStdString()
                               << "\n";
 
                     ++logged;

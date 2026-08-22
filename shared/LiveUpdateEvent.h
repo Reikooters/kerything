@@ -4,6 +4,7 @@
 #ifndef KERYTHING_LIVEUPDATEEVENT_H
 #define KERYTHING_LIVEUPDATEEVENT_H
 
+#include <QByteArray>
 #include <QString>
 #include <QtGlobal>
 #include <vector>
@@ -12,8 +13,12 @@
 
 struct LiveUpdateEventInfo {
     QString infoType;
-    QString fsidHex;
-    QString handleHex;
+
+    // Stored as raw binary bytes internally. Convert to hex only for logging or
+    // display/debug text.
+    QByteArray fsid;
+    QByteArray handle;
+
     qint32 handleType = 0;
     QString name;
 };
@@ -100,12 +105,12 @@ struct NormalizedLiveUpdateEvent {
     quint64 rawMask = 0;
 
     // From DFID_NAME / OLD_DFID_NAME / NEW_DFID_NAME where available.
-    QString fsidHex;
-    QString parentHandleHex;
+    QByteArray fsid;
+    QByteArray parentHandle;
     QString name;
 
     // From FID where available. Often present for CLOSE_WRITE/ATTRIB.
-    QString objectHandleHex;
+    QByteArray objectHandle;
 };
 
 inline QString normalizedLiveUpdateKindToString(NormalizedLiveUpdateKind kind)
@@ -187,17 +192,17 @@ inline NormalizedLiveUpdateEvent normalizeLiveUpdateEvent(const LiveUpdateEvent&
     }
 
     if (const LiveUpdateEventInfo* entryInfo = firstDirectoryEntryInfo(event)) {
-        normalized.fsidHex = entryInfo->fsidHex;
-        normalized.parentHandleHex = entryInfo->handleHex;
+        normalized.fsid = entryInfo->fsid;
+        normalized.parentHandle = entryInfo->handle;
         normalized.name = entryInfo->name;
     }
 
     if (const LiveUpdateEventInfo* objectInfo = firstInfoOfType(event, QStringLiteral("FID"))) {
-        if (normalized.fsidHex.isEmpty()) {
-            normalized.fsidHex = objectInfo->fsidHex;
+        if (normalized.fsid.isEmpty()) {
+            normalized.fsid = objectInfo->fsid;
         }
 
-        normalized.objectHandleHex = objectInfo->handleHex;
+        normalized.objectHandle = objectInfo->handle;
     }
 
     return normalized;

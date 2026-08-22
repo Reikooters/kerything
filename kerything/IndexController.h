@@ -13,6 +13,7 @@
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -119,11 +120,16 @@ public:
         std::vector<char> stringPool;
         std::vector<uint64_t> deletedRecordBits;
 
-        struct FsIndexRecordRef {
-            uint64_t fsIndex = 0;
+        enum class FsIndexRefStorage : uint8_t {
+            UInt32,
+            UInt64
+        };
+
+        struct FsIndexRecordRef32 {
+            uint32_t fsIndex = 0;
             uint32_t recordIdx = 0;
 
-            [[nodiscard]] bool operator<(const FsIndexRecordRef& other) const noexcept
+            [[nodiscard]] bool operator<(const FsIndexRecordRef32& other) const noexcept
             {
                 if (fsIndex != other.fsIndex) {
                     return fsIndex < other.fsIndex;
@@ -133,31 +139,40 @@ public:
             }
         };
 
+        struct FsIndexRecordRef64 {
+            uint64_t fsIndex = 0;
+            uint32_t recordIdx = 0;
+
+            [[nodiscard]] bool operator<(const FsIndexRecordRef64& other) const noexcept
+            {
+                if (fsIndex != other.fsIndex) {
+                    return fsIndex < other.fsIndex;
+                }
+
+                return recordIdx < other.recordIdx;
+            }
+        };
+
+        // Full-scan fs-index refs use the narrowest key width that can safely
+        // represent all live records in this device. ext4 normally uses UInt32;
+        // NTFS and any filesystem with wider identifiers use UInt64.
+        FsIndexRefStorage fsIndexRefStorage = FsIndexRefStorage::UInt64;
+
         // Directory inode -> record-index references, sorted by fsIndex.
-        //
-        // Normal ext4 does not allow arbitrary hard-linked directories, so each
-        // directory inode is expected to resolve to a single live record.
-        std::vector<FsIndexRecordRef> directoryFsIndexRecordRefs;
+        std::vector<FsIndexRecordRef32> directoryFsIndexRecordRefs32;
+        std::vector<FsIndexRecordRef64> directoryFsIndexRecordRefs64;
 
         // Directory refs added by live updates after the last full rebuild.
-        //
-        // Kept separate so live directory creates do not require re-sorting the
-        // full directory fs-index vector. Parent lookup scans this small vector
-        // linearly, so newly-created directories are visible immediately within
-        // the same live-update batch.
-        std::vector<FsIndexRecordRef> liveDirectoryFsIndexRecordRefs;
+        std::vector<FsIndexRecordRef32> liveDirectoryFsIndexRecordRefs32;
+        std::vector<FsIndexRecordRef64> liveDirectoryFsIndexRecordRefs64;
 
         // Full-scan inode -> record-index references, sorted by fsIndex then recordIdx.
-        //
-        // Hard links are represented naturally as adjacent entries with the same
-        // fsIndex. Deleted/stale records are filtered during lookup.
-        std::vector<FsIndexRecordRef> fsIndexRecordRefs;
+        std::vector<FsIndexRecordRef32> fsIndexRecordRefs32;
+        std::vector<FsIndexRecordRef64> fsIndexRecordRefs64;
 
         // Inode refs added by live updates after the last full rebuild.
-        //
-        // Kept separate so live updates do not need to re-sort the large full-scan
-        // vector after every create/rename/hard-link event.
-        std::vector<FsIndexRecordRef> liveFsIndexRecordRefs;
+        std::vector<FsIndexRecordRef32> liveFsIndexRecordRefs32;
+        std::vector<FsIndexRecordRef64> liveFsIndexRecordRefs64;
 
         mutable std::vector<uint32_t> fsIndexLookupScratch;
 
@@ -443,8 +458,17 @@ public:
             return lowercaseRecordName(record, recordIdx);
         }
 
+        static constexpr uint64_t MaxUInt32FsIndex =
+            std::numeric_limits<uint32_t>::max();
+
+        [[nodiscard]] static bool fsIndexFitsUInt32(uint64_t fsIndex) noexcept
+        {
+            return fsIndex <= MaxUInt32FsIndex;
+        }
+
+        template <typename Ref>
         static void sortAndDeduplicateFsIndexRecordRefs(
-            std::vector<FsIndexRecordRef>& refs
+            std::vector<Ref>& refs
         ) {
             std::sort(refs.begin(), refs.end());
 
@@ -452,7 +476,7 @@ public:
                 std::unique(
                     refs.begin(),
                     refs.end(),
-                    [](const FsIndexRecordRef& lhs, const FsIndexRecordRef& rhs) {
+                    [](const Ref& lhs, const Ref& rhs) {
                         return lhs.fsIndex == rhs.fsIndex &&
                                lhs.recordIdx == rhs.recordIdx;
                     }
@@ -461,9 +485,112 @@ public:
             );
         }
 
-        [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForFsIndex(
+        [[nodiscard]] bool allLiveFsIndexesFitUInt32() const noexcept
+        {
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+
+                if (!fsIndexFitsUInt32(record.fsIndex) ||
+                    !fsIndexFitsUInt32(record.parentFsIndex)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        void clearFsIndexRefStorage()
+        {
+            directoryFsIndexRecordRefs32.clear();
+            directoryFsIndexRecordRefs64.clear();
+            liveDirectoryFsIndexRecordRefs32.clear();
+            liveDirectoryFsIndexRecordRefs64.clear();
+
+            fsIndexRecordRefs32.clear();
+            fsIndexRecordRefs64.clear();
+            liveFsIndexRecordRefs32.clear();
+            liveFsIndexRecordRefs64.clear();
+
+            fsIndexLookupScratch.clear();
+        }
+
+        void upgradeFsIndexRefStorageToUInt64()
+        {
+            if (fsIndexRefStorage == FsIndexRefStorage::UInt64) {
+                return;
+            }
+
+            directoryFsIndexRecordRefs64.reserve(directoryFsIndexRecordRefs32.size());
+            for (const FsIndexRecordRef32& ref : directoryFsIndexRecordRefs32) {
+                directoryFsIndexRecordRefs64.push_back({
+                    ref.fsIndex,
+                    ref.recordIdx
+                });
+            }
+
+            liveDirectoryFsIndexRecordRefs64.reserve(liveDirectoryFsIndexRecordRefs32.size());
+            for (const FsIndexRecordRef32& ref : liveDirectoryFsIndexRecordRefs32) {
+                liveDirectoryFsIndexRecordRefs64.push_back({
+                    ref.fsIndex,
+                    ref.recordIdx
+                });
+            }
+
+            fsIndexRecordRefs64.reserve(fsIndexRecordRefs32.size());
+            for (const FsIndexRecordRef32& ref : fsIndexRecordRefs32) {
+                fsIndexRecordRefs64.push_back({
+                    ref.fsIndex,
+                    ref.recordIdx
+                });
+            }
+
+            liveFsIndexRecordRefs64.reserve(liveFsIndexRecordRefs32.size());
+            for (const FsIndexRecordRef32& ref : liveFsIndexRecordRefs32) {
+                liveFsIndexRecordRefs64.push_back({
+                    ref.fsIndex,
+                    ref.recordIdx
+                });
+            }
+
+            std::vector<FsIndexRecordRef32>{}.swap(directoryFsIndexRecordRefs32);
+            std::vector<FsIndexRecordRef32>{}.swap(liveDirectoryFsIndexRecordRefs32);
+            std::vector<FsIndexRecordRef32>{}.swap(fsIndexRecordRefs32);
+            std::vector<FsIndexRecordRef32>{}.swap(liveFsIndexRecordRefs32);
+
+            fsIndexRefStorage = FsIndexRefStorage::UInt64;
+        }
+
+        void ensureFsIndexRefStorageCanStore(uint64_t fsIndex)
+        {
+            if (fsIndexRefStorage == FsIndexRefStorage::UInt32 &&
+                !fsIndexFitsUInt32(fsIndex)) {
+                upgradeFsIndexRefStorageToUInt64();
+            }
+        }
+
+        void ensureFsIndexRefStorageCanStore(uint64_t fsIndex, uint64_t parentFsIndex)
+        {
+            ensureFsIndexRefStorageCanStore(fsIndex);
+            ensureFsIndexRefStorageCanStore(parentFsIndex);
+        }
+
+        template <typename Ref>
+        [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForFsIndexInRefs(
+            const std::vector<Ref>& refs,
             uint64_t fsIndex
         ) const {
+            if constexpr (std::is_same_v<Ref, FsIndexRecordRef32>) {
+                if (!fsIndexFitsUInt32(fsIndex)) {
+                    return std::nullopt;
+                }
+            }
+
             auto validDirectoryRecord = [&](uint32_t recordIdx) -> std::optional<uint32_t> {
                 if (recordIdx >= fileRecords.size()) {
                     return std::nullopt;
@@ -482,46 +609,117 @@ public:
                 return recordIdx;
             };
 
+            const auto searchKey = Ref{
+                static_cast<decltype(Ref::fsIndex)>(fsIndex),
+                0
+            };
+
             const auto it = std::lower_bound(
-                directoryFsIndexRecordRefs.begin(),
-                directoryFsIndexRecordRefs.end(),
-                FsIndexRecordRef{fsIndex, 0},
-                [](const FsIndexRecordRef& lhs, const FsIndexRecordRef& rhs) {
+                refs.begin(),
+                refs.end(),
+                searchKey,
+                [](const Ref& lhs, const Ref& rhs) {
                     return lhs.fsIndex < rhs.fsIndex;
                 }
             );
 
-            if (it != directoryFsIndexRecordRefs.end() &&
-                it->fsIndex == fsIndex) {
-                if (const std::optional<uint32_t> recordIdx =
-                        validDirectoryRecord(it->recordIdx)) {
-                    return recordIdx;
-                        }
-                }
-
-            for (const FsIndexRecordRef& ref : liveDirectoryFsIndexRecordRefs) {
-                if (ref.fsIndex != fsIndex) {
-                    continue;
-                }
-
-                if (const std::optional<uint32_t> recordIdx =
-                        validDirectoryRecord(ref.recordIdx)) {
-                    return recordIdx;
-                        }
+            if (it != refs.end() &&
+                static_cast<uint64_t>(it->fsIndex) == fsIndex) {
+                return validDirectoryRecord(it->recordIdx);
             }
 
             return std::nullopt;
         }
 
-        void appendFsIndexRefsForLookup(
-            const std::vector<FsIndexRecordRef>& refs,
+        template <typename Ref>
+        [[nodiscard]] std::optional<uint32_t> liveDirectoryRecordIdxForFsIndexInRefs(
+            const std::vector<Ref>& refs,
             uint64_t fsIndex
         ) const {
+            if constexpr (std::is_same_v<Ref, FsIndexRecordRef32>) {
+                if (!fsIndexFitsUInt32(fsIndex)) {
+                    return std::nullopt;
+                }
+            }
+
+            for (const Ref& ref : refs) {
+                if (static_cast<uint64_t>(ref.fsIndex) != fsIndex) {
+                    continue;
+                }
+
+                if (ref.recordIdx >= fileRecords.size()) {
+                    continue;
+                }
+
+                if (isDeletedRecord(ref.recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[ref.recordIdx];
+
+                if ((record.flags & FileRecord_IsDir) == 0) {
+                    continue;
+                }
+
+                return ref.recordIdx;
+            }
+
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForFsIndex(
+            uint64_t fsIndex
+        ) const {
+            if (fsIndexRefStorage == FsIndexRefStorage::UInt32) {
+                if (const std::optional<uint32_t> recordIdx =
+                        directoryRecordIdxForFsIndexInRefs(
+                            directoryFsIndexRecordRefs32,
+                            fsIndex
+                        )) {
+                    return recordIdx;
+                }
+
+                return liveDirectoryRecordIdxForFsIndexInRefs(
+                    liveDirectoryFsIndexRecordRefs32,
+                    fsIndex
+                );
+            }
+
+            if (const std::optional<uint32_t> recordIdx =
+                    directoryRecordIdxForFsIndexInRefs(
+                        directoryFsIndexRecordRefs64,
+                        fsIndex
+                    )) {
+                return recordIdx;
+            }
+
+            return liveDirectoryRecordIdxForFsIndexInRefs(
+                liveDirectoryFsIndexRecordRefs64,
+                fsIndex
+            );
+        }
+
+        template <typename Ref>
+        void appendFsIndexRefsForLookup(
+            const std::vector<Ref>& refs,
+            uint64_t fsIndex
+        ) const {
+            if constexpr (std::is_same_v<Ref, FsIndexRecordRef32>) {
+                if (!fsIndexFitsUInt32(fsIndex)) {
+                    return;
+                }
+            }
+
+            const auto searchKey = Ref{
+                static_cast<decltype(Ref::fsIndex)>(fsIndex),
+                0
+            };
+
             const auto range = std::equal_range(
                 refs.begin(),
                 refs.end(),
-                FsIndexRecordRef{fsIndex, 0},
-                [](const FsIndexRecordRef& lhs, const FsIndexRecordRef& rhs) {
+                searchKey,
+                [](const Ref& lhs, const Ref& rhs) {
                     return lhs.fsIndex < rhs.fsIndex;
                 }
             );
@@ -539,23 +737,100 @@ public:
             }
         }
 
+        [[nodiscard]] std::size_t fsIndexFullRefCount() const noexcept
+        {
+            return fsIndexRefStorage == FsIndexRefStorage::UInt32
+                ? fsIndexRecordRefs32.size()
+                : fsIndexRecordRefs64.size();
+        }
+
+        [[nodiscard]] std::size_t fsIndexLiveRefCount() const noexcept
+        {
+            return fsIndexRefStorage == FsIndexRefStorage::UInt32
+                ? liveFsIndexRecordRefs32.size()
+                : liveFsIndexRecordRefs64.size();
+        }
+
+        [[nodiscard]] std::size_t fsIndexStoredRefCount() const noexcept
+        {
+            return fsIndexFullRefCount() + fsIndexLiveRefCount();
+        }
+
+        [[nodiscard]] std::size_t directoryFsIndexFullRefCount() const noexcept
+        {
+            return fsIndexRefStorage == FsIndexRefStorage::UInt32
+                ? directoryFsIndexRecordRefs32.size()
+                : directoryFsIndexRecordRefs64.size();
+        }
+
+        [[nodiscard]] std::size_t directoryFsIndexLiveRefCount() const noexcept
+        {
+            return fsIndexRefStorage == FsIndexRefStorage::UInt32
+                ? liveDirectoryFsIndexRecordRefs32.size()
+                : liveDirectoryFsIndexRecordRefs64.size();
+        }
+
         void rebuildFsIndexMaps() {
-            directoryFsIndexRecordRefs.clear();
-            liveDirectoryFsIndexRecordRefs.clear();
-            fsIndexRecordRefs.clear();
-            liveFsIndexRecordRefs.clear();
-            fsIndexLookupScratch.clear();
+            clearFsIndexRefStorage();
+
+            fsIndexRefStorage = allLiveFsIndexesFitUInt32()
+                ? FsIndexRefStorage::UInt32
+                : FsIndexRefStorage::UInt64;
 
             std::size_t directoryCount = 0;
+            std::size_t liveRecordCount = 0;
 
-            for (const FileRecord& rec : fileRecords) {
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                ++liveRecordCount;
+
+                const FileRecord& rec = fileRecords[recordIdx];
                 if ((rec.flags & FileRecord_IsDir) != 0) {
                     ++directoryCount;
                 }
             }
 
-            directoryFsIndexRecordRefs.reserve(directoryCount);
-            fsIndexRecordRefs.reserve(fileRecords.size());
+            if (fsIndexRefStorage == FsIndexRefStorage::UInt32) {
+                directoryFsIndexRecordRefs32.reserve(directoryCount);
+                fsIndexRecordRefs32.reserve(liveRecordCount);
+
+                for (uint32_t i = 0; i < static_cast<uint32_t>(fileRecords.size()); ++i) {
+                    if (isDeletedRecord(i)) {
+                        continue;
+                    }
+
+                    const FileRecord& rec = fileRecords[i];
+
+                    fsIndexRecordRefs32.push_back({
+                        static_cast<uint32_t>(rec.fsIndex),
+                        i
+                    });
+
+                    if ((rec.flags & FileRecord_IsDir) != 0) {
+                        directoryFsIndexRecordRefs32.push_back({
+                            static_cast<uint32_t>(rec.fsIndex),
+                            i
+                        });
+                    }
+                }
+
+                sortAndDeduplicateFsIndexRecordRefs(fsIndexRecordRefs32);
+                sortAndDeduplicateFsIndexRecordRefs(directoryFsIndexRecordRefs32);
+
+                fsIndexRecordRefs32.shrink_to_fit();
+                directoryFsIndexRecordRefs32.shrink_to_fit();
+                liveDirectoryFsIndexRecordRefs32.shrink_to_fit();
+                liveFsIndexRecordRefs32.shrink_to_fit();
+                return;
+            }
+
+            directoryFsIndexRecordRefs64.reserve(directoryCount);
+            fsIndexRecordRefs64.reserve(liveRecordCount);
 
             for (uint32_t i = 0; i < static_cast<uint32_t>(fileRecords.size()); ++i) {
                 if (isDeletedRecord(i)) {
@@ -564,27 +839,26 @@ public:
 
                 const FileRecord& rec = fileRecords[i];
 
-                fsIndexRecordRefs.push_back({
+                fsIndexRecordRefs64.push_back({
                     rec.fsIndex,
                     i
                 });
 
-                // Directory-only refs used for parent resolution.
                 if ((rec.flags & FileRecord_IsDir) != 0) {
-                    directoryFsIndexRecordRefs.push_back({
+                    directoryFsIndexRecordRefs64.push_back({
                         rec.fsIndex,
                         i
                     });
                 }
             }
 
-            sortAndDeduplicateFsIndexRecordRefs(fsIndexRecordRefs);
-            sortAndDeduplicateFsIndexRecordRefs(directoryFsIndexRecordRefs);
+            sortAndDeduplicateFsIndexRecordRefs(fsIndexRecordRefs64);
+            sortAndDeduplicateFsIndexRecordRefs(directoryFsIndexRecordRefs64);
 
-            fsIndexRecordRefs.shrink_to_fit();
-            directoryFsIndexRecordRefs.shrink_to_fit();
-            liveDirectoryFsIndexRecordRefs.shrink_to_fit();
-            liveFsIndexRecordRefs.shrink_to_fit();
+            fsIndexRecordRefs64.shrink_to_fit();
+            directoryFsIndexRecordRefs64.shrink_to_fit();
+            liveDirectoryFsIndexRecordRefs64.shrink_to_fit();
+            liveFsIndexRecordRefs64.shrink_to_fit();
         }
 
         /**
@@ -1088,8 +1362,13 @@ public:
         [[nodiscard]] const std::vector<uint32_t>* recordIndicesForFsIndex(uint64_t fsIndex) const {
             fsIndexLookupScratch.clear();
 
-            appendFsIndexRefsForLookup(fsIndexRecordRefs, fsIndex);
-            appendFsIndexRefsForLookup(liveFsIndexRecordRefs, fsIndex);
+            if (fsIndexRefStorage == FsIndexRefStorage::UInt32) {
+                appendFsIndexRefsForLookup(fsIndexRecordRefs32, fsIndex);
+                appendFsIndexRefsForLookup(liveFsIndexRecordRefs32, fsIndex);
+            } else {
+                appendFsIndexRefsForLookup(fsIndexRecordRefs64, fsIndex);
+                appendFsIndexRefsForLookup(liveFsIndexRecordRefs64, fsIndex);
+            }
 
             if (fsIndexLookupScratch.empty()) {
                 return nullptr;

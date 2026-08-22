@@ -974,10 +974,15 @@ quint64 IndexController::addDevice(
             deviceIndex.recordsByExtension.clear();
             deviceIndex.extensionIndexEntryCount = 0;
             deviceIndex.extensionIndexLiveDeltaEntries = 0;
-            deviceIndex.directoryFsIndexRecordRefs.clear();
-            deviceIndex.liveDirectoryFsIndexRecordRefs.clear();
-            deviceIndex.fsIndexRecordRefs.clear();
-            deviceIndex.liveFsIndexRecordRefs.clear();
+            deviceIndex.fsIndexRefStorage = DeviceIndex::FsIndexRefStorage::UInt64;
+            deviceIndex.directoryFsIndexRecordRefs32.clear();
+            deviceIndex.directoryFsIndexRecordRefs64.clear();
+            deviceIndex.liveDirectoryFsIndexRecordRefs32.clear();
+            deviceIndex.liveDirectoryFsIndexRecordRefs64.clear();
+            deviceIndex.fsIndexRecordRefs32.clear();
+            deviceIndex.fsIndexRecordRefs64.clear();
+            deviceIndex.liveFsIndexRecordRefs32.clear();
+            deviceIndex.liveFsIndexRecordRefs64.clear();
             deviceIndex.fsIndexLookupScratch.clear();
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
@@ -1501,13 +1506,23 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             targetIndex->liveDeltaFlatIndex.size() + estimatedTrigramsToAppend
         );
 
-        targetIndex->liveFsIndexRecordRefs.reserve(
-            targetIndex->liveFsIndexRecordRefs.size() + pendingUpserts.size()
-        );
+        if (targetIndex->fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32) {
+            targetIndex->liveFsIndexRecordRefs32.reserve(
+                targetIndex->liveFsIndexRecordRefs32.size() + pendingUpserts.size()
+            );
 
-        targetIndex->liveDirectoryFsIndexRecordRefs.reserve(
-            targetIndex->liveDirectoryFsIndexRecordRefs.size() + estimatedDirectoriesToAppend
-        );
+            targetIndex->liveDirectoryFsIndexRecordRefs32.reserve(
+                targetIndex->liveDirectoryFsIndexRecordRefs32.size() + estimatedDirectoriesToAppend
+            );
+        } else {
+            targetIndex->liveFsIndexRecordRefs64.reserve(
+                targetIndex->liveFsIndexRecordRefs64.size() + pendingUpserts.size()
+            );
+
+            targetIndex->liveDirectoryFsIndexRecordRefs64.reserve(
+                targetIndex->liveDirectoryFsIndexRecordRefs64.size() + estimatedDirectoriesToAppend
+            );
+        }
 
 #ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "live batch #" << liveBatchDebugId
@@ -1859,7 +1874,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         sortLiveUpdateTrigramIndex(*targetIndex);
     }
 
-    if (!targetIndex->liveFsIndexRecordRefs.empty()) {
+    if (targetIndex->fsIndexLiveRefCount() > 0) {
         PhaseTimer timer(
             QStringLiteral("live batch #%1 sort live fs-index refs").arg(liveBatchDebugId),
             10
@@ -1868,7 +1883,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         sortLiveFsIndexRecordRefs(*targetIndex);
     }
 
-    if (!targetIndex->liveDirectoryFsIndexRecordRefs.empty()) {
+    if (targetIndex->directoryFsIndexLiveRefCount() > 0) {
         PhaseTimer timer(
             QStringLiteral("live batch #%1 sort live directory fs-index refs").arg(liveBatchDebugId),
             10
@@ -1996,8 +2011,11 @@ QString IndexController::memoryStatsText() const
     out << "  sizeof(TrigramRange): " << sizeof(TrigramRange) << " bytes\n";
     out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
     out << "  sizeof(std::vector<uint32_t>): " << sizeof(std::vector<uint32_t>) << " bytes\n";
-    out << "  sizeof(FsIndexRecordRef): "
-        << sizeof(DeviceIndex::FsIndexRecordRef)
+    out << "  sizeof(FsIndexRecordRef32): "
+        << sizeof(DeviceIndex::FsIndexRecordRef32)
+        << " bytes\n";
+    out << "  sizeof(FsIndexRecordRef64): "
+        << sizeof(DeviceIndex::FsIndexRecordRef64)
         << " bytes\n";
     out << "  sizeof(recordsByExtension::value_type): "
         << sizeof(typename decltype(std::declval<DeviceIndex>().recordsByExtension)::value_type)
@@ -2070,12 +2088,38 @@ QString IndexController::memoryStatsText() const
         const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
         const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
+        const quint64 directoryFsIndexRecordRefs32Bytes =
+            vectorCapacityBytes(device.directoryFsIndexRecordRefs32);
+        const quint64 directoryFsIndexRecordRefs64Bytes =
+            vectorCapacityBytes(device.directoryFsIndexRecordRefs64);
+        const quint64 liveDirectoryFsIndexRecordRefs32Bytes =
+            vectorCapacityBytes(device.liveDirectoryFsIndexRecordRefs32);
+        const quint64 liveDirectoryFsIndexRecordRefs64Bytes =
+            vectorCapacityBytes(device.liveDirectoryFsIndexRecordRefs64);
+        const quint64 fsIndexRecordRefs32Bytes =
+            vectorCapacityBytes(device.fsIndexRecordRefs32);
+        const quint64 fsIndexRecordRefs64Bytes =
+            vectorCapacityBytes(device.fsIndexRecordRefs64);
+        const quint64 liveFsIndexRecordRefs32Bytes =
+            vectorCapacityBytes(device.liveFsIndexRecordRefs32);
+        const quint64 liveFsIndexRecordRefs64Bytes =
+            vectorCapacityBytes(device.liveFsIndexRecordRefs64);
+
         const quint64 directoryFsIndexRecordRefsBytes =
-            vectorCapacityBytes(device.directoryFsIndexRecordRefs);
+            directoryFsIndexRecordRefs32Bytes +
+            directoryFsIndexRecordRefs64Bytes;
+
         const quint64 liveDirectoryFsIndexRecordRefsBytes =
-            vectorCapacityBytes(device.liveDirectoryFsIndexRecordRefs);
-        const quint64 fsIndexRecordRefsBytes = vectorCapacityBytes(device.fsIndexRecordRefs);
-        const quint64 liveFsIndexRecordRefsBytes = vectorCapacityBytes(device.liveFsIndexRecordRefs);
+            liveDirectoryFsIndexRecordRefs32Bytes +
+            liveDirectoryFsIndexRecordRefs64Bytes;
+
+        const quint64 fsIndexRecordRefsBytes =
+            fsIndexRecordRefs32Bytes +
+            fsIndexRecordRefs64Bytes;
+
+        const quint64 liveFsIndexRecordRefsBytes =
+            liveFsIndexRecordRefs32Bytes +
+            liveFsIndexRecordRefs64Bytes;
 
         const TrigramDistributionStats trigramStats =
             calculateTrigramDistributionStats(
@@ -2123,8 +2167,7 @@ QString IndexController::memoryStatsText() const
                 : 0;
 
         const std::size_t fsIndexStoredRecordRefs =
-            device.fsIndexRecordRefs.size() +
-            device.liveFsIndexRecordRefs.size();
+            device.fsIndexStoredRefCount();
 
         std::size_t fsIndexRecordsOmittedBecauseDeleted = 0;
 
@@ -2185,8 +2228,8 @@ QString IndexController::memoryStatsText() const
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
         grandLowercaseNameOffsetEntries += device.lowercaseNameOffsetByRecord.size();
         grandFsIndexStoredRecordRefs += fsIndexStoredRecordRefs;
-        grandFsIndexFullRecordRefs += device.fsIndexRecordRefs.size();
-        grandFsIndexLiveRecordRefs += device.liveFsIndexRecordRefs.size();
+        grandFsIndexFullRecordRefs += device.fsIndexFullRefCount();
+        grandFsIndexLiveRecordRefs += device.fsIndexLiveRefCount();
         grandFsIndexRecordsOmittedBecauseDeleted += fsIndexRecordsOmittedBecauseDeleted;
         grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
 
@@ -2380,40 +2423,74 @@ QString IndexController::memoryStatsText() const
         out << '\n';
 
         out << "  maps:\n";
-        out << "    directoryFsIndexRecordRefs size/capacity: "
-            << device.directoryFsIndexRecordRefs.size()
-            << '/'
-            << device.directoryFsIndexRecordRefs.capacity()
-            << " => "
-            << formatBytes(directoryFsIndexRecordRefsBytes)
-            << '\n';
-        out << "    liveDirectoryFsIndexRecordRefs size/capacity: "
-            << device.liveDirectoryFsIndexRecordRefs.size()
-            << '/'
-            << device.liveDirectoryFsIndexRecordRefs.capacity()
-            << " => "
-            << formatBytes(liveDirectoryFsIndexRecordRefsBytes)
+        out << "    fs-index ref storage: "
+            << (device.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32
+                ? "uint32"
+                : "uint64")
             << '\n';
 
-        out << "    fsIndexRecordRefs size/capacity: "
-            << device.fsIndexRecordRefs.size()
+        out << "    directoryFsIndexRecordRefs32 size/capacity: "
+            << device.directoryFsIndexRecordRefs32.size()
             << '/'
-            << device.fsIndexRecordRefs.capacity()
+            << device.directoryFsIndexRecordRefs32.capacity()
             << " => "
-            << formatBytes(fsIndexRecordRefsBytes)
+            << formatBytes(directoryFsIndexRecordRefs32Bytes)
             << '\n';
-        out << "    liveFsIndexRecordRefs size/capacity: "
-            << device.liveFsIndexRecordRefs.size()
+        out << "    directoryFsIndexRecordRefs64 size/capacity: "
+            << device.directoryFsIndexRecordRefs64.size()
             << '/'
-            << device.liveFsIndexRecordRefs.capacity()
+            << device.directoryFsIndexRecordRefs64.capacity()
             << " => "
-            << formatBytes(liveFsIndexRecordRefsBytes)
+            << formatBytes(directoryFsIndexRecordRefs64Bytes)
+            << '\n';
+        out << "    liveDirectoryFsIndexRecordRefs32 size/capacity: "
+            << device.liveDirectoryFsIndexRecordRefs32.size()
+            << '/'
+            << device.liveDirectoryFsIndexRecordRefs32.capacity()
+            << " => "
+            << formatBytes(liveDirectoryFsIndexRecordRefs32Bytes)
+            << '\n';
+        out << "    liveDirectoryFsIndexRecordRefs64 size/capacity: "
+            << device.liveDirectoryFsIndexRecordRefs64.size()
+            << '/'
+            << device.liveDirectoryFsIndexRecordRefs64.capacity()
+            << " => "
+            << formatBytes(liveDirectoryFsIndexRecordRefs64Bytes)
+            << '\n';
+
+        out << "    fsIndexRecordRefs32 size/capacity: "
+            << device.fsIndexRecordRefs32.size()
+            << '/'
+            << device.fsIndexRecordRefs32.capacity()
+            << " => "
+            << formatBytes(fsIndexRecordRefs32Bytes)
+            << '\n';
+        out << "    fsIndexRecordRefs64 size/capacity: "
+            << device.fsIndexRecordRefs64.size()
+            << '/'
+            << device.fsIndexRecordRefs64.capacity()
+            << " => "
+            << formatBytes(fsIndexRecordRefs64Bytes)
+            << '\n';
+        out << "    liveFsIndexRecordRefs32 size/capacity: "
+            << device.liveFsIndexRecordRefs32.size()
+            << '/'
+            << device.liveFsIndexRecordRefs32.capacity()
+            << " => "
+            << formatBytes(liveFsIndexRecordRefs32Bytes)
+            << '\n';
+        out << "    liveFsIndexRecordRefs64 size/capacity: "
+            << device.liveFsIndexRecordRefs64.size()
+            << '/'
+            << device.liveFsIndexRecordRefs64.capacity()
+            << " => "
+            << formatBytes(liveFsIndexRecordRefs64Bytes)
             << '\n';
         out << "      full refs: "
-            << device.fsIndexRecordRefs.size()
+            << device.fsIndexFullRefCount()
             << '\n';
         out << "      live refs: "
-            << device.liveFsIndexRecordRefs.size()
+            << device.fsIndexLiveRefCount()
             << '\n';
         out << "      stored record refs total: "
             << fsIndexStoredRecordRefs
@@ -3109,45 +3186,70 @@ void IndexController::rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceI
 
 void IndexController::sortLiveDirectoryFsIndexRecordRefs(DeviceIndex& deviceIndex)
 {
-    if (deviceIndex.liveDirectoryFsIndexRecordRefs.size() < 2) {
+    if (deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32) {
+        if (deviceIndex.liveDirectoryFsIndexRecordRefs32.size() < 2) {
+            return;
+        }
+
+        DeviceIndex::sortAndDeduplicateFsIndexRecordRefs(
+            deviceIndex.liveDirectoryFsIndexRecordRefs32
+        );
+        return;
+    }
+
+    if (deviceIndex.liveDirectoryFsIndexRecordRefs64.size() < 2) {
         return;
     }
 
     DeviceIndex::sortAndDeduplicateFsIndexRecordRefs(
-        deviceIndex.liveDirectoryFsIndexRecordRefs
+        deviceIndex.liveDirectoryFsIndexRecordRefs64
     );
 }
 
 void IndexController::sortLiveFsIndexRecordRefs(DeviceIndex& deviceIndex)
 {
-    if (deviceIndex.liveFsIndexRecordRefs.size() < 2) {
+    if (deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32) {
+        if (deviceIndex.liveFsIndexRecordRefs32.size() < 2) {
+            return;
+        }
+
+        DeviceIndex::sortAndDeduplicateFsIndexRecordRefs(
+            deviceIndex.liveFsIndexRecordRefs32
+        );
+        return;
+    }
+
+    if (deviceIndex.liveFsIndexRecordRefs64.size() < 2) {
         return;
     }
 
     DeviceIndex::sortAndDeduplicateFsIndexRecordRefs(
-        deviceIndex.liveFsIndexRecordRefs
+        deviceIndex.liveFsIndexRecordRefs64
     );
 }
 
 bool IndexController::shouldRebuildFsIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
 {
-    if (deviceIndex.liveFsIndexRecordRefs.empty()) {
+    const std::size_t liveRefCount = deviceIndex.fsIndexLiveRefCount();
+
+    if (liveRefCount == 0) {
         return false;
     }
 
     static constexpr std::size_t LiveFsIndexRebuildMinEntries = 25'000;
     static constexpr std::size_t LiveFsIndexRebuildRatioDivisor = 10;
 
-    if (deviceIndex.liveFsIndexRecordRefs.size() < LiveFsIndexRebuildMinEntries) {
+    if (liveRefCount < LiveFsIndexRebuildMinEntries) {
         return false;
     }
 
-    if (deviceIndex.fsIndexRecordRefs.empty()) {
+    const std::size_t fullRefCount = deviceIndex.fsIndexFullRefCount();
+
+    if (fullRefCount == 0) {
         return true;
     }
 
-    return deviceIndex.liveFsIndexRecordRefs.size() >=
-           deviceIndex.fsIndexRecordRefs.size() / LiveFsIndexRebuildRatioDivisor;
+    return liveRefCount >= fullRefCount / LiveFsIndexRebuildRatioDivisor;
 }
 
 void IndexController::rebuildFsIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
@@ -3155,8 +3257,12 @@ void IndexController::rebuildFsIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "Rebuilding fs-index refs after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
-              << " refs=" << deviceIndex.fsIndexRecordRefs.size()
-              << " liveRefs=" << deviceIndex.liveFsIndexRecordRefs.size()
+              << " storage="
+              << (deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32
+                  ? "uint32"
+                  : "uint64")
+              << " refs=" << deviceIndex.fsIndexFullRefCount()
+              << " liveRefs=" << deviceIndex.fsIndexLiveRefCount()
               << "\n";
 #endif
 
@@ -3165,8 +3271,12 @@ void IndexController::rebuildFsIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "Finished rebuilding fs-index refs after live updates"
               << " deviceId=" << deviceIndex.deviceId.toStdString()
-              << " refs=" << deviceIndex.fsIndexRecordRefs.size()
-              << " liveRefs=" << deviceIndex.liveFsIndexRecordRefs.size()
+              << " storage="
+              << (deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32
+                  ? "uint32"
+                  : "uint64")
+              << " refs=" << deviceIndex.fsIndexFullRefCount()
+              << " liveRefs=" << deviceIndex.fsIndexLiveRefCount()
               << "\n";
 #endif
 }
@@ -3183,6 +3293,10 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     const std::size_t oldLowercaseNameOffsetCapacity = deviceIndex.lowercaseNameOffsetByRecord.capacity();
     const std::size_t oldDeletedBitsCapacity = deviceIndex.deletedRecordBits.capacity();
     const std::size_t oldLiveDeltaCapacity = deviceIndex.liveDeltaFlatIndex.capacity();
+    const std::size_t oldLiveFsIndexCapacity =
+        deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32
+            ? deviceIndex.liveFsIndexRecordRefs32.capacity()
+            : deviceIndex.liveFsIndexRecordRefs64.capacity();
 
     if (operation.inode == 0 || operation.name.isEmpty()) {
         return false;
@@ -3191,6 +3305,11 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     if (operation.parentInode == 0) {
         return false;
     }
+
+    deviceIndex.ensureFsIndexRefStorageCanStore(
+        operation.inode,
+        operation.parentInode
+    );
 
     const QByteArray nameUtf8 = operation.name.toUtf8();
     if (nameUtf8.isEmpty()) {
@@ -3236,16 +3355,30 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     deviceIndex.lowercaseNameOffsetByRecord.push_back(lowercaseNameOffset);
     deviceIndex.resizeDeletedRecordBitsForRecordCount(deviceIndex.fileRecords.size());
 
-    deviceIndex.liveFsIndexRecordRefs.push_back({
-        record.fsIndex,
-        recordIdx
-    });
+    if (deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32) {
+        deviceIndex.liveFsIndexRecordRefs32.push_back({
+            static_cast<uint32_t>(record.fsIndex),
+            recordIdx
+        });
 
-    if ((record.flags & FileRecord_IsDir) != 0) {
-        deviceIndex.liveDirectoryFsIndexRecordRefs.push_back({
+        if ((record.flags & FileRecord_IsDir) != 0) {
+            deviceIndex.liveDirectoryFsIndexRecordRefs32.push_back({
+                static_cast<uint32_t>(record.fsIndex),
+                recordIdx
+            });
+        }
+    } else {
+        deviceIndex.liveFsIndexRecordRefs64.push_back({
             record.fsIndex,
             recordIdx
         });
+
+        if ((record.flags & FileRecord_IsDir) != 0) {
+            deviceIndex.liveDirectoryFsIndexRecordRefs64.push_back({
+                record.fsIndex,
+                recordIdx
+            });
+        }
     }
 
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
@@ -3254,13 +3387,19 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     const qint64 elapsedMs = elapsedMsSince(appendStart);
 
 #ifdef KERYTHING_ENABLE_LOGGING
+    const std::size_t newLiveFsIndexCapacity =
+            deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32
+                ? deviceIndex.liveFsIndexRecordRefs32.capacity()
+                : deviceIndex.liveFsIndexRecordRefs64.capacity();
+
     if (elapsedMs >= 25 ||
     oldFileRecordCapacity != deviceIndex.fileRecords.capacity() ||
     oldStringPoolCapacity != deviceIndex.stringPool.capacity() ||
     oldLowercaseStringPoolCapacity != deviceIndex.lowercaseStringPool.capacity() ||
     oldLowercaseNameOffsetCapacity != deviceIndex.lowercaseNameOffsetByRecord.capacity() ||
     oldDeletedBitsCapacity != deviceIndex.deletedRecordBits.capacity() ||
-    oldLiveDeltaCapacity != deviceIndex.liveDeltaFlatIndex.capacity()) {
+    oldLiveDeltaCapacity != deviceIndex.liveDeltaFlatIndex.capacity() ||
+    oldLiveFsIndexCapacity != newLiveFsIndexCapacity) {
         std::cerr << "appendRecordFromLiveUpdateOperation"
                   << " name=" << operation.name.toStdString()
                   << " elapsed=" << elapsedMs << "ms"
@@ -3288,6 +3427,10 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
                   << oldLiveDeltaCapacity
                   << " -> "
                   << deviceIndex.liveDeltaFlatIndex.capacity()
+                  << " liveFsIndex capacity "
+                  << oldLiveFsIndexCapacity
+                  << " -> "
+                  << newLiveFsIndexCapacity
                   << "\n";
     }
 #endif
@@ -3378,6 +3521,11 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     if (record.fsIndex != operation.inode) {
         return false;
     }
+
+    deviceIndex.ensureFsIndexRefStorageCanStore(
+        operation.inode,
+        operation.parentInode
+    );
 
     uint32_t parentRecordIdx = 0xFFFFFFFF;
 

@@ -974,7 +974,8 @@ quint64 IndexController::addDevice(
             deviceIndex.recordsByExtension.clear();
             deviceIndex.extensionIndexEntryCount = 0;
             deviceIndex.extensionIndexLiveDeltaEntries = 0;
-            deviceIndex.directoryFsIndexToRecordIdx.clear();
+            deviceIndex.directoryFsIndexRecordRefs.clear();
+            deviceIndex.liveDirectoryFsIndexRecordRefs.clear();
             deviceIndex.fsIndexRecordRefs.clear();
             deviceIndex.liveFsIndexRecordRefs.clear();
             deviceIndex.fsIndexLookupScratch.clear();
@@ -1446,12 +1447,17 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         std::size_t stringBytesToAppend = 0;
         std::size_t lowercaseStringBytesToAppend = 0;
         std::size_t estimatedTrigramsToAppend = 0;
+        std::size_t estimatedDirectoriesToAppend = 0;
 
         for (const LiveUpdateOperation& operation : pendingUpserts) {
             const QByteArray nameUtf8 = operation.name.toUtf8();
             const std::size_t nameSize = static_cast<std::size_t>(nameUtf8.size());
 
             stringBytesToAppend += nameSize;
+
+            if (operation.isDirectory) {
+                ++estimatedDirectoriesToAppend;
+            }
 
             bool hasAsciiUppercase = false;
 
@@ -1497,6 +1503,10 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 
         targetIndex->liveFsIndexRecordRefs.reserve(
             targetIndex->liveFsIndexRecordRefs.size() + pendingUpserts.size()
+        );
+
+        targetIndex->liveDirectoryFsIndexRecordRefs.reserve(
+            targetIndex->liveDirectoryFsIndexRecordRefs.size() + estimatedDirectoriesToAppend
         );
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -1858,6 +1868,15 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         sortLiveFsIndexRecordRefs(*targetIndex);
     }
 
+    if (!targetIndex->liveDirectoryFsIndexRecordRefs.empty()) {
+        PhaseTimer timer(
+            QStringLiteral("live batch #%1 sort live directory fs-index refs").arg(liveBatchDebugId),
+            10
+        );
+
+        sortLiveDirectoryFsIndexRecordRefs(*targetIndex);
+    }
+
     if (shouldRebuildFsIndexAfterLiveUpdates(*targetIndex)) {
         PhaseTimer timer(
             QStringLiteral("live batch #%1 rebuild fs-index refs").arg(liveBatchDebugId),
@@ -1977,9 +1996,6 @@ QString IndexController::memoryStatsText() const
     out << "  sizeof(TrigramRange): " << sizeof(TrigramRange) << " bytes\n";
     out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
     out << "  sizeof(std::vector<uint32_t>): " << sizeof(std::vector<uint32_t>) << " bytes\n";
-    out << "  sizeof(directoryFsIndexToRecordIdx::value_type): "
-        << sizeof(typename decltype(std::declval<DeviceIndex>().directoryFsIndexToRecordIdx)::value_type)
-        << " bytes\n";
     out << "  sizeof(FsIndexRecordRef): "
         << sizeof(DeviceIndex::FsIndexRecordRef)
         << " bytes\n";
@@ -2051,6 +2067,10 @@ QString IndexController::memoryStatsText() const
         const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
         const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
+        const quint64 directoryFsIndexRecordRefsBytes =
+            vectorCapacityBytes(device.directoryFsIndexRecordRefs);
+        const quint64 liveDirectoryFsIndexRecordRefsBytes =
+            vectorCapacityBytes(device.liveDirectoryFsIndexRecordRefs);
         const quint64 fsIndexRecordRefsBytes = vectorCapacityBytes(device.fsIndexRecordRefs);
         const quint64 liveFsIndexRecordRefsBytes = vectorCapacityBytes(device.liveFsIndexRecordRefs);
 
@@ -2123,22 +2143,21 @@ QString IndexController::memoryStatsText() const
                 trigramRangesBytes +
                 trigramPostingsBytes +
                 liveDeltaFlatIndexBytes +
+                directoryFsIndexRecordRefsBytes +
+                liveDirectoryFsIndexRecordRefsBytes +
                 fsIndexRecordRefsBytes +
                 liveFsIndexRecordRefsBytes +
                 vectorCapacityBytes(device.fsIndexLookupScratch) +
                 extensionVectorStorageBytes;
 
         const quint64 deviceApproxHashPayloadBytes =
-            approximateUnorderedMapNodePayloadBytes(device.directoryFsIndexToRecordIdx) +
             approximateUnorderedMapNodePayloadBytes(device.recordsByExtension) +
             extensionVectorObjectBytes;
 
         const quint64 deviceApproxHashBucketBytes =
-            approximateUnorderedMapBucketBytes(device.directoryFsIndexToRecordIdx) +
             approximateUnorderedMapBucketBytes(device.recordsByExtension);
 
         const quint64 deviceEstimatedHashNodeOverhead24Bytes =
-            estimatedUnorderedMapNodeOverheadBytes(device.directoryFsIndexToRecordIdx, 24) +
             estimatedUnorderedMapNodeOverheadBytes(device.recordsByExtension, 24);
 
         grandVectorBytes += deviceVectorBytes;
@@ -2345,16 +2364,20 @@ QString IndexController::memoryStatsText() const
         out << '\n';
 
         out << "  maps:\n";
-        out << "    directoryFsIndexToRecordIdx entries/buckets: "
-                << device.directoryFsIndexToRecordIdx.size()
-                << '/'
-                << device.directoryFsIndexToRecordIdx.bucket_count()
-                << '\n';
-        writeUnorderedMapOverheadEstimate(
-            out,
-            device.directoryFsIndexToRecordIdx,
-            QStringLiteral("      ")
-        );
+        out << "    directoryFsIndexRecordRefs size/capacity: "
+            << device.directoryFsIndexRecordRefs.size()
+            << '/'
+            << device.directoryFsIndexRecordRefs.capacity()
+            << " => "
+            << formatBytes(directoryFsIndexRecordRefsBytes)
+            << '\n';
+        out << "    liveDirectoryFsIndexRecordRefs size/capacity: "
+            << device.liveDirectoryFsIndexRecordRefs.size()
+            << '/'
+            << device.liveDirectoryFsIndexRecordRefs.capacity()
+            << " => "
+            << formatBytes(liveDirectoryFsIndexRecordRefsBytes)
+            << '\n';
 
         out << "    fsIndexRecordRefs size/capacity: "
             << device.fsIndexRecordRefs.size()
@@ -3052,6 +3075,17 @@ void IndexController::rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceI
 #endif
 }
 
+void IndexController::sortLiveDirectoryFsIndexRecordRefs(DeviceIndex& deviceIndex)
+{
+    if (deviceIndex.liveDirectoryFsIndexRecordRefs.size() < 2) {
+        return;
+    }
+
+    DeviceIndex::sortAndDeduplicateFsIndexRecordRefs(
+        deviceIndex.liveDirectoryFsIndexRecordRefs
+    );
+}
+
 void IndexController::sortLiveFsIndexRecordRefs(DeviceIndex& deviceIndex)
 {
     if (deviceIndex.liveFsIndexRecordRefs.size() < 2) {
@@ -3146,9 +3180,9 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     record.flags = fileRecordFlagsFromLiveUpdateOperation(operation);
 
     if (operation.inode != operation.parentInode) {
-        const auto parentIt = deviceIndex.directoryFsIndexToRecordIdx.find(operation.parentInode);
-        if (parentIt != deviceIndex.directoryFsIndexToRecordIdx.end()) {
-            record.parentRecordIdx = parentIt->second;
+        if (const std::optional<uint32_t> parentRecordIdx =
+                deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode)) {
+            record.parentRecordIdx = *parentRecordIdx;
         }
     }
 
@@ -3176,7 +3210,10 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     });
 
     if ((record.flags & FileRecord_IsDir) != 0) {
-        deviceIndex.directoryFsIndexToRecordIdx[record.fsIndex] = recordIdx;
+        deviceIndex.liveDirectoryFsIndexRecordRefs.push_back({
+            record.fsIndex,
+            recordIdx
+        });
     }
 
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
@@ -3313,12 +3350,14 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     uint32_t parentRecordIdx = 0xFFFFFFFF;
 
     if (operation.parentInode != operation.inode) {
-        const auto parentIt = deviceIndex.directoryFsIndexToRecordIdx.find(operation.parentInode);
-        if (parentIt == deviceIndex.directoryFsIndexToRecordIdx.end()) {
+        const std::optional<uint32_t> parentRecord =
+            deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode);
+
+        if (!parentRecord) {
             return false;
         }
 
-        parentRecordIdx = parentIt->second;
+        parentRecordIdx = *parentRecord;
     }
 
     const QByteArray nameUtf8 = operation.name.toUtf8();
@@ -3430,7 +3469,7 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
      * before we append them, otherwise parentRecordIdx cannot be resolved.
      */
     if (operation.parentInode != operation.inode &&
-        !deviceIndex.directoryFsIndexToRecordIdx.contains(operation.parentInode)) {
+        !deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode)) {
         logSlowUpsert("missing-parent");
         return UpsertApplyResult::MissingParent;
     }

@@ -118,7 +118,6 @@ public:
         std::vector<FileRecord> fileRecords;
         std::vector<char> stringPool;
         std::vector<uint64_t> deletedRecordBits;
-        std::unordered_map<uint64_t, uint32_t> directoryFsIndexToRecordIdx;
 
         struct FsIndexRecordRef {
             uint64_t fsIndex = 0;
@@ -133,6 +132,20 @@ public:
                 return recordIdx < other.recordIdx;
             }
         };
+
+        // Directory inode -> record-index references, sorted by fsIndex.
+        //
+        // Normal ext4 does not allow arbitrary hard-linked directories, so each
+        // directory inode is expected to resolve to a single live record.
+        std::vector<FsIndexRecordRef> directoryFsIndexRecordRefs;
+
+        // Directory refs added by live updates after the last full rebuild.
+        //
+        // Kept separate so live directory creates do not require re-sorting the
+        // full directory fs-index vector. Parent lookup scans this small vector
+        // linearly, so newly-created directories are visible immediately within
+        // the same live-update batch.
+        std::vector<FsIndexRecordRef> liveDirectoryFsIndexRecordRefs;
 
         // Full-scan inode -> record-index references, sorted by fsIndex then recordIdx.
         //
@@ -448,6 +461,58 @@ public:
             );
         }
 
+        [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForFsIndex(
+            uint64_t fsIndex
+        ) const {
+            auto validDirectoryRecord = [&](uint32_t recordIdx) -> std::optional<uint32_t> {
+                if (recordIdx >= fileRecords.size()) {
+                    return std::nullopt;
+                }
+
+                if (isDeletedRecord(recordIdx)) {
+                    return std::nullopt;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+
+                if ((record.flags & FileRecord_IsDir) == 0) {
+                    return std::nullopt;
+                }
+
+                return recordIdx;
+            };
+
+            const auto it = std::lower_bound(
+                directoryFsIndexRecordRefs.begin(),
+                directoryFsIndexRecordRefs.end(),
+                FsIndexRecordRef{fsIndex, 0},
+                [](const FsIndexRecordRef& lhs, const FsIndexRecordRef& rhs) {
+                    return lhs.fsIndex < rhs.fsIndex;
+                }
+            );
+
+            if (it != directoryFsIndexRecordRefs.end() &&
+                it->fsIndex == fsIndex) {
+                if (const std::optional<uint32_t> recordIdx =
+                        validDirectoryRecord(it->recordIdx)) {
+                    return recordIdx;
+                        }
+                }
+
+            for (const FsIndexRecordRef& ref : liveDirectoryFsIndexRecordRefs) {
+                if (ref.fsIndex != fsIndex) {
+                    continue;
+                }
+
+                if (const std::optional<uint32_t> recordIdx =
+                        validDirectoryRecord(ref.recordIdx)) {
+                    return recordIdx;
+                        }
+            }
+
+            return std::nullopt;
+        }
+
         void appendFsIndexRefsForLookup(
             const std::vector<FsIndexRecordRef>& refs,
             uint64_t fsIndex
@@ -475,7 +540,8 @@ public:
         }
 
         void rebuildFsIndexMaps() {
-            directoryFsIndexToRecordIdx.clear();
+            directoryFsIndexRecordRefs.clear();
+            liveDirectoryFsIndexRecordRefs.clear();
             fsIndexRecordRefs.clear();
             liveFsIndexRecordRefs.clear();
             fsIndexLookupScratch.clear();
@@ -488,7 +554,7 @@ public:
                 }
             }
 
-            directoryFsIndexToRecordIdx.reserve(directoryCount);
+            directoryFsIndexRecordRefs.reserve(directoryCount);
             fsIndexRecordRefs.reserve(fileRecords.size());
 
             for (uint32_t i = 0; i < static_cast<uint32_t>(fileRecords.size()); ++i) {
@@ -503,16 +569,21 @@ public:
                     i
                 });
 
-                // Directory-only map used for parent resolution.
-                // Normal ext4 does not allow arbitrary hard-linked directories, so a
-                // single directory inode -> one record index is suitable here.
+                // Directory-only refs used for parent resolution.
                 if ((rec.flags & FileRecord_IsDir) != 0) {
-                    directoryFsIndexToRecordIdx.emplace(rec.fsIndex, i);
+                    directoryFsIndexRecordRefs.push_back({
+                        rec.fsIndex,
+                        i
+                    });
                 }
             }
 
             sortAndDeduplicateFsIndexRecordRefs(fsIndexRecordRefs);
+            sortAndDeduplicateFsIndexRecordRefs(directoryFsIndexRecordRefs);
+
             fsIndexRecordRefs.shrink_to_fit();
+            directoryFsIndexRecordRefs.shrink_to_fit();
+            liveDirectoryFsIndexRecordRefs.shrink_to_fit();
             liveFsIndexRecordRefs.shrink_to_fit();
         }
 
@@ -522,8 +593,8 @@ public:
          *
          * This method maps the file system parent indices to internal record indices
          * for all entries in the `fileRecords` vector. If a parent index does not
-         * exist in the `directoryFsIndexToRecordIdx` map, the corresponding record is marked
-         * as belonging to the root by setting its `parentRecordIdx` to `0xFFFFFFFF`.
+         * exist in the directory index, the corresponding record is marked as belonging
+         * to the root by setting its `parentRecordIdx` to `0xFFFFFFFF`.
          *
          * The method is used to establish hierarchical relationships between file
          * records, which is critical for operations that need to navigate or
@@ -546,9 +617,9 @@ public:
                     continue;
                 }
 
-                auto it = directoryFsIndexToRecordIdx.find(rec.parentFsIndex);
-                if (it != directoryFsIndexToRecordIdx.end()) {
-                    rec.parentRecordIdx = it->second;
+                if (const std::optional<uint32_t> parentRecordIdx =
+                        directoryRecordIdxForFsIndex(rec.parentFsIndex)) {
+                    rec.parentRecordIdx = *parentRecordIdx;
                 } else {
                     // If parent is not in our DB, mark as root.
                     rec.parentRecordIdx = 0xFFFFFFFF;
@@ -1210,6 +1281,7 @@ private:
     );
     static bool shouldRebuildExtensionIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
     static void rebuildExtensionIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
+    static void sortLiveDirectoryFsIndexRecordRefs(DeviceIndex& deviceIndex);
     static void sortLiveFsIndexRecordRefs(DeviceIndex& deviceIndex);
     static bool shouldRebuildFsIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
     static void rebuildFsIndexAfterLiveUpdates(DeviceIndex& deviceIndex);

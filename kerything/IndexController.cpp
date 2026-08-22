@@ -2030,6 +2030,9 @@ QString IndexController::memoryStatsText() const
     std::size_t grandLowercaseStringBytes = 0;
     std::size_t grandLowercaseNameOffsetEntries = 0;
     std::size_t grandFsIndexStoredRecordRefs = 0;
+    std::size_t grandFsIndexFullRecordRefs = 0;
+    std::size_t grandFsIndexLiveRecordRefs = 0;
+    std::size_t grandFsIndexRecordsOmittedBecauseDeleted = 0;
     std::size_t grandExtensionStoredRecordRefs = 0;
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
@@ -2123,6 +2126,16 @@ QString IndexController::memoryStatsText() const
             device.fsIndexRecordRefs.size() +
             device.liveFsIndexRecordRefs.size();
 
+        std::size_t fsIndexRecordsOmittedBecauseDeleted = 0;
+
+        for (uint32_t recordIdx = 0;
+             recordIdx < static_cast<uint32_t>(device.fileRecords.size());
+             ++recordIdx) {
+            if (device.isDeletedRecord(recordIdx)) {
+                ++fsIndexRecordsOmittedBecauseDeleted;
+            }
+        }
+
         quint64 extensionVectorObjectBytes = 0;
         quint64 extensionVectorStorageBytes = 0;
         std::size_t extensionStoredRecordRefs = 0;
@@ -2172,6 +2185,9 @@ QString IndexController::memoryStatsText() const
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
         grandLowercaseNameOffsetEntries += device.lowercaseNameOffsetByRecord.size();
         grandFsIndexStoredRecordRefs += fsIndexStoredRecordRefs;
+        grandFsIndexFullRecordRefs += device.fsIndexRecordRefs.size();
+        grandFsIndexLiveRecordRefs += device.liveFsIndexRecordRefs.size();
+        grandFsIndexRecordsOmittedBecauseDeleted += fsIndexRecordsOmittedBecauseDeleted;
         grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
 
         grandLowercaseValidRecords += lowercaseOpportunity.validRecords;
@@ -2393,7 +2409,18 @@ QString IndexController::memoryStatsText() const
             << " => "
             << formatBytes(liveFsIndexRecordRefsBytes)
             << '\n';
-        out << "      stored record refs total: " << fsIndexStoredRecordRefs << '\n';
+        out << "      full refs: "
+            << device.fsIndexRecordRefs.size()
+            << '\n';
+        out << "      live refs: "
+            << device.liveFsIndexRecordRefs.size()
+            << '\n';
+        out << "      stored record refs total: "
+            << fsIndexStoredRecordRefs
+            << '\n';
+        out << "      records omitted because deleted: "
+            << fsIndexRecordsOmittedBecauseDeleted
+            << '\n';
         out << "      lookup scratch size/capacity: "
             << device.fsIndexLookupScratch.size()
             << '/'
@@ -2483,6 +2510,11 @@ QString IndexController::memoryStatsText() const
         << '\n';
     out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
     out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';
+    out << "  fs-index full refs: " << grandFsIndexFullRecordRefs << '\n';
+    out << "  fs-index live refs: " << grandFsIndexLiveRecordRefs << '\n';
+    out << "  fs-index records omitted because deleted: "
+        << grandFsIndexRecordsOmittedBecauseDeleted
+        << '\n';
     out << "  extension stored record refs: " << grandExtensionStoredRecordRefs << '\n';
     out << "  vector capacity bytes: " << formatBytes(grandVectorBytes) << '\n';
     out << "  hash payload bytes, excluding allocator/node overhead: "

@@ -635,6 +635,61 @@ namespace {
         return stats;
     }
 
+    struct FsIndexKeyWidthStats {
+        std::size_t liveRecordsChecked = 0;
+        std::size_t deletedRecordsSkipped = 0;
+        std::size_t recordsRequiringUInt64Refs = 0;
+
+        uint64_t maxFsIndex = 0;
+        uint64_t maxParentFsIndex = 0;
+
+        bool allLiveRefsFitUInt32 = true;
+        bool selectedStorageMatchesLiveRecords = true;
+    };
+
+    FsIndexKeyWidthStats calculateFsIndexKeyWidthStats(
+        const IndexController::DeviceIndex& device)
+    {
+        FsIndexKeyWidthStats stats;
+
+        for (uint32_t recordIdx = 0;
+             recordIdx < static_cast<uint32_t>(device.fileRecords.size());
+             ++recordIdx) {
+            if (device.isDeletedRecord(recordIdx)) {
+                ++stats.deletedRecordsSkipped;
+                continue;
+            }
+
+            ++stats.liveRecordsChecked;
+
+            const FileRecord& record = device.fileRecords[recordIdx];
+
+            stats.maxFsIndex = std::max<uint64_t>(
+                stats.maxFsIndex,
+                record.fsIndex
+            );
+
+            stats.maxParentFsIndex = std::max<uint64_t>(
+                stats.maxParentFsIndex,
+                record.parentFsIndex
+            );
+
+            if (!IndexController::DeviceIndex::fsIndexFitsUInt32(record.fsIndex) ||
+                !IndexController::DeviceIndex::fsIndexFitsUInt32(record.parentFsIndex)) {
+                ++stats.recordsRequiringUInt64Refs;
+                }
+             }
+
+        stats.allLiveRefsFitUInt32 =
+            stats.recordsRequiringUInt64Refs == 0;
+
+        stats.selectedStorageMatchesLiveRecords =
+            device.fsIndexRefStorage == IndexController::DeviceIndex::FsIndexRefStorage::UInt64 ||
+            stats.allLiveRefsFitUInt32;
+
+        return stats;
+    }
+
     bool containsAsciiUppercase(std::string_view text, std::size_t* uppercaseByteCount = nullptr)
     {
         bool found = false;
@@ -2051,6 +2106,12 @@ QString IndexController::memoryStatsText() const
     std::size_t grandFsIndexFullRecordRefs = 0;
     std::size_t grandFsIndexLiveRecordRefs = 0;
     std::size_t grandFsIndexRecordsOmittedBecauseDeleted = 0;
+    std::size_t grandFsIndexLiveRecordsChecked = 0;
+    std::size_t grandFsIndexDeletedRecordsSkippedForWidth = 0;
+    std::size_t grandFsIndexRecordsRequiringUInt64Refs = 0;
+    uint64_t grandMaxFsIndex = 0;
+    uint64_t grandMaxParentFsIndex = 0;
+    bool grandFsIndexSelectedStorageMatchesLiveRecords = true;
     std::size_t grandExtensionStoredRecordRefs = 0;
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
@@ -2177,7 +2238,10 @@ QString IndexController::memoryStatsText() const
             if (device.isDeletedRecord(recordIdx)) {
                 ++fsIndexRecordsOmittedBecauseDeleted;
             }
-        }
+             }
+
+        const FsIndexKeyWidthStats fsIndexKeyWidthStats =
+            calculateFsIndexKeyWidthStats(device);
 
         quint64 extensionVectorObjectBytes = 0;
         quint64 extensionVectorStorageBytes = 0;
@@ -2231,6 +2295,20 @@ QString IndexController::memoryStatsText() const
         grandFsIndexFullRecordRefs += device.fsIndexFullRefCount();
         grandFsIndexLiveRecordRefs += device.fsIndexLiveRefCount();
         grandFsIndexRecordsOmittedBecauseDeleted += fsIndexRecordsOmittedBecauseDeleted;
+        grandFsIndexLiveRecordsChecked += fsIndexKeyWidthStats.liveRecordsChecked;
+        grandFsIndexDeletedRecordsSkippedForWidth += fsIndexKeyWidthStats.deletedRecordsSkipped;
+        grandFsIndexRecordsRequiringUInt64Refs += fsIndexKeyWidthStats.recordsRequiringUInt64Refs;
+        grandMaxFsIndex = std::max<uint64_t>(
+            grandMaxFsIndex,
+            fsIndexKeyWidthStats.maxFsIndex
+        );
+        grandMaxParentFsIndex = std::max<uint64_t>(
+            grandMaxParentFsIndex,
+            fsIndexKeyWidthStats.maxParentFsIndex
+        );
+        grandFsIndexSelectedStorageMatchesLiveRecords =
+            grandFsIndexSelectedStorageMatchesLiveRecords &&
+            fsIndexKeyWidthStats.selectedStorageMatchesLiveRecords;
         grandExtensionStoredRecordRefs += extensionStoredRecordRefs;
 
         grandLowercaseValidRecords += lowercaseOpportunity.validRecords;
@@ -2498,6 +2576,28 @@ QString IndexController::memoryStatsText() const
         out << "      records omitted because deleted: "
             << fsIndexRecordsOmittedBecauseDeleted
             << '\n';
+        out << "      key width validation:\n";
+        out << "        live records checked: "
+            << fsIndexKeyWidthStats.liveRecordsChecked
+            << '\n';
+        out << "        deleted records skipped: "
+            << fsIndexKeyWidthStats.deletedRecordsSkipped
+            << '\n';
+        out << "        max fsIndex: "
+            << fsIndexKeyWidthStats.maxFsIndex
+            << '\n';
+        out << "        max parentFsIndex: "
+            << fsIndexKeyWidthStats.maxParentFsIndex
+            << '\n';
+        out << "        records requiring uint64 refs: "
+            << fsIndexKeyWidthStats.recordsRequiringUInt64Refs
+            << '\n';
+        out << "        all live refs fit uint32: "
+            << (fsIndexKeyWidthStats.allLiveRefsFitUInt32 ? "true" : "false")
+            << '\n';
+        out << "        selected storage matches live records: "
+            << (fsIndexKeyWidthStats.selectedStorageMatchesLiveRecords ? "true" : "false")
+            << '\n';
         out << "      lookup scratch size/capacity: "
             << device.fsIndexLookupScratch.size()
             << '/'
@@ -2591,6 +2691,28 @@ QString IndexController::memoryStatsText() const
     out << "  fs-index live refs: " << grandFsIndexLiveRecordRefs << '\n';
     out << "  fs-index records omitted because deleted: "
         << grandFsIndexRecordsOmittedBecauseDeleted
+        << '\n';
+    out << "  fs-index key width validation:\n";
+    out << "    live records checked: "
+        << grandFsIndexLiveRecordsChecked
+        << '\n';
+    out << "    deleted records skipped: "
+        << grandFsIndexDeletedRecordsSkippedForWidth
+        << '\n';
+    out << "    max fsIndex: "
+        << grandMaxFsIndex
+        << '\n';
+    out << "    max parentFsIndex: "
+        << grandMaxParentFsIndex
+        << '\n';
+    out << "    records requiring uint64 refs: "
+        << grandFsIndexRecordsRequiringUInt64Refs
+        << '\n';
+    out << "    all live refs fit uint32: "
+        << (grandFsIndexRecordsRequiringUInt64Refs == 0 ? "true" : "false")
+        << '\n';
+    out << "    selected storage matches live records: "
+        << (grandFsIndexSelectedStorageMatchesLiveRecords ? "true" : "false")
         << '\n';
     out << "  extension stored record refs: " << grandExtensionStoredRecordRefs << '\n';
     out << "  vector capacity bytes: " << formatBytes(grandVectorBytes) << '\n';

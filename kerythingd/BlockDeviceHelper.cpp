@@ -362,8 +362,19 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
              *
              * For ordinary full filesystem mounts, the mountinfo "root" field
              * is "/".
+             *
+             * Btrfs subvolumes are different: mountinfo stores the mounted
+             * subvolume path in the "root" field, for example "/@", "/@home",
+             * or "/@var/log". Those are real btrfs mount points, so accept
+             * non-root mountinfo roots when both the probed block device and
+             * the mounted filesystem are btrfs.
              */
-            if (mi.root != "/") {
+            const QString mountedFsType = QString::fromStdString(mi.fsType).toLower();
+            const bool isBtrfsSubvolumeMount =
+                fsType == QStringLiteral("btrfs") &&
+                mountedFsType == QStringLiteral("btrfs");
+
+            if (mi.root != "/" && !isBtrfsSubvolumeMount) {
                 continue;
             }
 
@@ -382,7 +393,7 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
                 mountPoints << mountPoint;
                 mountFsTypeByMountPoint.insert(
                     mountPoint,
-                    QString::fromStdString(mi.fsType).toLower()
+                    mountedFsType
                 );
             }
         }

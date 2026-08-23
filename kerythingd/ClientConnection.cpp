@@ -297,6 +297,10 @@ void ClientConnection::sendScanProgress(quint32 requestId,
 
 bool ClientConnection::sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk)
 {
+    if (shuttingDown_ || !socket_) {
+        return false;
+    }
+
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);
@@ -320,6 +324,10 @@ bool ClientConnection::sendScanFileRecordChunk(quint32 requestId, const std::vec
 
 bool ClientConnection::sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk)
 {
+    if (shuttingDown_ || !socket_) {
+        return false;
+    }
+
     QByteArray payload;
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::BigEndian);

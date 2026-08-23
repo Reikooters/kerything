@@ -21,6 +21,11 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
         return;
     }
 
+    if (job->cancelled.load(std::memory_order_relaxed)) {
+        Q_EMIT scanCancelled(job->requestId, job->deviceId);
+        return;
+    }
+
     currentJob_ = std::move(job);
 
     const quint32 requestId = currentJob_->requestId;
@@ -55,11 +60,21 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
         jobRef->primaryMountPoint,
         jobRef->mountPoints,
         [this, requestId, jobRef](const std::vector<FileRecord>& fileRecordChunk) -> bool {
+            if (jobRef->cancelled.load(std::memory_order_relaxed)) {
+                return false;
+            }
+
             Q_EMIT scanFileRecordChunkReady(requestId, fileRecordChunk);
+
             return !jobRef->cancelled.load(std::memory_order_relaxed);
         },
         [this, requestId, jobRef](const std::vector<char>& stringPoolChunk) -> bool {
+            if (jobRef->cancelled.load(std::memory_order_relaxed)) {
+                return false;
+            }
+
             Q_EMIT scanStringPoolChunkReady(requestId, stringPoolChunk);
+
             return !jobRef->cancelled.load(std::memory_order_relaxed);
         },
         [this, requestId](const QString& errorText) {

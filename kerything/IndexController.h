@@ -1533,7 +1533,8 @@ private:
         MissingParent,
         NeedsRescan,
         Invalid,
-        NotUpsert
+        NotUpsert,
+        AppliedNeedsFsIndexRebuild
     };
 
     bool removeDeviceByIndexIdUnlocked(quint64 indexId);

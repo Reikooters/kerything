@@ -1829,17 +1829,6 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << "\n";
 #endif
 
-    if (fsIndexMapsNeedRebuild) {
-        PhaseTimer timer(
-            QStringLiteral("live batch #%1 rebuild fs index maps").arg(liveBatchDebugId),
-            10
-        );
-
-        // Rebuild inode maps so deleted records no longer participate in
-        // metadata updates, parent lookup, or future live-update matching.
-        targetIndex->rebuildFsIndexMaps();
-    }
-
     {
         PhaseTimer timer(
             QStringLiteral("live batch #%1 process pending upserts").arg(liveBatchDebugId),
@@ -1880,6 +1869,14 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                         trigramIndexNeedsSort = true;
                         break;
 
+                    case UpsertApplyResult::AppliedNeedsFsIndexRebuild:
+                        ++result.upserted;
+                        ++passApplied;
+                        madeProgress = true;
+                        trigramIndexNeedsSort = true;
+                        fsIndexMapsNeedRebuild = true;
+                        break;
+
                     case UpsertApplyResult::MissingParent:
                         ++passMissingParent;
                         stillPending.push_back(operation);
@@ -1918,6 +1915,17 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             pendingUpserts = std::move(stillPending);
             consumedUpserts.assign(pendingUpserts.size(), 0);
         }
+    }
+
+    if (fsIndexMapsNeedRebuild) {
+        PhaseTimer timer(
+            QStringLiteral("live batch #%1 rebuild fs index maps").arg(liveBatchDebugId),
+            10
+        );
+
+        // Rebuild inode maps so deleted/replaced records no longer participate
+        // in metadata updates, parent lookup, or future live-update matching.
+        targetIndex->rebuildFsIndexMaps();
     }
 
     if (trigramIndexNeedsSort) {
@@ -3745,14 +3753,45 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
         return UpsertApplyResult::Invalid;
     }
 
-    const std::optional<uint32_t> existingSameEntry =
-        findLiveEntryRecord(deviceIndex, operation.parentInode, nameUtf8, operation.inode);
+    /*
+     * First match by directory entry identity: parent inode + name.
+     *
+     * A browser/download manager can replace an existing path by creating a
+     * temp file and renaming it over the final path. In that case the visible
+     * path is the same, but the inode can change. Keeping both records live
+     * would create duplicate search results with the same path/name.
+     */
+    const std::optional<uint32_t> existingSamePath =
+        findLiveEntryRecord(deviceIndex, operation.parentInode, nameUtf8, 0);
 
-    if (existingSameEntry) {
-        FileRecord& record = deviceIndex.fileRecords[*existingSameEntry];
-        updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
-        logSlowUpsert("updated-existing");
-        return UpsertApplyResult::Applied;
+    if (existingSamePath) {
+        FileRecord& existingRecord = deviceIndex.fileRecords[*existingSamePath];
+
+        if (existingRecord.fsIndex == operation.inode) {
+            updateFileRecordMetadataFromLiveUpdateOperation(existingRecord, operation);
+            logSlowUpsert("updated-existing");
+            return UpsertApplyResult::Applied;
+        }
+
+        bool deletedDirectory = false;
+        const qsizetype deletedCount =
+            deviceIndex.markDeletedRecordTree(*existingSamePath, &deletedDirectory);
+
+        if (deletedCount > 0) {
+            deviceIndex.extensionIndexLiveDeltaEntries +=
+                static_cast<std::size_t>(deletedCount);
+        }
+
+        if (!appendRecordFromLiveUpdateOperation(deviceIndex, operation)) {
+            logSlowUpsert("replace-append-invalid");
+            return UpsertApplyResult::Invalid;
+        }
+
+        logSlowUpsert("replaced-existing-path");
+
+        return deletedDirectory
+            ? UpsertApplyResult::AppliedNeedsFsIndexRebuild
+            : UpsertApplyResult::Applied;
     }
 
     /*

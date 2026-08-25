@@ -625,45 +625,6 @@ QString FileModel::memoryStatsText() const
     return text;
 }
 
-// const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {
-//     if (!controller_->indexController()) {
-//         return nullptr;
-//     }
-//
-//     const IndexController::DeviceIndex* deviceIndex = controller_->indexController()->deviceIndex(handle.indexId);
-//     if (!deviceIndex) {
-//         return nullptr;
-//     }
-//
-//     if (deviceIndex->generation != handle.generation) {
-//         return nullptr;
-//     }
-//
-//     return deviceIndex;
-// }
-
-const IndexController::DeviceIndex* FileModel::resolveDeviceIndex(const IndexController::RecordHandle& handle) const {
-    if (!controller_->indexController()) {
-        return nullptr;
-    }
-
-    return controller_->indexController()->withDeviceIndexRead(handle.indexId, [&](const IndexController::DeviceIndex* deviceIndex) -> const IndexController::DeviceIndex* {
-        if (!deviceIndex) {
-            return nullptr;
-        }
-
-        if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
-            return nullptr;
-        }
-
-        if (!deviceIndex->isReady) {
-            return nullptr;
-        }
-
-        return deviceIndex;
-    });
-}
-
 void FileModel::sort(int column, Qt::SortOrder order) {
     if (!controller_ || !controller_->indexController() || searchResults_.empty()) {
         return;
@@ -755,96 +716,117 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         return searchHighlightMatchWholeWord_;
     }
 
-    const auto& handle = searchResults_[index.row()];
-    const auto* deviceIndex = resolveDeviceIndex(handle);
-    if (!deviceIndex || handle.recordIdx >= deviceIndex->fileRecords.size()) {
+    if (!controller_ || !controller_->indexController()) {
         return {};
     }
 
-    const FileRecord &rec = deviceIndex->fileRecords[handle.recordIdx];
+    const auto handle = searchResults_[index.row()];
 
-    if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
-        return {};
-    }
-
-    const bool mounted = hasMountedPath(*deviceIndex, handle);
-
-    if (role == Qt::ForegroundRole && !mounted) {
-        return QColor(Qt::gray);
-    }
-
-    if (role == Qt::ToolTipRole) {
-        const QString fileName = QString::fromUtf8(
-            &deviceIndex->stringPool[rec.nameOffset],
-            rec.nameLen
-        );
-
-        const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-        return resultToolTip(*deviceIndex, handle, rec, parentPath, fileName);
-    }
-
-    // DecorationRole provides the icon shown next to the filename/path.
-    // This is used to differentiate Files vs Folders and mark unmounted results.
-    if (role == Qt::DecorationRole) {
-        if (index.column() == SearchResultColumn::Path && !mounted) {
-            return QIcon::fromTheme(
-                QStringLiteral("dialog-warning"),
-                QIcon::fromTheme(QStringLiteral("emblem-warning"))
-            );
-        }
-
-        if (index.column() != SearchResultColumn::Name) {
-            return {};
-        }
-
-        const QString fileName = QString::fromUtf8(
-            &deviceIndex->stringPool[rec.nameOffset],
-            rec.nameLen
-        );
-
-        // Using standard KDE/Freedesktop theme names for icons
-        if ((rec.flags & FileRecord_IsDir) != 0) {
-            return (rec.flags & FileRecord_IsSymlink) != 0
-                ? QIcon::fromTheme("inode-directory-symlink", QIcon::fromTheme("folder-remote"))
-                : QIcon::fromTheme("inode-directory", QIcon::fromTheme("folder"));
-        }
-
-        if ((rec.flags & FileRecord_IsSymlink) != 0) {
-            const QIcon icon = QIcon::fromTheme(QStringLiteral("emblem-symbolic-link"));
-            if (!icon.isNull()) {
-                return icon;
-            }
-        }
-
-        return iconForFileName(fileName);
-    }
-
-    switch (index.column()) {
-        case SearchResultColumn::Name: // Name: Extracted directly from the string pool
-            return QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
-
-        case SearchResultColumn::Path: { // Path: Resolved from the directory map and current mount/virtual volume
-            const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-            return mountedPathForHandle(*deviceIndex, handle, parentPath);
-        }
-
-        case SearchResultColumn::Size: // Size: Formatted according to the user's locale
-            if ((rec.flags & FileRecord_IsDir) != 0) {
-                return QString("<DIR>");
+    return controller_->indexController()->withDeviceIndexRead(
+        handle.indexId,
+        [&](const IndexController::DeviceIndex* deviceIndex) -> QVariant {
+            if (!deviceIndex) {
+                return {};
             }
 
-            // Format as bytes/KB/MB etc, with 2 decimal places
-            //return QLocale().formattedDataSize(rec.size, 2, QLocale::DataSizeTraditionalFormat);
+            if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
+                return {};
+            }
 
-            // Formats the raw byte count with appropriate thousands separators
-            return QLocale().toString(static_cast<qlonglong>(rec.size));
+            if (!deviceIndex->isReady) {
+                return {};
+            }
 
-        case SearchResultColumn::DateModified: // Date: Formatted from unix seconds to local time
-            return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
+            if (handle.recordIdx >= deviceIndex->fileRecords.size()) {
+                return {};
+            }
 
-        default:
-            return {};
-    }
+            const FileRecord &rec = deviceIndex->fileRecords[handle.recordIdx];
+
+            if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+                return {};
+            }
+
+            const bool mounted = hasMountedPath(*deviceIndex, handle);
+
+            if (role == Qt::ForegroundRole && !mounted) {
+                return QColor(Qt::gray);
+            }
+
+            if (role == Qt::ToolTipRole) {
+                const QString fileName = QString::fromUtf8(
+                    &deviceIndex->stringPool[rec.nameOffset],
+                    rec.nameLen
+                );
+
+                const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+                return resultToolTip(*deviceIndex, handle, rec, parentPath, fileName);
+            }
+
+            // DecorationRole provides the icon shown next to the filename/path.
+            // This is used to differentiate Files vs Folders and mark unmounted results.
+            if (role == Qt::DecorationRole) {
+                if (index.column() == SearchResultColumn::Path && !mounted) {
+                    return QIcon::fromTheme(
+                        QStringLiteral("dialog-warning"),
+                        QIcon::fromTheme(QStringLiteral("emblem-warning"))
+                    );
+                }
+
+                if (index.column() != SearchResultColumn::Name) {
+                    return {};
+                }
+
+                const QString fileName = QString::fromUtf8(
+                    &deviceIndex->stringPool[rec.nameOffset],
+                    rec.nameLen
+                );
+
+                // Using standard KDE/Freedesktop theme names for icons
+                if ((rec.flags & FileRecord_IsDir) != 0) {
+                    return (rec.flags & FileRecord_IsSymlink) != 0
+                        ? QIcon::fromTheme("inode-directory-symlink", QIcon::fromTheme("folder-remote"))
+                        : QIcon::fromTheme("inode-directory", QIcon::fromTheme("folder"));
+                }
+
+                if ((rec.flags & FileRecord_IsSymlink) != 0) {
+                    const QIcon icon = QIcon::fromTheme(QStringLiteral("emblem-symbolic-link"));
+                    if (!icon.isNull()) {
+                        return icon;
+                    }
+                }
+
+                return iconForFileName(fileName);
+            }
+
+            switch (index.column()) {
+                case SearchResultColumn::Name: // Name: Extracted directly from the string pool
+                    return QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
+
+                case SearchResultColumn::Path: { // Path: Resolved from the directory map and current mount/virtual volume
+                    const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+                    return mountedPathForHandle(*deviceIndex, handle, parentPath);
+                }
+
+                case SearchResultColumn::Size: // Size: Formatted according to the user's locale
+                    if ((rec.flags & FileRecord_IsDir) != 0) {
+                        return QString("<DIR>");
+                    }
+
+                    // Format as bytes/KB/MB etc, with 2 decimal places
+                    //return QLocale().formattedDataSize(rec.size, 2, QLocale::DataSizeTraditionalFormat);
+
+                    // Formats the raw byte count with appropriate thousands separators
+                    return QLocale().toString(static_cast<qlonglong>(rec.size));
+
+                case SearchResultColumn::DateModified: // Date: Formatted from unix seconds to local time
+                    return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));
+
+                default:
+                    return {};
+            }
+        }
+    );
 }
 
 std::optional<QUrl> FileModel::localUrlForRow(const int row) const {
@@ -852,33 +834,53 @@ std::optional<QUrl> FileModel::localUrlForRow(const int row) const {
         return std::nullopt;
     }
 
-    const auto& handle = searchResults_[row];
-    const auto* deviceIndex = resolveDeviceIndex(handle);
-
-    if (!deviceIndex || handle.recordIdx >= deviceIndex->fileRecords.size()) {
+    if (!controller_ || !controller_->indexController()) {
         return std::nullopt;
     }
 
-    if (!hasMountedPath(*deviceIndex, handle)) {
-        return std::nullopt;
-    }
+    const auto handle = searchResults_[row];
 
-    const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
+    return controller_->indexController()->withDeviceIndexRead(
+        handle.indexId,
+        [&](const IndexController::DeviceIndex* deviceIndex) -> std::optional<QUrl> {
+            if (!deviceIndex) {
+                return std::nullopt;
+            }
 
-    if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
-        return std::nullopt;
-    }
+            if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
+                return std::nullopt;
+            }
 
-    const QString fileName = QString::fromUtf8(
-        &deviceIndex->stringPool[rec.nameOffset],
-        rec.nameLen
+            if (!deviceIndex->isReady) {
+                return std::nullopt;
+            }
+
+            if (handle.recordIdx >= deviceIndex->fileRecords.size()) {
+                return std::nullopt;
+            }
+
+            if (!hasMountedPath(*deviceIndex, handle)) {
+                return std::nullopt;
+            }
+
+            const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
+
+            if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+                return std::nullopt;
+            }
+
+            const QString fileName = QString::fromUtf8(
+                &deviceIndex->stringPool[rec.nameOffset],
+                rec.nameLen
+            );
+
+            const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+            const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
+            const QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
+
+            return QUrl::fromLocalFile(fullPath);
+        }
     );
-
-    const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-    const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
-    const QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
-
-    return QUrl::fromLocalFile(fullPath);
 }
 
 bool FileModel::isMountedRow(const int row) const
@@ -887,14 +889,34 @@ bool FileModel::isMountedRow(const int row) const
         return false;
     }
 
-    const auto& handle = searchResults_[row];
-    const auto* deviceIndex = resolveDeviceIndex(handle);
-
-    if (!deviceIndex || handle.recordIdx >= deviceIndex->fileRecords.size()) {
+    if (!controller_ || !controller_->indexController()) {
         return false;
     }
 
-    return hasMountedPath(*deviceIndex, handle);
+    const auto handle = searchResults_[row];
+
+    return controller_->indexController()->withDeviceIndexRead(
+        handle.indexId,
+        [&](const IndexController::DeviceIndex* deviceIndex) -> bool {
+            if (!deviceIndex) {
+                return false;
+            }
+
+            if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
+                return false;
+            }
+
+            if (!deviceIndex->isReady) {
+                return false;
+            }
+
+            if (handle.recordIdx >= deviceIndex->fileRecords.size()) {
+                return false;
+            }
+
+            return hasMountedPath(*deviceIndex, handle);
+        }
+    );
 }
 
 qsizetype FileModel::mountedRowCount(const QModelIndexList& rows) const
@@ -952,10 +974,40 @@ Qt::ItemFlags FileModel::flags(const QModelIndex &index) const {
         return defaultFlags;
     }
 
-    const auto& handle = searchResults_[index.row()];
-    const auto* deviceIndex = resolveDeviceIndex(handle);
+    if (index.row() < 0 || index.row() >= static_cast<int>(searchResults_.size())) {
+        return defaultFlags;
+    }
 
-    if (!deviceIndex || !hasMountedPath(*deviceIndex, handle)) {
+    if (!controller_ || !controller_->indexController()) {
+        return defaultFlags;
+    }
+
+    const auto handle = searchResults_[index.row()];
+
+    const bool mounted = controller_->indexController()->withDeviceIndexRead(
+        handle.indexId,
+        [&](const IndexController::DeviceIndex* deviceIndex) -> bool {
+            if (!deviceIndex) {
+                return false;
+            }
+
+            if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
+                return false;
+            }
+
+            if (!deviceIndex->isReady) {
+                return false;
+            }
+
+            if (handle.recordIdx >= deviceIndex->fileRecords.size()) {
+                return false;
+            }
+
+            return hasMountedPath(*deviceIndex, handle);
+        }
+    );
+
+    if (!mounted) {
         return defaultFlags;
     }
 
@@ -969,7 +1021,7 @@ QStringList FileModel::mimeTypes() const {
 }
 
 QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
-    if (!controller_->indexController()) {
+    if (!controller_ || !controller_->indexController()) {
         return nullptr;
     }
 
@@ -978,36 +1030,70 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
     // Since selection behavior is SelectRows, 'indexes' contains one entry per column
     // for every selected row. We only process column 0 to ensure each file is added once.
     for (const QModelIndex &index : indexes) {
+        if (!index.isValid()) {
+            continue;
+        }
+
         if (index.column() != SearchResultColumn::Name) {
             continue;
         }
 
-        const auto& handle = searchResults_[index.row()];
-        const auto* deviceIndex = resolveDeviceIndex(handle);
-        if (!deviceIndex || handle.recordIdx >= deviceIndex->fileRecords.size()) {
+        if (index.row() < 0 || index.row() >= static_cast<int>(searchResults_.size())) {
             continue;
         }
 
-        if (!hasMountedPath(*deviceIndex, handle)) {
-            continue;
+        const auto handle = searchResults_[index.row()];
+
+        const std::optional<QUrl> url =
+            controller_->indexController()->withDeviceIndexRead(
+                handle.indexId,
+                [&](const IndexController::DeviceIndex* deviceIndex) -> std::optional<QUrl> {
+                    if (!deviceIndex) {
+                        return std::nullopt;
+                    }
+
+                    if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
+                        return std::nullopt;
+                    }
+
+                    if (!deviceIndex->isReady) {
+                        return std::nullopt;
+                    }
+
+                    if (handle.recordIdx >= deviceIndex->fileRecords.size()) {
+                        return std::nullopt;
+                    }
+
+                    if (!hasMountedPath(*deviceIndex, handle)) {
+                        return std::nullopt;
+                    }
+
+                    const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
+
+                    if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+                        return std::nullopt;
+                    }
+
+                    // Resolve file name from string pool
+                    const QString fileName = QString::fromUtf8(
+                        &deviceIndex->stringPool[rec.nameOffset],
+                        rec.nameLen
+                    );
+
+                    // Resolve parent directory path
+                    const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
+                    const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
+
+                    // Construct the absolute Linux path and wrap it in a QUrl
+                    const QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
+
+                    return QUrl::fromLocalFile(fullPath);
+                }
+            );
+
+        if (url) {
+            urls.append(*url);
         }
-
-        const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
-
-        if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
-            continue;
-        }
-
-        // Resolve file name from string pool
-        QString fileName = QString::fromUtf8(&deviceIndex->stringPool[rec.nameOffset], rec.nameLen);
-
-        // Resolve parent directory path
-        const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-        const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
-
-        // Construct the absolute Linux path and wrap it in a QUrl
-        QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
-        urls.append(QUrl::fromLocalFile(fullPath));
     }
 
     if (urls.isEmpty()) {

@@ -157,7 +157,6 @@ public:
     QMimeData *mimeData(const QModelIndexList &indexes) const override;
 
 private:
-    const IndexController::DeviceIndex* resolveDeviceIndex(const IndexController::RecordHandle& handle) const;
     void trimSearchResultsOverCapacity();
 
     AppController* controller_ = nullptr;

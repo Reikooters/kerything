@@ -17,9 +17,11 @@
 #include <QStringList>
 #include <QDir>
 #include <QFile>
+#include <QtGlobal>
 
 #include "FileRecord.h"
 #include "ScopedTimer.h"
+#include "scanners/BtrfsScannerEngine.h"
 #include "scanners/Ext4ScannerEngine.h"
 #include "scanners/GenericMountedScannerEngine.h"
 #include "scanners/NtfsScannerEngine.h"
@@ -250,6 +252,40 @@ bool scanDevice(const QString& devNode,
             onError,
             shouldCancel,
             onProgress
+        );
+    }
+
+    if (normalizedFsType == QStringLiteral("btrfs") &&
+        qEnvironmentVariableIsSet("KERYTHING_DEBUG_BTRFS_SCAN")) {
+        if (primaryMountPoint.trimmed().isEmpty() && mountPoints.isEmpty()) {
+            if (onError) {
+                onError(QStringLiteral("Btrfs debug scanner requires a mounted filesystem"));
+            }
+
+            return false;
+        }
+
+        BtrfsScannerEngine::DebugScanOptions options;
+        options.printMountTable = true;
+        options.printRecords = true;
+        options.printSummary = true;
+        options.skipUnmountedSubvolumeBoundaries = true;
+
+        if (onProgress) {
+            onProgress({
+                QStringLiteral("Debug scanning Btrfs"),
+                QStringLiteral("roots"),
+                0,
+                0
+            });
+        }
+
+        return BtrfsScannerEngine::debugScanMountedFilesystem(
+            resolvedPath,
+            orderedMountPoints(primaryMountPoint, mountPoints),
+            options,
+            onError,
+            shouldCancel
         );
     }
 

@@ -136,6 +136,8 @@ add_executable(kerythingd
         kerythingd/Server.cpp
         kerythingd/Server.h
         kerythingd/ThrottledProgressReporter.h
+        kerythingd/scanners/BtrfsScannerEngine.cpp
+        kerythingd/scanners/BtrfsScannerEngine.h
         kerythingd/scanners/Ext4ScannerEngine.cpp
         kerythingd/scanners/Ext4ScannerEngine.h
         kerythingd/scanners/GenericMountedScannerEngine.cpp

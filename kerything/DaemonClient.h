@@ -51,7 +51,11 @@ Q_SIGNALS:
     );
     void scanProgress(quint32 requestId, const Protocol::ScanProgress& progress);
     void scanFileRecordChunkReceived(quint32 requestId, const std::vector<FileRecord>& chunk);
-    void scanStringPoolChunkReceived(quint32 requestId, QByteArrayView chunk);
+    void scanFileRecordNamespaceChunkReceived(
+        quint32 requestId,
+        const std::vector<FileRecordNamespace>& namespaceChunk
+    );
+    void scanStringPoolChunkReceived(quint32 requestId, const QByteArray& chunk);
     void scanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
     void scanCancelled(quint32 requestId, const QString& deviceId);
     void scanFailed(quint32 requestId, const QString& errorText);
@@ -96,6 +100,7 @@ private:
     void handleScanStarted(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanProgress(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
+    void handleScanIndexResultFileRecordNamespaceChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload);
     void handleScanCancelled(const Protocol::MessageHeader& header, const QByteArray& payload);

@@ -16,6 +16,7 @@
 namespace ScannerHelper {
 
     using FileRecordChunkCallback = std::function<bool(const std::vector<FileRecord>&)>;
+    using FileRecordNamespaceChunkCallback = std::function<bool(const std::vector<FileRecordNamespace>&)>;
     using StringPoolChunkCallback = std::function<bool(const std::vector<char>&)>;
     using ErrorCallback = std::function<void(const QString&)>;
     using CancelCallback = std::function<bool()>;
@@ -30,6 +31,7 @@ namespace ScannerHelper {
                     const QString& primaryMountPoint,
                     const QStringList& mountPoints,
                     const FileRecordChunkCallback& onFileRecordChunk,
+                    const FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
                     const StringPoolChunkCallback& onStringPoolChunk,
                     const ErrorCallback& onError,
                     const CancelCallback& shouldCancel,

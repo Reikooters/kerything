@@ -204,12 +204,15 @@ bool scanDevice(const QString& devNode,
                 const QString& primaryMountPoint,
                 const QStringList& mountPoints,
                 const FileRecordChunkCallback& onFileRecordChunk,
+                const FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
                 const StringPoolChunkCallback& onStringPoolChunk,
                 const ErrorCallback& onError,
                 const CancelCallback& shouldCancel,
                 const ProgressCallback& onProgress)
 {
     const QString normalizedFsType = fsType.trimmed().toLower();
+
+    Q_UNUSED(onFileRecordNamespaceChunk);
 
     if (!isAllowedFsType(normalizedFsType)) {
         if (onError) {

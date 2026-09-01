@@ -1019,6 +1019,7 @@ quint64 IndexController::addDevice(
             deviceIndex.mounted = !mountPoints.isEmpty();
             deviceIndex.isReady = false;
             deviceIndex.fileRecords.clear();
+            deviceIndex.fileRecordNamespaces.clear();
             deviceIndex.stringPool.clear();
             deviceIndex.deletedRecordBits.clear();
             deviceIndex.lowercaseStringPool.clear();
@@ -1038,6 +1039,8 @@ quint64 IndexController::addDevice(
             deviceIndex.fsIndexRecordRefs64.clear();
             deviceIndex.liveFsIndexRecordRefs32.clear();
             deviceIndex.liveFsIndexRecordRefs64.clear();
+            deviceIndex.namespacedDirectoryFsIndexRecordRefs.clear();
+            deviceIndex.namespacedFsIndexRecordRefs.clear();
             deviceIndex.fsIndexLookupScratch.clear();
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
@@ -1226,7 +1229,7 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
     const std::size_t fileRecordsCountBefore = deviceIndex.fileRecords.size();
 
     // Reserve space for the new records
-    deviceIndex.fileRecords.reserve(deviceIndex.fileRecords.size() + records.size());
+    deviceIndex.fileRecords.reserve(fileRecordsCountBefore + records.size());
 
     // Insert the new records into the device index.
     // Parent pointers are resolved once after the full scan has completed.
@@ -1236,6 +1239,53 @@ void IndexController::appendDeviceFileRecordsByRequestId(const quint32 requestId
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: The index now contains " << deviceIndex.fileRecords.size()
               << " file records for device devNode=" << deviceIndex.devNode.toStdString() << "\n";
+#endif
+}
+
+void IndexController::appendDeviceFileRecordNamespacesByRequestId(
+    const quint32 requestId,
+    const std::vector<FileRecordNamespace>& namespaces)
+{
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
+        std::cerr << "IndexController: appendDeviceFileRecordNamespaces: No device index for requestId="
+                  << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingIndexId = existingIndexIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: appendDeviceFileRecordNamespaces: No device index for indexId="
+                  << existingIndexId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+
+    deviceIndex.fileRecordNamespaces.reserve(
+        deviceIndex.fileRecordNamespaces.size() + namespaces.size()
+    );
+
+    deviceIndex.fileRecordNamespaces.insert(
+        deviceIndex.fileRecordNamespaces.end(),
+        namespaces.begin(),
+        namespaces.end()
+    );
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "IndexController: Appended " << namespaces.size()
+              << " file record namespace entries to device "
+              << deviceIndex.devNode.toStdString()
+              << " namespace entries now="
+              << deviceIndex.fileRecordNamespaces.size()
+              << " fileRecords="
+              << deviceIndex.fileRecords.size()
+              << "\n";
 #endif
 }
 
@@ -1274,6 +1324,63 @@ void IndexController::appendDeviceStringPoolByRequestId(const quint32 requestId,
     std::cout << "IndexController: The index now contains " << deviceIndex.stringPool.size()
               << " string pool characters for device devNode=" << deviceIndex.devNode.toStdString() << "\n";
 #endif
+}
+
+bool IndexController::validateScanSidecarsByRequestId(quint32 requestId, QString* errorText)
+{
+    std::shared_lock lock(indexMutex_);
+
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
+        if (errorText) {
+            *errorText = QStringLiteral("No device index for requestId=%1").arg(requestId);
+        }
+
+        return false;
+    }
+
+    const quint64 existingIndexId = existingIndexIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end() || !existingDeviceIndexIt->second) {
+        if (errorText) {
+            *errorText = QStringLiteral("No device index for indexId=%1 requestId=%2")
+                .arg(existingIndexId)
+                .arg(requestId);
+        }
+
+        return false;
+    }
+
+    const DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+
+    const bool namespaceSidecarRequired =
+        deviceIndex.fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0;
+
+    if (namespaceSidecarRequired && deviceIndex.fileRecordNamespaces.empty()) {
+        if (errorText) {
+            *errorText = QStringLiteral(
+                "FileRecordNamespace sidecar is required for Btrfs scans"
+            );
+        }
+
+        return false;
+    }
+
+    if (!deviceIndex.fileRecordNamespaces.empty() &&
+        deviceIndex.fileRecordNamespaces.size() != deviceIndex.fileRecords.size()) {
+        if (errorText) {
+            *errorText = QStringLiteral(
+                "FileRecordNamespace sidecar count mismatch: namespaces=%1 records=%2"
+            )
+                .arg(deviceIndex.fileRecordNamespaces.size())
+                .arg(deviceIndex.fileRecords.size());
+        }
+
+        return false;
+    }
+
+    return true;
 }
 
 bool IndexController::removeRequestId(quint32 requestId) {
@@ -2044,6 +2151,9 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
 
         if (becameReady) {
             deviceIndex.compactDeletedRecordBits();
+            deviceIndex.fileRecordNamespaces.shrink_to_fit();
+            deviceIndex.namespacedDirectoryFsIndexRecordRefs.shrink_to_fit();
+            deviceIndex.namespacedFsIndexRecordRefs.shrink_to_fit();
             shouldTrimAllocator = true;
         }
     }
@@ -2070,6 +2180,7 @@ QString IndexController::memoryStatsText() const
 
     out << "Type sizes:\n";
     out << "  sizeof(FileRecord): " << sizeof(FileRecord) << " bytes\n";
+    out << "  sizeof(FileRecordNamespace): " << sizeof(FileRecordNamespace) << " bytes\n";
     out << "  sizeof(TrigramEntry): " << sizeof(TrigramEntry) << " bytes\n";
     out << "  sizeof(TrigramRange): " << sizeof(TrigramRange) << " bytes\n";
     out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
@@ -2079,6 +2190,9 @@ QString IndexController::memoryStatsText() const
         << " bytes\n";
     out << "  sizeof(FsIndexRecordRef64): "
         << sizeof(DeviceIndex::FsIndexRecordRef64)
+        << " bytes\n";
+    out << "  sizeof(NamespacedFsIndexRecordRef): "
+        << sizeof(DeviceIndex::NamespacedFsIndexRecordRef)
         << " bytes\n";
     out << "  sizeof(recordsByExtension::value_type): "
         << sizeof(typename decltype(std::declval<DeviceIndex>().recordsByExtension)::value_type)
@@ -2105,6 +2219,11 @@ QString IndexController::memoryStatsText() const
     quint64 grandEstimatedHashNodeOverhead24Bytes = 0;
 
     std::size_t grandRecords = 0;
+    std::size_t grandFileRecordNamespaceEntries = 0;
+    std::size_t grandNamespacedDirectoryRefs = 0;
+    std::size_t grandNamespacedFsIndexRefs = 0;
+    std::size_t grandIndexesWithNamespaceSidecars = 0;
+    std::size_t grandIndexesWithInvalidNamespaceSidecars = 0;
     std::size_t grandFlatTrigrams = 0;
     std::size_t grandLiveDeltaTrigrams = 0;
     std::size_t grandStringBytes = 0;
@@ -2149,6 +2268,7 @@ QString IndexController::memoryStatsText() const
         const DeviceIndex& device = *deviceIndexPtr;
 
         const quint64 fileRecordsBytes = vectorCapacityBytes(device.fileRecords);
+        const quint64 fileRecordNamespacesBytes = vectorCapacityBytes(device.fileRecordNamespaces);
         const quint64 stringPoolBytes = vectorCapacityBytes(device.stringPool);
         const quint64 lowercaseStringPoolBytes = vectorCapacityBytes(device.lowercaseStringPool);
         const quint64 lowercaseNameOffsetByRecordBytes =
@@ -2173,6 +2293,10 @@ QString IndexController::memoryStatsText() const
             vectorCapacityBytes(device.liveFsIndexRecordRefs32);
         const quint64 liveFsIndexRecordRefs64Bytes =
             vectorCapacityBytes(device.liveFsIndexRecordRefs64);
+        const quint64 namespacedDirectoryFsIndexRecordRefsBytes =
+            vectorCapacityBytes(device.namespacedDirectoryFsIndexRecordRefs);
+        const quint64 namespacedFsIndexRecordRefsBytes =
+            vectorCapacityBytes(device.namespacedFsIndexRecordRefs);
 
         const quint64 directoryFsIndexRecordRefsBytes =
             directoryFsIndexRecordRefs32Bytes +
@@ -2264,19 +2388,22 @@ QString IndexController::memoryStatsText() const
 
         const quint64 deviceVectorBytes =
             fileRecordsBytes +
+            fileRecordNamespacesBytes +
             stringPoolBytes +
             lowercaseStringPoolBytes +
             lowercaseNameOffsetByRecordBytes +
             deletedBitsBytes +
-                trigramRangesBytes +
-                trigramPostingsBytes +
-                liveDeltaFlatIndexBytes +
-                directoryFsIndexRecordRefsBytes +
-                liveDirectoryFsIndexRecordRefsBytes +
-                fsIndexRecordRefsBytes +
-                liveFsIndexRecordRefsBytes +
-                vectorCapacityBytes(device.fsIndexLookupScratch) +
-                extensionVectorStorageBytes;
+            trigramRangesBytes +
+            trigramPostingsBytes +
+            liveDeltaFlatIndexBytes +
+            directoryFsIndexRecordRefsBytes +
+            liveDirectoryFsIndexRecordRefsBytes +
+            fsIndexRecordRefsBytes +
+            liveFsIndexRecordRefsBytes +
+            namespacedDirectoryFsIndexRecordRefsBytes +
+            namespacedFsIndexRecordRefsBytes +
+            vectorCapacityBytes(device.fsIndexLookupScratch) +
+            extensionVectorStorageBytes;
 
         const quint64 deviceApproxHashPayloadBytes =
             approximateUnorderedMapNodePayloadBytes(device.recordsByExtension) +
@@ -2294,6 +2421,18 @@ QString IndexController::memoryStatsText() const
         grandEstimatedHashNodeOverhead24Bytes += deviceEstimatedHashNodeOverhead24Bytes;
 
         grandRecords += device.fileRecords.size();
+        grandFileRecordNamespaceEntries += device.fileRecordNamespaces.size();
+        grandNamespacedDirectoryRefs += device.namespacedDirectoryFsIndexRecordRefs.size();
+        grandNamespacedFsIndexRefs += device.namespacedFsIndexRecordRefs.size();
+
+        if (!device.fileRecordNamespaces.empty()) {
+            ++grandIndexesWithNamespaceSidecars;
+
+            if (device.fileRecordNamespaces.size() != device.fileRecords.size()) {
+                ++grandIndexesWithInvalidNamespaceSidecars;
+            }
+        }
+
         grandFlatTrigrams += trigramStats.postingCount;
         grandLiveDeltaTrigrams += device.liveDeltaFlatIndex.size();
         grandStringBytes += device.stringPool.size();
@@ -2358,6 +2497,18 @@ QString IndexController::memoryStatsText() const
             << device.fileRecords.capacity()
             << " => "
             << formatBytes(fileRecordsBytes)
+            << '\n';
+        out << "    fileRecordNamespaces size/capacity: "
+            << device.fileRecordNamespaces.size()
+            << '/'
+            << device.fileRecordNamespaces.capacity()
+            << " => "
+            << formatBytes(fileRecordNamespacesBytes)
+            << '\n';
+        out << "      namespace sidecar valid: "
+            << (device.fileRecordNamespaces.empty() || device.hasFileRecordNamespaces()
+                ? "true"
+                : "false")
             << '\n';
         out << "    stringPool size/capacity: "
             << device.stringPool.size()
@@ -2572,6 +2723,20 @@ QString IndexController::memoryStatsText() const
             << " => "
             << formatBytes(liveFsIndexRecordRefs64Bytes)
             << '\n';
+        out << "    namespacedDirectoryFsIndexRecordRefs size/capacity: "
+            << device.namespacedDirectoryFsIndexRecordRefs.size()
+            << '/'
+            << device.namespacedDirectoryFsIndexRecordRefs.capacity()
+            << " => "
+            << formatBytes(namespacedDirectoryFsIndexRecordRefsBytes)
+            << '\n';
+        out << "    namespacedFsIndexRecordRefs size/capacity: "
+            << device.namespacedFsIndexRecordRefs.size()
+            << '/'
+            << device.namespacedFsIndexRecordRefs.capacity()
+            << " => "
+            << formatBytes(namespacedFsIndexRecordRefsBytes)
+            << '\n';
         out << "      full refs: "
             << device.fsIndexFullRefCount()
             << '\n';
@@ -2655,6 +2820,21 @@ QString IndexController::memoryStatsText() const
 
     out << "Grand totals:\n";
     out << "  file records: " << grandRecords << '\n';
+    out << "  fileRecordNamespace entries: "
+        << grandFileRecordNamespaceEntries
+        << '\n';
+    out << "  indexes with namespace sidecars: "
+        << grandIndexesWithNamespaceSidecars
+        << '\n';
+    out << "  indexes with invalid namespace sidecars: "
+        << grandIndexesWithInvalidNamespaceSidecars
+        << '\n';
+    out << "  namespaced directory fs-index refs: "
+        << grandNamespacedDirectoryRefs
+        << '\n';
+    out << "  namespaced fs-index refs: "
+        << grandNamespacedFsIndexRefs
+        << '\n';
     out << "  stringPool bytes used: " << grandStringBytes << '\n';
     out << "  lowercaseStringPool bytes used: " << grandLowercaseStringBytes << '\n';
     out << "  lowercaseNameOffsetByRecord entries: "

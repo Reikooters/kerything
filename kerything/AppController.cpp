@@ -334,14 +334,27 @@ bool AppController::start() {
                 // requestRefreshAllWindows();
             });
 
-    connect(daemonClient_, &DaemonClient::scanStringPoolChunkReceived,
-            this, [this](quint32 requestId, QByteArrayView chunk) {
+    connect(daemonClient_, &DaemonClient::scanFileRecordNamespaceChunkReceived,
+            this, [this](quint32 requestId, const std::vector<FileRecordNamespace>& chunk) {
 #ifdef KERYTHING_ENABLE_LOGGING
-                std::cout << "GUI: received scan file record chunk requestId=" << requestId
+                std::cout << "GUI: received scan file record namespace chunk requestId=" << requestId
                           << " size=" << chunk.size() << "\n";
 #endif
 
-                indexController_->appendDeviceStringPoolByRequestId(requestId, chunk);
+                indexController_->appendDeviceFileRecordNamespacesByRequestId(requestId, chunk);
+            });
+
+    connect(daemonClient_, &DaemonClient::scanStringPoolChunkReceived,
+            this, [this](quint32 requestId, const QByteArray& chunk) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cout << "GUI: received scan string pool chunk requestId=" << requestId
+                          << " size=" << chunk.size() << "\n";
+#endif
+
+                indexController_->appendDeviceStringPoolByRequestId(
+                    requestId,
+                    QByteArrayView(chunk)
+                );
 
                 // requestRefreshAllWindows();
             });
@@ -357,6 +370,21 @@ bool AppController::start() {
                           << " fsType=" << fsType.toStdString()
                           << "\n";
 #endif
+
+                // Validate scan sidecars
+                QString sidecarError;
+                if (!indexController_->validateScanSidecarsByRequestId(requestId, &sidecarError)) {
+                    std::cerr << "GUI: scan sidecar validation failed requestId="
+                              << requestId
+                              << " deviceId=" << deviceId.toStdString()
+                              << " error=" << sidecarError.toStdString()
+                              << "\n";
+
+                    takeTrackedScanDeviceId(requestId, deviceId);
+                    indexController_->removeDeviceByRequestId(requestId);
+                    requestRefreshAllWindows();
+                    return;
+                }
 
                 // Build lowercase string pool
                 indexController_->buildLowercaseStringPoolByRequestId(requestId);

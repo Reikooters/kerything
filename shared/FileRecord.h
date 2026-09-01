@@ -17,6 +17,26 @@ struct FileRecord {
     quint8 flags;            // bit 0 = isDir, bit 1 = isSymlink
 };
 
+/*
+ * Optional per-record filesystem namespace metadata.
+ *
+ * Most filesystems use globally meaningful inode/MFT ids within the indexed
+ * device, so FileRecord::fsIndex and FileRecord::parentFsIndex are sufficient.
+ *
+ * Btrfs object ids are only unique within a root/subvolume. For Btrfs indexes,
+ * DeviceIndex keeps one FileRecordNamespace per FileRecord in a sidecar vector:
+ *
+ *   identity:        (fsNamespace, fsIndex)
+ *   parent identity: (parentFsNamespace, parentFsIndex)
+ *
+ * For non-Btrfs indexes this vector remains empty, so FileRecord size and
+ * memory use stay unchanged.
+ */
+struct FileRecordNamespace {
+    quint64 fsNamespace = 0;
+    quint64 parentFsNamespace = 0;
+};
+
 #pragma pack(pop)
 
 inline constexpr quint8 FileRecord_IsDir     = 0x01;

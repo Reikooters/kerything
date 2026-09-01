@@ -305,6 +305,10 @@ void DaemonClient::handleMessage(const Protocol::MessageHeader& header, const QB
             handleScanIndexResultFileRecordChunk(header, payload);
             break;
 
+        case Protocol::MessageType::ScanIndexResultFileRecordNamespaceChunk:
+            handleScanIndexResultFileRecordNamespaceChunk(header, payload);
+            break;
+
         case Protocol::MessageType::ScanIndexResultStringPoolChunk:
             handleScanIndexResultStringPoolChunk(header, payload);
             break;
@@ -462,8 +466,22 @@ void DaemonClient::handleScanProgress(const Protocol::MessageHeader& header, con
     Q_EMIT scanProgress(header.requestId, *progress);
 }
 
-void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
+void DaemonClient::handleScanIndexResultFileRecordChunk(
+    const Protocol::MessageHeader& header,
+    const QByteArray& payload)
 {
+    static constexpr qsizetype CountFieldSize = sizeof(quint32);
+    static constexpr qsizetype EntryWireSize = Protocol::ScanFileRecordWireSize;
+
+    if (payload.size() < CountFieldSize) {
+        std::cerr << "Malformed ScanIndexResultFileRecordChunk payload header\n";
+        Q_EMIT scanFailed(
+            header.requestId,
+            QStringLiteral("malformed FileRecord chunk header")
+        );
+        return;
+    }
+
     QDataStream in(payload);
     in.setByteOrder(QDataStream::BigEndian);
     in.setVersion(QDataStream::Qt_6_0);
@@ -472,21 +490,29 @@ void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageH
     in >> count;
 
     if (in.status() != QDataStream::Ok) {
-        std::cerr << "Malformed ScanIndexResultChunk payload header\n";
+        std::cerr << "Malformed ScanIndexResultFileRecordChunk payload header\n";
+        Q_EMIT scanFailed(
+            header.requestId,
+            QStringLiteral("malformed FileRecord chunk header")
+        );
+        return;
+    }
+
+    const quint64 expectedPayloadSize =
+        static_cast<quint64>(CountFieldSize) +
+        static_cast<quint64>(count) * static_cast<quint64>(EntryWireSize);
+
+    if (expectedPayloadSize != static_cast<quint64>(payload.size())) {
+        std::cerr << "Invalid ScanIndexResultFileRecordChunk payload size\n";
+        Q_EMIT scanFailed(
+            header.requestId,
+            QStringLiteral("invalid FileRecord chunk size")
+        );
         return;
     }
 
     std::vector<FileRecord> chunk;
     chunk.reserve(count);
-
-    if (count == 0) {
-        return;
-    }
-
-    if (count > (payload.size() - sizeof(quint32)) / sizeof(FileRecord)) {
-        std::cerr << "Invalid ScanIndexResultChunk payload size\n";
-        return;
-    }
 
     for (quint32 i = 0; i < count; ++i) {
         FileRecord rec{};
@@ -499,6 +525,15 @@ void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageH
            >> rec.nameLen
            >> rec.flags;
 
+        if (in.status() != QDataStream::Ok) {
+            std::cerr << "Malformed ScanIndexResultFileRecordChunk entry\n";
+            Q_EMIT scanFailed(
+                header.requestId,
+                QStringLiteral("malformed FileRecord chunk entry")
+            );
+            return;
+        }
+
         chunk.push_back(rec);
     }
 
@@ -510,14 +545,89 @@ void DaemonClient::handleScanIndexResultFileRecordChunk(const Protocol::MessageH
     Q_EMIT scanFileRecordChunkReceived(header.requestId, chunk);
 }
 
-void DaemonClient::handleScanIndexResultStringPoolChunk(const Protocol::MessageHeader& header, const QByteArray& payload)
+void DaemonClient::handleScanIndexResultFileRecordNamespaceChunk(
+    const Protocol::MessageHeader& header,
+    const QByteArray& payload)
+{
+    static constexpr qsizetype CountFieldSize = sizeof(quint32);
+    static constexpr qsizetype EntryWireSize = Protocol::ScanFileRecordNamespaceWireSize;
+
+    if (payload.size() < CountFieldSize) {
+        std::cerr << "Malformed ScanIndexResultFileRecordNamespaceChunk payload header\n";
+        Q_EMIT scanFailed(
+            header.requestId,
+            QStringLiteral("malformed FileRecordNamespace chunk header")
+        );
+        return;
+    }
+
+    QDataStream in(payload);
+    in.setByteOrder(QDataStream::BigEndian);
+    in.setVersion(QDataStream::Qt_6_0);
+
+    quint32 count = 0;
+    in >> count;
+
+    if (in.status() != QDataStream::Ok) {
+        std::cerr << "Malformed ScanIndexResultFileRecordNamespaceChunk payload header\n";
+        Q_EMIT scanFailed(
+            header.requestId,
+            QStringLiteral("malformed FileRecordNamespace chunk header")
+        );
+        return;
+    }
+
+    const quint64 expectedPayloadSize =
+        static_cast<quint64>(CountFieldSize) +
+        static_cast<quint64>(count) * static_cast<quint64>(EntryWireSize);
+
+    if (expectedPayloadSize != static_cast<quint64>(payload.size())) {
+        std::cerr << "Invalid ScanIndexResultFileRecordNamespaceChunk payload size\n";
+        Q_EMIT scanFailed(
+            header.requestId,
+            QStringLiteral("invalid FileRecordNamespace chunk size")
+        );
+        return;
+    }
+
+    std::vector<FileRecordNamespace> chunk;
+    chunk.reserve(count);
+
+    for (quint32 i = 0; i < count; ++i) {
+        FileRecordNamespace entry{};
+        in >> entry.fsNamespace
+           >> entry.parentFsNamespace;
+
+        if (in.status() != QDataStream::Ok) {
+            std::cerr << "Malformed ScanIndexResultFileRecordNamespaceChunk entry\n";
+            Q_EMIT scanFailed(
+                header.requestId,
+                QStringLiteral("malformed FileRecordNamespace chunk entry")
+            );
+            return;
+        }
+
+        chunk.push_back(entry);
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "Received file record namespace chunk requestId=" << header.requestId
+              << " count=" << chunk.size() << "\n";
+#endif
+
+    Q_EMIT scanFileRecordNamespaceChunkReceived(header.requestId, chunk);
+}
+
+void DaemonClient::handleScanIndexResultStringPoolChunk(
+    const Protocol::MessageHeader& header,
+    const QByteArray& payload)
 {
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "Received string pool chunk requestId=" << header.requestId
               << " length=" << payload.size() << "\n";
 #endif
 
-    Q_EMIT scanStringPoolChunkReceived(header.requestId, QByteArrayView(payload));
+    Q_EMIT scanStringPoolChunkReceived(header.requestId, payload);
 }
 
 void DaemonClient::handleScanCompleted(const Protocol::MessageHeader& header, const QByteArray& payload)

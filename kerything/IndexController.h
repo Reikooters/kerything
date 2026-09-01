@@ -117,8 +117,23 @@ public:
         QString label;
 
         std::vector<FileRecord> fileRecords;
+        std::vector<FileRecordNamespace> fileRecordNamespaces;
         std::vector<char> stringPool;
         std::vector<uint64_t> deletedRecordBits;
+
+        [[nodiscard]] bool hasFileRecordNamespaces() const noexcept
+        {
+            return fileRecordNamespaces.size() == fileRecords.size();
+        }
+
+        [[nodiscard]] FileRecordNamespace namespaceForRecord(uint32_t recordIdx) const noexcept
+        {
+            if (recordIdx >= fileRecordNamespaces.size()) {
+                return {};
+            }
+
+            return fileRecordNamespaces[recordIdx];
+        }
 
         enum class FsIndexRefStorage : uint8_t {
             UInt32,
@@ -153,6 +168,25 @@ public:
             }
         };
 
+        struct NamespacedFsIndexRecordRef {
+            uint64_t fsNamespace = 0;
+            uint64_t fsIndex = 0;
+            uint32_t recordIdx = 0;
+
+            [[nodiscard]] bool operator<(const NamespacedFsIndexRecordRef& other) const noexcept
+            {
+                if (fsNamespace != other.fsNamespace) {
+                    return fsNamespace < other.fsNamespace;
+                }
+
+                if (fsIndex != other.fsIndex) {
+                    return fsIndex < other.fsIndex;
+                }
+
+                return recordIdx < other.recordIdx;
+            }
+        };
+
         // Full-scan fs-index refs use the narrowest key width that can safely
         // represent all live records in this device. ext4 normally uses UInt32;
         // NTFS and any filesystem with wider identifiers use UInt64.
@@ -173,6 +207,16 @@ public:
         // Inode refs added by live updates after the last full rebuild.
         std::vector<FsIndexRecordRef32> liveFsIndexRecordRefs32;
         std::vector<FsIndexRecordRef64> liveFsIndexRecordRefs64;
+
+        // Full-scan namespace-aware refs used by filesystems where fsIndex is
+        // only unique inside another filesystem namespace. Btrfs uses these for
+        // (root/subvolume id, objectid) lookups.
+        //
+        // These vectors are populated only when fileRecordNamespaces has one
+        // entry per FileRecord. Non-Btrfs indexes keep them empty, so they do
+        // not add per-record memory cost for EXT4/NTFS.
+        std::vector<NamespacedFsIndexRecordRef> namespacedDirectoryFsIndexRecordRefs;
+        std::vector<NamespacedFsIndexRecordRef> namespacedFsIndexRecordRefs;
 
         mutable std::vector<uint32_t> fsIndexLookupScratch;
 
@@ -517,6 +561,9 @@ public:
             liveFsIndexRecordRefs32.clear();
             liveFsIndexRecordRefs64.clear();
 
+            namespacedDirectoryFsIndexRecordRefs.clear();
+            namespacedFsIndexRecordRefs.clear();
+
             fsIndexLookupScratch.clear();
         }
 
@@ -770,8 +817,53 @@ public:
                 : liveDirectoryFsIndexRecordRefs64.size();
         }
 
+        [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForNamespacedFsIndex(
+    uint64_t fsNamespace,
+    uint64_t fsIndex
+) const {
+            const auto searchKey = NamespacedFsIndexRecordRef{
+                fsNamespace,
+                fsIndex,
+                0
+            };
+
+            const auto it = std::lower_bound(
+                namespacedDirectoryFsIndexRecordRefs.begin(),
+                namespacedDirectoryFsIndexRecordRefs.end(),
+                searchKey,
+                [](const NamespacedFsIndexRecordRef& lhs, const NamespacedFsIndexRecordRef& rhs) {
+                    if (lhs.fsNamespace != rhs.fsNamespace) {
+                        return lhs.fsNamespace < rhs.fsNamespace;
+                    }
+
+                    return lhs.fsIndex < rhs.fsIndex;
+                }
+            );
+
+            if (it == namespacedDirectoryFsIndexRecordRefs.end() ||
+                it->fsNamespace != fsNamespace ||
+                it->fsIndex != fsIndex ||
+                it->recordIdx >= fileRecords.size() ||
+                isDeletedRecord(it->recordIdx)) {
+                return std::nullopt;
+                }
+
+            const FileRecord& record = fileRecords[it->recordIdx];
+            if ((record.flags & FileRecord_IsDir) == 0) {
+                return std::nullopt;
+            }
+
+            return it->recordIdx;
+        }
+
         void rebuildFsIndexMaps() {
             clearFsIndexRefStorage();
+
+            if (hasFileRecordNamespaces()) {
+                rebuildNamespacedFsIndexMaps();
+                fsIndexRefStorage = FsIndexRefStorage::UInt64;
+                return;
+            }
 
             fsIndexRefStorage = allLiveFsIndexesFitUInt32()
                 ? FsIndexRefStorage::UInt32
@@ -861,14 +953,93 @@ public:
             liveFsIndexRecordRefs64.shrink_to_fit();
         }
 
+        void rebuildNamespacedFsIndexMaps()
+        {
+            namespacedDirectoryFsIndexRecordRefs.clear();
+            namespacedFsIndexRecordRefs.clear();
+
+            if (!hasFileRecordNamespaces()) {
+                return;
+            }
+
+            std::size_t directoryCount = 0;
+            std::size_t liveRecordCount = 0;
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                ++liveRecordCount;
+
+                if ((fileRecords[recordIdx].flags & FileRecord_IsDir) != 0) {
+                    ++directoryCount;
+                }
+            }
+
+            namespacedFsIndexRecordRefs.reserve(liveRecordCount);
+            namespacedDirectoryFsIndexRecordRefs.reserve(directoryCount);
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+                const FileRecordNamespace namespaceEntry = fileRecordNamespaces[recordIdx];
+
+                namespacedFsIndexRecordRefs.push_back({
+                    namespaceEntry.fsNamespace,
+                    record.fsIndex,
+                    recordIdx
+                });
+
+                if ((record.flags & FileRecord_IsDir) != 0) {
+                    namespacedDirectoryFsIndexRecordRefs.push_back({
+                        namespaceEntry.fsNamespace,
+                        record.fsIndex,
+                        recordIdx
+                    });
+                }
+            }
+
+            std::sort(
+                namespacedFsIndexRecordRefs.begin(),
+                namespacedFsIndexRecordRefs.end()
+            );
+
+            std::sort(
+                namespacedDirectoryFsIndexRecordRefs.begin(),
+                namespacedDirectoryFsIndexRecordRefs.end()
+            );
+
+            namespacedFsIndexRecordRefs.shrink_to_fit();
+            namespacedDirectoryFsIndexRecordRefs.shrink_to_fit();
+        }
+
         /**
          * @brief Resolves parent pointers for all file records in the current device index.
          * This is called once after the device scan is finished.
          *
-         * This method maps the file system parent indices to internal record indices
-         * for all entries in the `fileRecords` vector. If a parent index does not
-         * exist in the directory index, the corresponding record is marked as belonging
-         * to the root by setting its `parentRecordIdx` to `0xFFFFFFFF`.
+         * For ordinary filesystems, this maps FileRecord::parentFsIndex to an
+         * internal record index using filesystem object ids such as inode/MFT ids.
+         *
+         * For namespace-aware filesystems such as Btrfs, FileRecord::fsIndex and
+         * FileRecord::parentFsIndex are interpreted together with the optional
+         * FileRecordNamespace sidecar. Parent lookup then uses:
+         *
+         *   (parentFsNamespace, parentFsIndex)
+         *
+         * rather than parentFsIndex alone, because Btrfs object ids are only
+         * unique within a root/subvolume.
+         *
+         * If a parent does not exist in the directory index, the corresponding
+         * record is marked as belonging to the root by setting parentRecordIdx to
+         * 0xFFFFFFFF.
          *
          * The method is used to establish hierarchical relationships between file
          * records, which is critical for operations that need to navigate or
@@ -881,9 +1052,34 @@ public:
 
             rebuildFsIndexMaps();
 
+            const bool useNamespaces = hasFileRecordNamespaces();
+
             // Convert parent filesystem indices to internal record indices.
             for (size_t i = 0; i < fileRecords.size(); ++i) {
                 FileRecord& rec = fileRecords[i];
+
+                if (useNamespaces) {
+                    const FileRecordNamespace namespaceEntry = fileRecordNamespaces[i];
+
+                    // Root/self-parent safety.
+                    if (namespaceEntry.fsNamespace == namespaceEntry.parentFsNamespace &&
+                        rec.fsIndex == rec.parentFsIndex) {
+                        rec.parentRecordIdx = 0xFFFFFFFF;
+                        continue;
+                    }
+
+                    if (const std::optional<uint32_t> parentRecordIdx =
+                            directoryRecordIdxForNamespacedFsIndex(
+                                namespaceEntry.parentFsNamespace,
+                                rec.parentFsIndex
+                            )) {
+                        rec.parentRecordIdx = *parentRecordIdx;
+                    } else {
+                        rec.parentRecordIdx = 0xFFFFFFFF;
+                    }
+
+                    continue;
+                }
 
                 // Root/self-parent safety.
                 if (rec.fsIndex == rec.parentFsIndex) {
@@ -891,8 +1087,7 @@ public:
                     continue;
                 }
 
-                if (const std::optional<uint32_t> parentRecordIdx =
-                        directoryRecordIdxForFsIndex(rec.parentFsIndex)) {
+                if (const std::optional<uint32_t> parentRecordIdx = directoryRecordIdxForFsIndex(rec.parentFsIndex)) {
                     rec.parentRecordIdx = *parentRecordIdx;
                 } else {
                     // If parent is not in our DB, mark as root.
@@ -1019,41 +1214,41 @@ public:
                 return compareCaseInsensitive(fileRecords[i], fileRecords[j]);
             });
 
-            // // 3. Create a reverse mapping to update parentRecordIdx
-            // std::vector<uint32_t> rev(p.size());
-            // for (uint32_t i = 0; i < p.size(); ++i) {
-            //     rev[p[i]] = i;
-            // }
-            //
-            // // 4. Reorder records and update parent indices
-            // std::vector<FileRecord> newRecords(fileRecords.size());
-            // for (size_t i = 0; i < p.size(); ++i) {
-            //     newRecords[i] = fileRecords[p[i]];
-            //     if (newRecords[i].parentRecordIdx != 0xFFFFFFFF) {
-            //         newRecords[i].parentRecordIdx = rev[newRecords[i].parentRecordIdx];
-            //     }
-            // }
-
             // 3. Reorder records. parentRecordIdx is intentionally not remapped here,
             // because parent pointers are resolved after this sort.
             std::vector<FileRecord> newRecords(fileRecords.size());
+            std::vector<FileRecordNamespace> newFileRecordNamespaces;
             std::vector<uint32_t> newLowercaseNameOffsetByRecord(
                 lowercaseNameOffsetByRecord.size(),
                 NoLowercaseNameOverride
             );
 
+            const bool reorderNamespaces = hasFileRecordNamespaces();
+            if (reorderNamespaces) {
+                newFileRecordNamespaces.resize(fileRecordNamespaces.size());
+            }
+
             for (size_t i = 0; i < p.size(); ++i) {
                 newRecords[i] = fileRecords[p[i]];
                 newRecords[i].parentRecordIdx = 0xFFFFFFFF;
+
+                if (reorderNamespaces) {
+                    newFileRecordNamespaces[i] = fileRecordNamespaces[p[i]];
+                }
 
                 if (p[i] < lowercaseNameOffsetByRecord.size() &&
                     i < newLowercaseNameOffsetByRecord.size()) {
                     newLowercaseNameOffsetByRecord[i] =
                         lowercaseNameOffsetByRecord[p[i]];
-                }
+                    }
             }
 
             fileRecords = std::move(newRecords);
+
+            if (reorderNamespaces) {
+                fileRecordNamespaces = std::move(newFileRecordNamespaces);
+            }
+
             lowercaseNameOffsetByRecord =
                 std::move(newLowercaseNameOffsetByRecord);
         }
@@ -1460,7 +1655,12 @@ public:
     bool removeDeviceByDeviceId(const QString& deviceId);
     bool removeDeviceByRequestId(quint32 requestId);
     void appendDeviceFileRecordsByRequestId(quint32 requestId, const std::vector<FileRecord>& records);
+    void appendDeviceFileRecordNamespacesByRequestId(
+        quint32 requestId,
+        const std::vector<FileRecordNamespace>& namespaces
+    );
     void appendDeviceStringPoolByRequestId(quint32 requestId, QByteArrayView stringPool);
+    bool validateScanSidecarsByRequestId(quint32 requestId, QString* errorText = nullptr);
     bool removeRequestId(quint32 requestId);
     bool updateDeviceRuntimeStateByDeviceId(
         const QString& deviceId,

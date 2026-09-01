@@ -68,6 +68,15 @@ void ScannerWorker::startScan(std::shared_ptr<ScanJob> job)
 
             return !jobRef->cancelled.load(std::memory_order_relaxed);
         },
+        [this, requestId, jobRef](const std::vector<FileRecordNamespace>& namespaceChunk) -> bool {
+            if (jobRef->cancelled.load(std::memory_order_relaxed)) {
+                return false;
+            }
+
+            Q_EMIT scanFileRecordNamespaceChunkReady(requestId, namespaceChunk);
+
+            return !jobRef->cancelled.load(std::memory_order_relaxed);
+        },
         [this, requestId, jobRef](const std::vector<char>& stringPoolChunk) -> bool {
             if (jobRef->cancelled.load(std::memory_order_relaxed)) {
                 return false;

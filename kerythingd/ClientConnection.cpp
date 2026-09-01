@@ -18,6 +18,11 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
 {
     Q_ASSERT(socket_);
 
+    qRegisterMetaType<std::vector<FileRecord>>("std::vector<FileRecord>");
+    qRegisterMetaType<std::vector<FileRecordNamespace>>("std::vector<FileRecordNamespace>");
+    qRegisterMetaType<std::vector<char>>("std::vector<char>");
+    qRegisterMetaType<Protocol::ScanProgress>("Protocol::ScanProgress");
+
     connect(socket_, &QLocalSocket::readyRead,
             this, &ClientConnection::onReadyRead);
 
@@ -59,6 +64,11 @@ ClientConnection::ClientConnection(QLocalSocket* socket, QObject* parent)
     connect(scannerWorker_, &ScannerWorker::scanFileRecordChunkReady,
             this, [this](quint32 requestId, const std::vector<FileRecord>& fileRecordChunk) {
                 sendScanFileRecordChunk(requestId, fileRecordChunk);
+            });
+
+    connect(scannerWorker_, &ScannerWorker::scanFileRecordNamespaceChunkReady,
+            this, [this](quint32 requestId, const std::vector<FileRecordNamespace>& namespaceChunk) {
+                sendScanFileRecordNamespaceChunk(requestId, namespaceChunk);
             });
 
     connect(scannerWorker_, &ScannerWorker::scanStringPoolChunkReady,
@@ -292,6 +302,33 @@ void ClientConnection::sendScanProgress(quint32 requestId,
         Protocol::MessageType::ScanProgress,
         requestId,
         Protocol::makeScanProgressPayload(progress)
+    );
+}
+
+bool ClientConnection::sendScanFileRecordNamespaceChunk(
+    quint32 requestId,
+    const std::vector<FileRecordNamespace>& namespaceChunk)
+{
+    if (shuttingDown_ || !socket_) {
+        return false;
+    }
+
+    QByteArray payload;
+    QDataStream out(&payload, QIODevice::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out.setVersion(QDataStream::Qt_6_0);
+
+    out << static_cast<quint32>(namespaceChunk.size());
+
+    for (const FileRecordNamespace& namespaceEntry : namespaceChunk) {
+        out << namespaceEntry.fsNamespace
+            << namespaceEntry.parentFsNamespace;
+    }
+
+    return sendFrame(
+        Protocol::MessageType::ScanIndexResultFileRecordNamespaceChunk,
+        requestId,
+        payload
     );
 }
 

@@ -39,6 +39,7 @@ enum class MessageType : quint16 {
     LiveUpdateStatusChanged = 13,
     LiveUpdateOperationBatch = 14,
     SetLiveUpdateDevices = 15,
+    ScanIndexResultFileRecordNamespaceChunk = 16,
     Error = 99
 };
 
@@ -59,6 +60,20 @@ enum ScanIndexResultChunkType : quint8 {
     FileRecord = 1,
     StringPool = 2
 };
+
+static constexpr qsizetype ScanFileRecordWireSize =
+    sizeof(quint64) + // fsIndex
+    sizeof(quint64) + // parentFsIndex
+    sizeof(quint32) + // parentRecordIdx
+    sizeof(quint64) + // size
+    sizeof(quint64) + // modificationTime
+    sizeof(quint32) + // nameOffset
+    sizeof(quint16) + // nameLen
+    sizeof(quint8);   // flags
+
+static constexpr qsizetype ScanFileRecordNamespaceWireSize =
+    sizeof(quint64) + // fsNamespace
+    sizeof(quint64);  // parentFsNamespace
 
 struct ScanProgress {
     QString phase;

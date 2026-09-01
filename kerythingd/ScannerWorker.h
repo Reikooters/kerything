@@ -32,6 +32,7 @@ Q_SIGNALS:
     );
     void scanProgress(quint32 requestId, const Protocol::ScanProgress& progress);
     void scanFileRecordChunkReady(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
+    void scanFileRecordNamespaceChunkReady(quint32 requestId, const std::vector<FileRecordNamespace>& namespaceChunk);
     void scanStringPoolChunkReady(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void scanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
     void scanCancelled(quint32 requestId, const QString& deviceId);

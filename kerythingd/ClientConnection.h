@@ -38,6 +38,7 @@ public:
     );
     void sendScanProgress(quint32 requestId, const Protocol::ScanProgress& progress);
     bool sendScanFileRecordChunk(quint32 requestId, const std::vector<FileRecord>& fileRecordChunk);
+    bool sendScanFileRecordNamespaceChunk(quint32 requestId, const std::vector<FileRecordNamespace>& namespaceChunk);
     bool sendScanStringPoolChunk(quint32 requestId, const std::vector<char>& stringPoolChunk);
     void sendScanCompleted(quint32 requestId, const QString& deviceId, const QString& devNode, const QString& fsType);
     void sendScanCancelled(quint32 requestId, const QString& deviceId);

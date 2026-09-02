@@ -11,6 +11,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -100,6 +101,115 @@ namespace {
         qint64 modificationTime = 0;
         quint8 flags = 0;
         bool present = false;
+    };
+
+    struct BtrfsStreamState {
+        std::vector<FileRecord> records;
+        std::vector<FileRecordNamespace> namespaces;
+        std::vector<char> stringPool;
+
+        uint32_t totalStringPoolLength = 0;
+
+        static constexpr uint32_t kTargetIpcBufferSizeMB = 4;
+        static constexpr uint32_t kMaxIpcBufferSizeBytes =
+            (kTargetIpcBufferSizeMB * 1024 * 1024) -
+            Protocol::HeaderSize -
+            sizeof(Protocol::ScanIndexResultChunkType);
+
+        static constexpr uint32_t kRecordsPerIpcChunk =
+            kMaxIpcBufferSizeBytes /
+            (sizeof(FileRecord) + sizeof(FileRecordNamespace));
+
+        bool flush(
+            const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+            const ScannerHelper::FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
+            const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
+        {
+            if (!records.empty()) {
+                std::vector<FileRecord> fileRecordChunk = std::move(records);
+                std::vector<FileRecordNamespace> namespaceChunk = std::move(namespaces);
+
+                records.clear();
+                namespaces.clear();
+
+                records.reserve(kRecordsPerIpcChunk);
+                namespaces.reserve(kRecordsPerIpcChunk);
+
+                if (!onFileRecordChunk(fileRecordChunk)) {
+                    std::cerr << "[BtrfsScannerEngine] scan aborted by file record receiver\n";
+                    return false;
+                }
+
+                if (!onFileRecordNamespaceChunk(namespaceChunk)) {
+                    std::cerr << "[BtrfsScannerEngine] scan aborted by namespace receiver\n";
+                    return false;
+                }
+            }
+
+            if (!stringPool.empty()) {
+                std::vector<char> stringPoolChunk = std::move(stringPool);
+
+                totalStringPoolLength += static_cast<uint32_t>(stringPoolChunk.size());
+
+                stringPool.clear();
+                stringPool.reserve(kMaxIpcBufferSizeBytes);
+
+                if (!onStringPoolChunk(stringPoolChunk)) {
+                    std::cerr << "[BtrfsScannerEngine] scan aborted by string pool receiver\n";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        bool addRecord(
+            quint64 rootId,
+            quint64 inode,
+            quint64 parentRootId,
+            quint64 parentInode,
+            std::string_view name,
+            quint64 size,
+            qint64 modificationTime,
+            quint8 flags,
+            const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+            const ScannerHelper::FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
+            const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
+        {
+            if (name.size() > std::numeric_limits<quint16>::max()) {
+                return true;
+            }
+
+            if (records.size() >= kRecordsPerIpcChunk ||
+                stringPool.size() + name.size() >= kMaxIpcBufferSizeBytes) {
+                if (!flush(
+                        onFileRecordChunk,
+                        onFileRecordNamespaceChunk,
+                        onStringPoolChunk)) {
+                    return false;
+                }
+            }
+
+            FileRecord record{};
+            record.fsIndex = inode;
+            record.parentFsIndex = parentInode;
+            record.parentRecordIdx = 0xFFFFFFFF;
+            record.size = size;
+            record.modificationTime = modificationTime;
+            record.nameOffset = totalStringPoolLength + static_cast<uint32_t>(stringPool.size());
+            record.nameLen = static_cast<quint16>(name.size());
+            record.flags = flags;
+
+            FileRecordNamespace namespaceEntry{};
+            namespaceEntry.fsNamespace = rootId;
+            namespaceEntry.parentFsNamespace = parentRootId;
+
+            records.push_back(record);
+            namespaces.push_back(namespaceEntry);
+            stringPool.insert(stringPool.end(), name.begin(), name.end());
+
+            return true;
+        }
     };
 
     struct DirEntry {
@@ -802,6 +912,319 @@ namespace {
                   << " entries=" << totalEntries
                   << "\n";
     }
+
+    const RootScanState* findRootStateById(
+        const std::vector<RootScanState>& roots,
+        quint64 rootId)
+    {
+        const auto it = std::find_if(
+            roots.begin(),
+            roots.end(),
+            [rootId](const RootScanState& root) {
+                return root.mountedRoot.rootId == rootId;
+            }
+        );
+
+        if (it == roots.end()) {
+            return nullptr;
+        }
+
+        return &*it;
+    }
+}
+
+bool BtrfsScannerEngine::scanMountedFilesystem(
+    const QString& devicePath,
+    const QStringList& mountPoints,
+    const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+    const ScannerHelper::FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
+    const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+    const ScannerHelper::ErrorCallback& onError,
+    const ScannerHelper::CancelCallback& shouldCancel,
+    const ScannerHelper::ProgressCallback& onProgress)
+{
+    if (shouldCancel && shouldCancel()) {
+        return false;
+    }
+
+    const std::vector<MountedRoot> mountedRoots =
+        mountedBtrfsRootsForMountPoints(mountPoints);
+
+    if (mountedRoots.empty()) {
+        if (onError) {
+            onError(QStringLiteral("No mounted Btrfs subvolumes found for %1").arg(devicePath));
+        }
+
+        return false;
+    }
+
+    UniqueFd fd(::open(
+        mountedRoots.front().mountPoint.toLocal8Bit().constData(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC
+    ));
+
+    if (!fd.valid()) {
+        if (onError) {
+            onError(errnoText("Failed to open Btrfs mount point"));
+        }
+
+        return false;
+    }
+
+    std::unordered_set<quint64> mountedRootIds;
+    mountedRootIds.reserve(mountedRoots.size());
+
+    for (const MountedRoot& root : mountedRoots) {
+        mountedRootIds.insert(root.rootId);
+    }
+
+    DebugScanOptions options;
+    options.printMountTable = false;
+    options.printRecords = false;
+    options.printSummary = false;
+
+    /*
+     * Phase 1 policy:
+     * only cross into subvolume roots that are also mounted/selected for this scan.
+     *
+     * This avoids silently indexing hidden/unmounted subvolumes that the GUI cannot
+     * yet expand to a stable visible mount path.
+     */
+    options.skipUnmountedSubvolumeBoundaries = true;
+
+    std::vector<RootScanState> rootStates;
+    rootStates.reserve(mountedRoots.size());
+
+    if (onProgress) {
+        onProgress(Protocol::ScanProgress{
+            .phase = QStringLiteral("Reading Btrfs roots"),
+            .unit = QStringLiteral("roots"),
+            .processed = 0,
+            .total = static_cast<quint64>(mountedRoots.size())
+        });
+    }
+
+    quint64 rootsProcessed = 0;
+
+    for (const MountedRoot& mountedRoot : mountedRoots) {
+        if (shouldCancel && shouldCancel()) {
+            return false;
+        }
+
+        RootScanState state;
+        state.mountedRoot = mountedRoot;
+
+        QString errorText;
+        if (!scanInodeItems(fd.fd, state, shouldCancel, &errorText)) {
+            if (shouldCancel && shouldCancel()) {
+                return false;
+            }
+
+            if (onError) {
+                onError(QStringLiteral("Btrfs inode scan failed for rootId=%1: %2")
+                    .arg(state.mountedRoot.rootId)
+                    .arg(errorText));
+            }
+
+            return false;
+        }
+
+        if (!scanDirectoryIndexItems(
+                fd.fd,
+                state,
+                mountedRootIds,
+                options,
+                shouldCancel,
+                &errorText)) {
+            if (shouldCancel && shouldCancel()) {
+                return false;
+            }
+
+            if (onError) {
+                onError(QStringLiteral("Btrfs directory scan failed for rootId=%1: %2")
+                    .arg(state.mountedRoot.rootId)
+                    .arg(errorText));
+            }
+
+            return false;
+        }
+
+        buildEntryIndexes(state);
+        rootStates.push_back(std::move(state));
+
+        ++rootsProcessed;
+
+        if (onProgress) {
+            onProgress(Protocol::ScanProgress{
+                .phase = QStringLiteral("Reading Btrfs roots"),
+                .unit = QStringLiteral("roots"),
+                .processed = rootsProcessed,
+                .total = static_cast<quint64>(mountedRoots.size())
+            });
+        }
+    }
+
+    BtrfsStreamState stream;
+    stream.records.reserve(BtrfsStreamState::kRecordsPerIpcChunk);
+    stream.namespaces.reserve(BtrfsStreamState::kRecordsPerIpcChunk);
+    stream.stringPool.reserve(BtrfsStreamState::kMaxIpcBufferSizeBytes);
+
+    std::size_t estimatedEntryCount = 0;
+    for (const RootScanState& root : rootStates) {
+        estimatedEntryCount += root.entries.size();
+    }
+
+    if (onProgress) {
+        onProgress(Protocol::ScanProgress{
+            .phase = QStringLiteral("Streaming Btrfs records"),
+            .unit = QStringLiteral("records"),
+            .processed = 0,
+            .total = static_cast<quint64>(estimatedEntryCount + rootStates.size())
+        });
+    }
+
+    quint64 recordsStreamed = 0;
+
+    for (const RootScanState& root : rootStates) {
+        if (shouldCancel && shouldCancel()) {
+            return false;
+        }
+
+        quint64 rootSize = 0;
+        qint64 rootModificationTime = 0;
+        quint8 rootFlags = FileRecord_IsDir;
+
+        const auto rootInodeIt = root.inodes.find(BTRFS_FIRST_FREE_OBJECTID);
+        if (rootInodeIt != root.inodes.end()) {
+            rootSize = rootInodeIt->second.size;
+            rootModificationTime = rootInodeIt->second.modificationTime;
+            rootFlags = rootInodeIt->second.flags | FileRecord_IsDir;
+        }
+
+        /*
+         * Emit one synthetic/real root record per mounted Btrfs root.
+         *
+         * Empty name plus self-parent means this root expands as the top of the
+         * indexed namespace. Path/mount expansion will become more precise in
+         * Phase 2.
+         */
+        if (!stream.addRecord(
+                root.mountedRoot.rootId,
+                BTRFS_FIRST_FREE_OBJECTID,
+                root.mountedRoot.rootId,
+                BTRFS_FIRST_FREE_OBJECTID,
+                std::string_view{},
+                rootSize,
+                rootModificationTime,
+                rootFlags,
+                onFileRecordChunk,
+                onFileRecordNamespaceChunk,
+                onStringPoolChunk)) {
+            return false;
+        }
+
+        ++recordsStreamed;
+
+        for (const DirEntry& entry : root.entries) {
+            if (shouldCancel && shouldCancel()) {
+                return false;
+            }
+
+            const RootScanState* childRoot =
+                findRootStateById(rootStates, entry.childRootId);
+
+            const InodeInfo* inodeInfo = nullptr;
+            if (childRoot) {
+                const auto inodeIt = childRoot->inodes.find(entry.childInode);
+                if (inodeIt != childRoot->inodes.end()) {
+                    inodeInfo = &inodeIt->second;
+                }
+            }
+
+            quint64 size = 0;
+            qint64 modificationTime = 0;
+            quint8 flags = 0;
+
+            if (inodeInfo) {
+                size = inodeInfo->size;
+                modificationTime = inodeInfo->modificationTime;
+                flags = inodeInfo->flags;
+            }
+            else {
+                if (isDirectoryFromBtrfsDirType(entry.btrfsType)) {
+                    flags |= FileRecord_IsDir;
+                }
+
+                if (isSymlinkFromBtrfsDirType(entry.btrfsType)) {
+                    flags |= FileRecord_IsSymlink;
+                }
+            }
+
+            const QByteArray nameUtf8 = entry.name.toUtf8();
+            if (nameUtf8.isEmpty()) {
+                continue;
+            }
+
+            const std::string_view nameView(
+                nameUtf8.constData(),
+                static_cast<std::size_t>(nameUtf8.size())
+            );
+
+            if (!stream.addRecord(
+                    entry.childRootId,
+                    entry.childInode,
+                    entry.rootId,
+                    entry.parentInode,
+                    nameView,
+                    size,
+                    modificationTime,
+                    flags,
+                    onFileRecordChunk,
+                    onFileRecordNamespaceChunk,
+                    onStringPoolChunk)) {
+                return false;
+            }
+
+            ++recordsStreamed;
+
+            if (onProgress && ((recordsStreamed & 4095ULL) == 0)) {
+                onProgress(Protocol::ScanProgress{
+                    .phase = QStringLiteral("Streaming Btrfs records"),
+                    .unit = QStringLiteral("records"),
+                    .processed = recordsStreamed,
+                    .total = static_cast<quint64>(estimatedEntryCount + rootStates.size())
+                });
+            }
+        }
+    }
+
+    if (!stream.flush(
+            onFileRecordChunk,
+            onFileRecordNamespaceChunk,
+            onStringPoolChunk)) {
+        return false;
+    }
+
+    if (onProgress) {
+        onProgress(Protocol::ScanProgress{
+            .phase = QStringLiteral("Streaming Btrfs records"),
+            .unit = QStringLiteral("records"),
+            .processed = recordsStreamed,
+            .total = recordsStreamed
+        });
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "[BtrfsScannerEngine] emitted records="
+              << recordsStreamed
+              << " stringPoolBytes="
+              << stream.totalStringPoolLength
+              << " roots="
+              << rootStates.size()
+              << "\n";
+#endif
+
+    return true;
 }
 
 bool BtrfsScannerEngine::debugScanMountedFilesystem(

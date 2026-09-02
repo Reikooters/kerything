@@ -212,8 +212,6 @@ bool scanDevice(const QString& devNode,
 {
     const QString normalizedFsType = fsType.trimmed().toLower();
 
-    Q_UNUSED(onFileRecordNamespaceChunk);
-
     if (!isAllowedFsType(normalizedFsType)) {
         if (onError) {
             onError(QStringLiteral("unsupported fsType '%1'").arg(fsType));
@@ -258,37 +256,52 @@ bool scanDevice(const QString& devNode,
         );
     }
 
-    if (normalizedFsType == QStringLiteral("btrfs") &&
-        qEnvironmentVariableIsSet("KERYTHING_DEBUG_BTRFS_SCAN")) {
-        if (primaryMountPoint.trimmed().isEmpty() && mountPoints.isEmpty()) {
+    if (normalizedFsType == QStringLiteral("btrfs")) {
+        const QStringList orderedBtrfsMountPoints =
+            orderedMountPoints(primaryMountPoint, mountPoints);
+
+        if (orderedBtrfsMountPoints.isEmpty()) {
             if (onError) {
-                onError(QStringLiteral("Btrfs debug scanner requires a mounted filesystem"));
+                onError(QStringLiteral("Btrfs scanner requires a mounted filesystem"));
             }
 
             return false;
         }
 
-        BtrfsScannerEngine::DebugScanOptions options;
-        options.printMountTable = true;
-        options.printRecords = true;
-        options.printSummary = true;
-        options.skipUnmountedSubvolumeBoundaries = true;
+        if (qEnvironmentVariableIsSet("KERYTHING_DEBUG_BTRFS_SCAN")) {
+            BtrfsScannerEngine::DebugScanOptions options;
+            options.printMountTable = true;
+            options.printRecords = true;
+            options.printSummary = true;
+            options.skipUnmountedSubvolumeBoundaries = true;
 
-        if (onProgress) {
-            onProgress({
-                QStringLiteral("Debug scanning Btrfs"),
-                QStringLiteral("roots"),
-                0,
-                0
-            });
+            if (onProgress) {
+                onProgress({
+                    QStringLiteral("Debug scanning Btrfs"),
+                    QStringLiteral("roots"),
+                    0,
+                    0
+                });
+            }
+
+            return BtrfsScannerEngine::debugScanMountedFilesystem(
+                resolvedPath,
+                orderedBtrfsMountPoints,
+                options,
+                onError,
+                shouldCancel
+            );
         }
 
-        return BtrfsScannerEngine::debugScanMountedFilesystem(
+        return BtrfsScannerEngine::scanMountedFilesystem(
             resolvedPath,
-            orderedMountPoints(primaryMountPoint, mountPoints),
-            options,
+            orderedBtrfsMountPoints,
+            onFileRecordChunk,
+            onFileRecordNamespaceChunk,
+            onStringPoolChunk,
             onError,
-            shouldCancel
+            shouldCancel,
+            onProgress
         );
     }
 

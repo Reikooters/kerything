@@ -1240,7 +1240,7 @@ public:
                     i < newLowercaseNameOffsetByRecord.size()) {
                     newLowercaseNameOffsetByRecord[i] =
                         lowercaseNameOffsetByRecord[p[i]];
-                    }
+                }
             }
 
             fileRecords = std::move(newRecords);

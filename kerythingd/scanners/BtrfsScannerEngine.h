@@ -23,6 +23,24 @@ namespace BtrfsScannerEngine {
     };
 
     /**
+     * Scans a mounted Btrfs filesystem using BTRFS_IOC_TREE_SEARCH_V2 and streams
+     * records into the normal FileRecord pipeline.
+     *
+     * Btrfs object ids are only unique within a root/subvolume, so this scanner
+     * emits one FileRecordNamespace sidecar entry for every FileRecord.
+     */
+    bool scanMountedFilesystem(
+        const QString& devicePath,
+        const QStringList& mountPoints,
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+        const ScannerHelper::FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+        const ScannerHelper::ErrorCallback& onError,
+        const ScannerHelper::CancelCallback& shouldCancel,
+        const ScannerHelper::ProgressCallback& onProgress
+    );
+
+    /**
      * Diagnostic Btrfs scanner using BTRFS_IOC_TREE_SEARCH_V2.
      *
      * This is intentionally not wired into the normal FileRecord pipeline yet.

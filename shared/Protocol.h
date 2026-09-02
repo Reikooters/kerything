@@ -19,7 +19,7 @@
 namespace Protocol {
 
 static constexpr quint32 Magic = 0x4B455259; // 'KERY'
-static constexpr quint16 Version = 2;
+static constexpr quint16 Version = 3;
 static constexpr int HeaderSize = 16;
 static const QString ServerName = "/run/kerythingd/kerythingd.sock";
 
@@ -159,7 +159,16 @@ inline QByteArray makeKnownDevicesPayload(const std::vector<BlockDevice>& device
             << device.diskModel
             << device.mounted
             << device.mountPoints
-            << device.primaryMountPoint;
+            << device.primaryMountPoint
+            << static_cast<quint32>(device.mounts.size());
+
+        for (const BlockDeviceMountInfo& mount : device.mounts) {
+            out << mount.mountPoint
+                << mount.fsType
+                << mount.root
+                << mount.subvolPath
+                << mount.btrfsRootId;
+        }
     }
 
     return payload;
@@ -183,6 +192,7 @@ inline std::optional<std::vector<BlockDevice>> parseKnownDevicesPayload(const QB
 
     for (quint32 i = 0; i < count; ++i) {
         BlockDevice device;
+        quint32 mountInfoCount = 0;
 
         in >> device.deviceId
            >> device.devNode
@@ -194,10 +204,29 @@ inline std::optional<std::vector<BlockDevice>> parseKnownDevicesPayload(const QB
            >> device.diskModel
            >> device.mounted
            >> device.mountPoints
-           >> device.primaryMountPoint;
+           >> device.primaryMountPoint
+           >> mountInfoCount;
 
         if (in.status() != QDataStream::Ok) {
             return std::nullopt;
+        }
+
+        device.mounts.reserve(mountInfoCount);
+
+        for (quint32 mountInfoIndex = 0; mountInfoIndex < mountInfoCount; ++mountInfoIndex) {
+            BlockDeviceMountInfo mount;
+
+            in >> mount.mountPoint
+               >> mount.fsType
+               >> mount.root
+               >> mount.subvolPath
+               >> mount.btrfsRootId;
+
+            if (in.status() != QDataStream::Ok) {
+                return std::nullopt;
+            }
+
+            device.mounts.push_back(std::move(mount));
         }
 
         devices.emplace_back(std::move(device));

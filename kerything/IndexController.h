@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <QDir>
 #include <QObject>
 #include <QStringList>
 #include <shared_mutex>
@@ -17,6 +18,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "BlockDevice.h"
 #include "FileRecord.h"
 #include "LiveUpdateEvent.h"
 
@@ -109,6 +111,7 @@ public:
         // be mounted at multiple locations.
         QStringList mountPoints;
         QString primaryMountPoint;
+        std::vector<BlockDeviceMountInfo> mounts;
 
         // unix seconds; 0 means unknown
         qint64 lastIndexedTime = 0;
@@ -133,6 +136,127 @@ public:
             }
 
             return fileRecordNamespaces[recordIdx];
+        }
+
+        [[nodiscard]] bool isBtrfs() const noexcept
+        {
+            return fsType.compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0;
+        }
+
+        [[nodiscard]] bool usesNamespaceAwareMountExpansion() const noexcept
+        {
+            return isBtrfs() && hasFileRecordNamespaces();
+        }
+
+        [[nodiscard]] bool mountCanExposeRecord(uint32_t recordIdx, int mountIndex) const noexcept
+        {
+            if (mountIndex < 0 || mountIndex >= static_cast<int>(mounts.size())) {
+                return false;
+            }
+
+            if (!usesNamespaceAwareMountExpansion()) {
+                return true;
+            }
+
+            const FileRecordNamespace namespaceEntry = namespaceForRecord(recordIdx);
+            const BlockDeviceMountInfo& mount = mounts[static_cast<std::size_t>(mountIndex)];
+
+            return mount.btrfsRootId != 0 &&
+                   mount.btrfsRootId == namespaceEntry.fsNamespace;
+        }
+
+        [[nodiscard]] int mountInfoIndexForMountPointIndex(int mountPointIndex) const
+        {
+            if (mountPointIndex < 0 || mountPointIndex >= mountPoints.size()) {
+                return -1;
+            }
+
+            const QString mountPoint = mountPoints.at(mountPointIndex);
+
+            for (std::size_t i = 0; i < mounts.size(); ++i) {
+                if (mounts[i].mountPoint == mountPoint) {
+                    return static_cast<int>(i);
+                }
+            }
+
+            return -1;
+        }
+
+        template <typename Fn>
+        void forEachVisibleMountPointForRecord(uint32_t recordIdx, Fn&& fn) const
+        {
+            const int mountPointCount = std::min<int>(
+                mountPoints.size(),
+                std::numeric_limits<uint8_t>::max()
+            );
+
+            for (int mountPointIdx = 0; mountPointIdx < mountPointCount; ++mountPointIdx) {
+                if (usesNamespaceAwareMountExpansion()) {
+                    const int mountInfoIndex =
+                        mountInfoIndexForMountPointIndex(mountPointIdx);
+
+                    if (!mountCanExposeRecord(recordIdx, mountInfoIndex)) {
+                        continue;
+                    }
+                }
+
+                fn(mountPointIdx);
+            }
+        }
+
+        [[nodiscard]] std::size_t mountedResultMultiplicity(uint32_t recordIdx) const
+        {
+            if (recordIdx >= fileRecords.size()) {
+                return 0;
+            }
+
+            if (isDeletedRecord(recordIdx)) {
+                return 0;
+            }
+
+            if (mountPoints.isEmpty()) {
+                return 1;
+            }
+
+            if (!usesNamespaceAwareMountExpansion()) {
+                return static_cast<std::size_t>(
+                    std::min<int>(
+                        mountPoints.size(),
+                        std::numeric_limits<uint8_t>::max()
+                    )
+                );
+            }
+
+            std::size_t count = 0;
+
+            forEachVisibleMountPointForRecord(
+                recordIdx,
+                [&count](int mountPointIdx) {
+                    Q_UNUSED(mountPointIdx);
+                    ++count;
+                }
+            );
+
+            return count;
+        }
+
+        [[nodiscard]] QString mountedPathForMountPointIndex(
+            int mountPointIndex,
+            const std::string& filesystemPath
+        ) const {
+            if (mountPointIndex < 0 || mountPointIndex >= mountPoints.size()) {
+                return QDir::cleanPath(QString::fromStdString(filesystemPath));
+            }
+
+            const QString mountPoint = mountPoints.at(mountPointIndex);
+            const QString relativePath =
+                QDir::cleanPath(QString::fromStdString(filesystemPath));
+
+            if (relativePath == QStringLiteral("/")) {
+                return QDir::cleanPath(mountPoint);
+            }
+
+            return QDir::cleanPath(mountPoint + relativePath);
         }
 
         enum class FsIndexRefStorage : uint8_t {
@@ -1649,6 +1773,7 @@ public:
         const QString& label,
         const QStringList& mountPoints,
         const QString& primaryMountPoint,
+        const std::vector<BlockDeviceMountInfo>& mounts,
         quint32 requestId
     );
     void removeDeviceByIndexId(quint64 indexId);
@@ -1667,7 +1792,8 @@ public:
         bool mounted,
         bool showOfflineResults,
         const QStringList& mountPoints = {},
-        const QString& primaryMountPoint = {}
+        const QString& primaryMountPoint = {},
+        const std::vector<BlockDeviceMountInfo>& mounts = {}
     );
     std::vector<RecordHandle> performTrigramSearch(const std::string& query, SearchOptions options);
     std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;

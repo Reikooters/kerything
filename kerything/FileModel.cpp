@@ -74,8 +74,10 @@ namespace {
             return volumeName + QStringLiteral(":") + relativePath;
         }
 
-        const QString mountPoint = deviceIndex.mountPoints.at(static_cast<int>(handle.mountPointIdx));
-        return QDir::cleanPath(mountPoint + QStringLiteral("/") + relativePath);
+        return deviceIndex.mountedPathForMountPointIndex(
+            static_cast<int>(handle.mountPointIdx),
+            filesystemPath
+        );
     }
 
     QString fileTypeText(const FileRecord& rec)

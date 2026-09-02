@@ -988,6 +988,7 @@ quint64 IndexController::addDevice(
     const QString& label,
     const QStringList& mountPoints,
     const QString& primaryMountPoint,
+    const std::vector<BlockDeviceMountInfo>& mounts,
     quint32 requestId
 ) {
     std::unique_lock lock(indexMutex_);
@@ -1016,6 +1017,7 @@ quint64 IndexController::addDevice(
             deviceIndex.devNode = devNode;
             deviceIndex.mountPoints = mountPoints;
             deviceIndex.primaryMountPoint = primaryMountPoint;
+            deviceIndex.mounts = mounts;
             deviceIndex.mounted = !mountPoints.isEmpty();
             deviceIndex.isReady = false;
             deviceIndex.fileRecords.clear();
@@ -1068,6 +1070,7 @@ quint64 IndexController::addDevice(
     deviceIndex->devNode = devNode;
     deviceIndex->mountPoints = mountPoints;
     deviceIndex->primaryMountPoint = primaryMountPoint;
+    deviceIndex->mounts = mounts;
     deviceIndex->mounted = !mountPoints.isEmpty();
 
     indexByIndexId_.emplace(indexId, std::move(deviceIndex));
@@ -1394,7 +1397,8 @@ bool IndexController::updateDeviceRuntimeStateByDeviceId(
     bool mounted,
     bool showOfflineResults,
     const QStringList& mountPoints,
-    const QString& primaryMountPoint
+    const QString& primaryMountPoint,
+    const std::vector<BlockDeviceMountInfo>& mounts
 ) {
     if (deviceId.isEmpty()) {
         return false;
@@ -1413,6 +1417,7 @@ bool IndexController::updateDeviceRuntimeStateByDeviceId(
         if (!mountPoints.isEmpty() || !primaryMountPoint.isEmpty() || !mounted) {
             deviceIndex->mountPoints = mountPoints;
             deviceIndex->primaryMountPoint = primaryMountPoint;
+            deviceIndex->mounts = mounts;
         }
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -2467,12 +2472,12 @@ QString IndexController::memoryStatsText() const
         grandAsciiUppercaseByteCount += lowercaseOpportunity.asciiUppercaseByteCount;
 
         if (device.isReady && device.isSearchable()) {
-            const std::size_t mountMultiplier = device.mountPoints.isEmpty()
-                ? 1
-                : static_cast<std::size_t>(device.mountPoints.size());
-
-            maxSearchResultsFromReadySearchableDevices +=
-                device.fileRecords.size() * mountMultiplier;
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(device.fileRecords.size());
+                 ++recordIdx) {
+                maxSearchResultsFromReadySearchableDevices +=
+                    device.mountedResultMultiplicity(recordIdx);
+            }
         }
 
         out << "Device indexId=" << device.indexId << ":\n";
@@ -3177,11 +3182,11 @@ std::size_t IndexController::maxSearchResultCount() const
             continue;
         }
 
-        const std::size_t mountMultiplier = indexPtr->mountPoints.isEmpty()
-            ? 1
-            : static_cast<std::size_t>(indexPtr->mountPoints.size());
-
-        total += indexPtr->fileRecords.size() * mountMultiplier;
+        for (uint32_t recordIdx = 0;
+             recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
+             ++recordIdx) {
+            total += indexPtr->mountedResultMultiplicity(recordIdx);
+             }
     }
 
     return total;
@@ -4104,6 +4109,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             return;
         }
 
+        if (index.isDeletedRecord(recordIdx)) {
+            return;
+        }
+
         const auto indexId = static_cast<uint16_t>(index.indexId);
         const auto generation = static_cast<uint8_t>(index.generation);
 
@@ -4117,19 +4126,17 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             return;
         }
 
-        const int mountPointCount = std::min<int>(
-            index.mountPoints.size(),
-            RecordHandle::MaxMountPointIdx + 1
+        index.forEachVisibleMountPointForRecord(
+            recordIdx,
+            [&](int mountPointIdx) {
+                results.push_back({
+                    recordIdx,
+                    indexId,
+                    generation,
+                    static_cast<uint8_t>(mountPointIdx)
+                });
+            }
         );
-
-        for (int mountPointIdx = 0; mountPointIdx < mountPointCount; ++mountPointIdx) {
-            results.push_back({
-                recordIdx,
-                indexId,
-                generation,
-                static_cast<uint8_t>(mountPointIdx)
-            });
-        }
     };
 
     if (indexByIndexId_.empty()) {
@@ -4221,17 +4228,19 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 continue;
             }
 
-            const std::size_t mountMultiplier = indexPtr->mountPoints.isEmpty()
-                ? 1
-                : static_cast<std::size_t>(indexPtr->mountPoints.size());
-
             if (hasExtensionFilter) {
                 const auto extensionCandidates =
                     collectExtensionCandidates(*indexPtr, extensionFilter);
 
-                totalSize += extensionCandidates.size() * mountMultiplier;
+                for (const uint32_t recordIdx : extensionCandidates) {
+                    totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
+                }
             } else {
-                totalSize += indexPtr->fileRecords.size() * mountMultiplier;
+                for (uint32_t recordIdx = 0;
+                     recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
+                     ++recordIdx) {
+                    totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
+                }
             }
         }
 
@@ -4707,14 +4716,18 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 }
 
                 const auto& record = device->fileRecords[handle.recordIdx];
-                key.pathKey = device->getFullPath(record.parentRecordIdx);
+                const std::string parentPath =
+                    device->getFullPath(record.parentRecordIdx);
 
                 if (handle.mountPointIdx != RecordHandle::NoMountPoint &&
                     handle.mountPointIdx < static_cast<uint8_t>(device->mountPoints.size())) {
-                    const QString mountPoint = device->mountPoints.at(static_cast<int>(handle.mountPointIdx));
-                    key.pathKey = (mountPoint + QStringLiteral("/") + QString::fromStdString(key.pathKey))
-                        .toStdString();
-                    }
+                    key.pathKey = device->mountedPathForMountPointIndex(
+                        static_cast<int>(handle.mountPointIdx),
+                        parentPath
+                    ).toStdString();
+                } else {
+                    key.pathKey = parentPath;
+                }
 
                 key.valid = true;
             }

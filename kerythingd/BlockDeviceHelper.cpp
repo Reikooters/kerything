@@ -39,6 +39,68 @@ static std::optional<QString> blkidValueForDev(const std::string& devNode, const
     return out;
 }
 
+static std::optional<std::string> mountOptionValue(
+    std::string_view options,
+    std::string_view key)
+{
+    std::size_t start = 0;
+
+    while (start <= options.size()) {
+        const std::size_t end = options.find(',', start);
+        const std::string_view token = end == std::string_view::npos
+            ? options.substr(start)
+            : options.substr(start, end - start);
+
+        const std::size_t equals = token.find('=');
+        if (equals != std::string_view::npos &&
+            token.substr(0, equals) == key) {
+            return std::string(token.substr(equals + 1));
+        }
+
+        if (end == std::string_view::npos) {
+            break;
+        }
+
+        start = end + 1;
+    }
+
+    return std::nullopt;
+}
+
+static quint64 parseUnsignedMountOption(
+    const std::string& options,
+    std::string_view key)
+{
+    const std::optional<std::string> value = mountOptionValue(options, key);
+    if (!value || value->empty()) {
+        return 0;
+    }
+
+    quint64 parsed = 0;
+
+    for (const char c : *value) {
+        if (c < '0' || c > '9') {
+            return 0;
+        }
+
+        parsed = parsed * 10 + static_cast<quint64>(c - '0');
+    }
+
+    return parsed;
+}
+
+static QString parseStringMountOption(
+    const std::string& options,
+    std::string_view key)
+{
+    const std::optional<std::string> value = mountOptionValue(options, key);
+    if (!value) {
+        return {};
+    }
+
+    return QString::fromStdString(*value);
+}
+
 /**
  * Selects the primary mount point from a list of available mount points.
  *
@@ -119,6 +181,7 @@ struct MountInfoEntry {
     std::string mountPoint;
     std::string fsType;
     std::string mountSource;
+    std::string superOptions;
 };
 
 /**
@@ -157,18 +220,18 @@ static std::vector<MountInfoEntry> readMountInfo() {
         }
 
         // right: fstype mount_source superopts...
-        std::string fstype, mountSource;
+        std::string fstype, mountSource, superOptions;
         {
             std::istringstream iss(right);
-            std::string superopts;
-            if (!(iss >> fstype >> mountSource >> superopts)) continue;
+            if (!(iss >> fstype >> mountSource >> superOptions)) continue;
         }
 
         out.push_back({
             decodeMountInfoField(root),
             decodeMountInfoField(mountPoint),
             decodeMountInfoField(fstype),
-            decodeMountInfoField(mountSource)
+            decodeMountInfoField(mountSource),
+            decodeMountInfoField(superOptions)
         });
     }
 
@@ -351,6 +414,7 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
 
         QStringList mountPoints;
         QHash<QString, QString> mountFsTypeByMountPoint;
+        std::vector<BlockDeviceMountInfo> mountInfos;
 
         for (const auto& mi : mountInfo) {
             /*
@@ -395,11 +459,44 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
                     mountPoint,
                     mountedFsType
                 );
+
+                BlockDeviceMountInfo mountInfoEntry;
+                mountInfoEntry.mountPoint = mountPoint;
+                mountInfoEntry.fsType = mountedFsType;
+                mountInfoEntry.root = QString::fromStdString(mi.root);
+                mountInfoEntry.subvolPath = parseStringMountOption(mi.superOptions, "subvol");
+
+                if (isBtrfsSubvolumeMount) {
+                    mountInfoEntry.btrfsRootId =
+                        parseUnsignedMountOption(mi.superOptions, "subvolid");
+                }
+
+                mountInfos.push_back(std::move(mountInfoEntry));
             }
         }
 
         mountPoints.removeDuplicates();
         std::sort(mountPoints.begin(), mountPoints.end());
+
+        std::sort(
+            mountInfos.begin(),
+            mountInfos.end(),
+            [](const BlockDeviceMountInfo& lhs, const BlockDeviceMountInfo& rhs) {
+                return lhs.mountPoint < rhs.mountPoint;
+            }
+        );
+
+        mountInfos.erase(
+            std::unique(
+                mountInfos.begin(),
+                mountInfos.end(),
+                [](const BlockDeviceMountInfo& lhs, const BlockDeviceMountInfo& rhs) {
+                    return lhs.mountPoint == rhs.mountPoint &&
+                           lhs.btrfsRootId == rhs.btrfsRootId;
+                }
+            ),
+            mountInfos.end()
+        );
 
         const QString primaryMountPoint = pickPrimaryMountPoint(mountPoints);
 
@@ -415,6 +512,7 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
         dev.mounted = !mountPoints.isEmpty();
         dev.mountPoints = mountPoints;
         dev.primaryMountPoint = primaryMountPoint;
+        dev.mounts = std::move(mountInfos);
 
         devicesOut.push_back(std::move(dev));
     }

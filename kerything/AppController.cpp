@@ -221,6 +221,11 @@ bool AppController::start() {
                           << "\n";
 #endif
 
+                std::vector<BlockDeviceMountInfo> mounts;
+                if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
+                    mounts = blockDevice->mounts;
+                }
+
                 indexController_->addDevice(
                     deviceId,
                     devNode,
@@ -228,6 +233,7 @@ bool AppController::start() {
                     label,
                     mountPoints,
                     primaryMountPoint,
+                    mounts,
                     requestId
                 );
 
@@ -237,7 +243,8 @@ bool AppController::start() {
                     !mountPoints.isEmpty(),
                     !preference || preference->showOfflineResults,
                     mountPoints,
-                    primaryMountPoint
+                    primaryMountPoint,
+                    mounts
                 );
 
                 requestRefreshAllWindows();
@@ -1427,7 +1434,8 @@ void AppController::updateIndexedDeviceRuntimeState(const BlockDevice& blockDevi
         blockDevice.mounted,
         !preference || preference->showOfflineResults,
         blockDevice.mountPoints,
-        blockDevice.primaryMountPoint
+        blockDevice.primaryMountPoint,
+        blockDevice.mounts
     );
 }
 
@@ -1623,6 +1631,10 @@ void AppController::addLiveUpdateIndexedDevice(const QString& deviceId)
         return;
     }
 
+    if (!liveUpdatesEnabledForDevice(deviceId)) {
+        return;
+    }
+
     if (liveUpdateIndexedDeviceIds_.contains(deviceId)) {
         return;
     }
@@ -1667,11 +1679,18 @@ void AppController::syncLiveUpdateDevices()
     }
 
     QStringList deviceIds;
+    QSet<QString> unsupportedDeviceIds;
 
     for (const QString& deviceId : liveUpdateIndexedDeviceIds_) {
         if (liveUpdatesEnabledForDevice(deviceId)) {
             deviceIds << deviceId;
+        } else {
+            unsupportedDeviceIds.insert(deviceId);
         }
+    }
+
+    for (const QString& deviceId : unsupportedDeviceIds) {
+        liveUpdateIndexedDeviceIds_.remove(deviceId);
     }
 
     deviceIds.removeDuplicates();

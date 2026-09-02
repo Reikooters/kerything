@@ -9,6 +9,14 @@
 
 #pragma pack(push, 1)
 
+struct BlockDeviceMountInfo {
+    QString mountPoint;
+    QString fsType;
+    QString root;
+    QString subvolPath;
+    quint64 btrfsRootId = 0;
+};
+
 struct BlockDevice {
     QString deviceId;
     QString devNode;
@@ -21,6 +29,7 @@ struct BlockDevice {
     bool mounted = false;
     QStringList mountPoints;
     QString primaryMountPoint;
+    std::vector<BlockDeviceMountInfo> mounts;
 };
 
 #pragma pack(pop)

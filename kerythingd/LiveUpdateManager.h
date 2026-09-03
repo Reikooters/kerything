@@ -37,11 +37,23 @@ Q_SIGNALS:
     void operationsReady(QString deviceId, QString mountPoint, std::vector<LiveUpdateOperation> operations);
 
 private:
+    struct WatchTarget {
+        QString key;
+        QString deviceId;
+        QString mountPoint;
+        QString fsType;
+        quint64 fsNamespace = 0;
+    };
+
     static QString watchKeyForDevice(const BlockDevice& device);
+    static QString watchKeyForTarget(const WatchTarget& target);
     static bool isLiveUpdateEligible(const BlockDevice& device);
     static QString maskToString(quint64 mask);
 
+    static std::vector<WatchTarget> watchTargetsForDevice(const BlockDevice& device);
+
     void startWatcherForDevice(const BlockDevice& device);
+    void startWatcherForTarget(const WatchTarget& target);
     void removeWatcher(const QString& key);
     void logEventBatch(
         const QString& deviceId,

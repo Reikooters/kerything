@@ -614,15 +614,18 @@ void LiveUpdateManager::setKnownDevices(const std::vector<BlockDevice>& devices)
             continue;
         }
 
-        const QString key = watchKeyForDevice(device);
-        if (key.isEmpty()) {
-            continue;
-        }
+        const std::vector<WatchTarget> targets = watchTargetsForDevice(device);
 
-        desiredKeys.insert(key);
+        for (const WatchTarget& target : targets) {
+            if (target.key.isEmpty()) {
+                continue;
+            }
 
-        if (!watchersByKey_.contains(key)) {
-            startWatcherForDevice(device);
+            desiredKeys.insert(target.key);
+
+            if (!watchersByKey_.contains(target.key)) {
+                startWatcherForTarget(target);
+            }
         }
     }
 
@@ -662,7 +665,8 @@ std::vector<LiveUpdateStatusSnapshot> LiveUpdateManager::currentStatusSnapshots(
         LiveUpdateStatusSnapshot snapshot;
         snapshot.deviceId = watcher->deviceId();
         snapshot.status = LiveUpdateStatus::Watching;
-        snapshot.reason = QStringLiteral("fanotify watcher active");
+        snapshot.reason = QStringLiteral("fanotify watcher active for %1")
+            .arg(watcher->mountPoint());
 
         snapshots.push_back(std::move(snapshot));
     }
@@ -677,6 +681,15 @@ QString LiveUpdateManager::watchKeyForDevice(const BlockDevice& device)
     }
 
     return device.deviceId + QStringLiteral("|") + device.primaryMountPoint;
+}
+
+QString LiveUpdateManager::watchKeyForTarget(const WatchTarget& target)
+{
+    if (target.deviceId.isEmpty() || target.mountPoint.isEmpty()) {
+        return {};
+    }
+
+    return target.deviceId + QStringLiteral("|") + target.mountPoint;
 }
 
 bool LiveUpdateManager::isLiveUpdateEligible(const BlockDevice& device)
@@ -710,6 +723,109 @@ bool LiveUpdateManager::isLiveUpdateEligible(const BlockDevice& device)
     }
 
     return true;
+}
+
+std::vector<LiveUpdateManager::WatchTarget>
+LiveUpdateManager::watchTargetsForDevice(const BlockDevice& device)
+{
+    std::vector<WatchTarget> targets;
+
+    if (!isLiveUpdateEligible(device)) {
+        return targets;
+    }
+
+    const bool isBtrfs =
+        device.fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0;
+
+    if (!isBtrfs) {
+        WatchTarget target;
+        target.deviceId = device.deviceId;
+        target.mountPoint = device.primaryMountPoint;
+        target.fsType = device.fsType;
+        target.fsNamespace = 0;
+        target.key = watchKeyForTarget(target);
+
+        if (!target.key.isEmpty()) {
+            targets.push_back(std::move(target));
+        }
+
+        return targets;
+    }
+
+    /*
+     * Btrfs can have multiple mounted subvolumes for one filesystem/device.
+     * Watch each mounted subvolume so live updates are generated with the
+     * correct root/subvolume namespace.
+     */
+    targets.reserve(device.mounts.size());
+
+    for (const BlockDeviceMountInfo& mount : device.mounts) {
+        if (mount.mountPoint.trimmed().isEmpty()) {
+            continue;
+        }
+
+        if (mount.fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+
+        if (mount.btrfsRootId == 0) {
+            continue;
+        }
+
+        WatchTarget target;
+        target.deviceId = device.deviceId;
+        target.mountPoint = mount.mountPoint;
+        target.fsType = device.fsType;
+        target.fsNamespace = mount.btrfsRootId;
+        target.key = watchKeyForTarget(target);
+
+        if (!target.key.isEmpty()) {
+            targets.push_back(std::move(target));
+        }
+    }
+
+    std::sort(
+        targets.begin(),
+        targets.end(),
+        [](const WatchTarget& lhs, const WatchTarget& rhs) {
+            if (lhs.key != rhs.key) {
+                return lhs.key < rhs.key;
+            }
+
+            return lhs.fsNamespace < rhs.fsNamespace;
+        }
+    );
+
+    targets.erase(
+        std::unique(
+            targets.begin(),
+            targets.end(),
+            [](const WatchTarget& lhs, const WatchTarget& rhs) {
+                return lhs.key == rhs.key;
+            }
+        ),
+        targets.end()
+    );
+
+    /*
+     * Fallback for unusual mount metadata: if device.mounts was not populated
+     * but the device is mounted, try the primary mount point using namespace 0.
+     * startWatcherForTarget() will reject Btrfs namespace 0 conservatively.
+     */
+    if (targets.empty()) {
+        WatchTarget target;
+        target.deviceId = device.deviceId;
+        target.mountPoint = device.primaryMountPoint;
+        target.fsType = device.fsType;
+        target.fsNamespace = 0;
+        target.key = watchKeyForTarget(target);
+
+        if (!target.key.isEmpty()) {
+            targets.push_back(std::move(target));
+        }
+    }
+
+    return targets;
 }
 
 QString LiveUpdateManager::maskToString(quint64 mask)
@@ -795,34 +911,43 @@ void LiveUpdateManager::logEventBatch(
 
 void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
 {
-    const QString key = watchKeyForDevice(device);
-    if (key.isEmpty()) {
+    const std::vector<WatchTarget> targets = watchTargetsForDevice(device);
+
+    for (const WatchTarget& target : targets) {
+        if (!target.key.isEmpty() && !watchersByKey_.contains(target.key)) {
+            startWatcherForTarget(target);
+        }
+    }
+}
+
+void LiveUpdateManager::startWatcherForTarget(const WatchTarget& target)
+{
+    if (target.key.isEmpty()) {
         return;
     }
 
-    const quint64 watchedFsNamespace = liveUpdateNamespaceForWatchedMount(device);
+    const bool isBtrfs = deviceIsBtrfs(target.fsType);
 
-    const QString fsType = device.fsType;
-    const bool isBtrfs = deviceIsBtrfs(fsType);
-
-    if (isBtrfs && watchedFsNamespace == 0) {
+    if (isBtrfs && target.fsNamespace == 0) {
         Q_EMIT liveUpdateStatusChanged(
-            device.deviceId,
+            target.deviceId,
             LiveUpdateStatus::StaleNeedsRescan,
-            QStringLiteral("Btrfs live updates require a known mount subvolid")
+            QStringLiteral("Btrfs live updates require a known mount subvolid for %1")
+                .arg(target.mountPoint)
         );
 
         Q_EMIT deviceNeedsRescan(
-            device.deviceId,
-            QStringLiteral("Btrfs live updates require a known mount subvolid")
+            target.deviceId,
+            QStringLiteral("Btrfs live updates require a known mount subvolid for %1")
+                .arg(target.mountPoint)
         );
 
         return;
     }
 
     auto* watcher = new FanotifyWatcher(
-        device.deviceId,
-        device.primaryMountPoint,
+        target.deviceId,
+        target.mountPoint,
         this
     );
 
@@ -851,7 +976,7 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
             });
 
     connect(watcher, &FanotifyWatcher::eventsReady,
-            this, [this, watchedFsNamespace, fsType, isBtrfs](
+            this, [this, watchedFsNamespace = target.fsNamespace, fsType = target.fsType, isBtrfs](
                 const QString& deviceId,
                 const QString& mountPoint,
                 std::vector<LiveUpdateEvent> events
@@ -919,21 +1044,23 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
 
     if (!watcher->start()) {
         Q_EMIT liveUpdateStatusChanged(
-            device.deviceId,
+            target.deviceId,
             LiveUpdateStatus::StaleNeedsRescan,
-            QStringLiteral("failed to start fanotify watcher")
+            QStringLiteral("failed to start fanotify watcher for %1")
+                .arg(target.mountPoint)
         );
 
         watcher->deleteLater();
         return;
     }
 
-    watchersByKey_.insert(key, watcher);
+    watchersByKey_.insert(target.key, watcher);
 
     Q_EMIT liveUpdateStatusChanged(
-        device.deviceId,
+        target.deviceId,
         LiveUpdateStatus::Watching,
-        QStringLiteral("fanotify watcher active")
+        QStringLiteral("fanotify watcher active for %1")
+            .arg(target.mountPoint)
     );
 }
 

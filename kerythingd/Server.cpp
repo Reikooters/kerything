@@ -25,6 +25,27 @@
 
 namespace {
     constexpr int IdleShutdownTimeoutMs = 30 * 1000;
+
+    bool mountInfoListsEqual(
+        const std::vector<BlockDeviceMountInfo>& lhs,
+        const std::vector<BlockDeviceMountInfo>& rhs)
+    {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < lhs.size(); ++i) {
+            if (lhs[i].mountPoint != rhs[i].mountPoint ||
+                lhs[i].fsType != rhs[i].fsType ||
+                lhs[i].root != rhs[i].root ||
+                lhs[i].subvolPath != rhs[i].subvolPath ||
+                lhs[i].btrfsRootId != rhs[i].btrfsRootId) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
 
 Server::Server(QObject* parent)
@@ -300,7 +321,8 @@ bool Server::blockDeviceListsEqual(
             a.diskModel != b.diskModel ||
             a.mounted != b.mounted ||
             a.mountPoints != b.mountPoints ||
-            a.primaryMountPoint != b.primaryMountPoint) {
+            a.primaryMountPoint != b.primaryMountPoint ||
+            !mountInfoListsEqual(a.mounts, b.mounts)) {
             return false;
         }
     }

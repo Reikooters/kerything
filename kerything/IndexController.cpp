@@ -2225,6 +2225,19 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         rebuildExtensionIndexAfterLiveUpdates(*targetIndex);
     }
 
+    if (targetIndex->fsType.compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0 &&
+        !targetIndex->hasFileRecordNamespaces()) {
+        ++result.needsRescan;
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cerr << "live batch #" << liveBatchDebugId
+                  << " error: Btrfs namespace sidecar invariant broken"
+                  << " fileRecords=" << targetIndex->fileRecords.size()
+                  << " fileRecordNamespaces=" << targetIndex->fileRecordNamespaces.size()
+                  << "\n";
+#endif
+    }
+
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cout << "IndexController: applied live update operations"
               << " deviceId=" << deviceId.toStdString()
@@ -3752,6 +3765,13 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         return false;
     }
 
+    const bool useNamespaces = deviceIndex.hasFileRecordNamespaces();
+
+    if (useNamespaces &&
+        (operation.fsNamespace == 0 || operation.parentFsNamespace == 0)) {
+        return false;
+    }
+
     deviceIndex.ensureFsIndexRefStorageCanStore(
         operation.inode,
         operation.parentInode
@@ -3776,9 +3796,20 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     record.nameLen = nameLen;
     record.flags = fileRecordFlagsFromLiveUpdateOperation(operation);
 
-    if (operation.inode != operation.parentInode) {
-        if (const std::optional<uint32_t> parentRecordIdx =
-                deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode)) {
+    const bool isRootSelfParent =
+        operation.inode == operation.parentInode &&
+        (!useNamespaces || operation.fsNamespace == operation.parentFsNamespace);
+
+    if (!isRootSelfParent) {
+        const std::optional<uint32_t> parentRecordIdx =
+            useNamespaces
+                ? deviceIndex.directoryRecordIdxForNamespacedFsIndex(
+                    operation.parentFsNamespace,
+                    operation.parentInode
+                )
+                : deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode);
+
+        if (parentRecordIdx) {
             record.parentRecordIdx = *parentRecordIdx;
         }
     }
@@ -3799,7 +3830,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
 
     deviceIndex.fileRecords.push_back(record);
 
-    if (deviceIndex.hasFileRecordNamespaces()) {
+    if (useNamespaces) {
         deviceIndex.fileRecordNamespaces.push_back({
             operation.fsNamespace,
             operation.parentFsNamespace
@@ -3835,7 +3866,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         }
     }
 
-    if (deviceIndex.hasFileRecordNamespaces()) {
+    if (useNamespaces) {
         deviceIndex.namespacedFsIndexRecordRefs.push_back({
             operation.fsNamespace,
             operation.inode,

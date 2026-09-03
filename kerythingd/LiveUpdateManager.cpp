@@ -22,6 +22,23 @@ namespace {
         QString errorText;
     };
 
+    /*
+     * BTRFS_FIRST_FREE_OBJECTID is 256. A subvolume root directory is commonly
+     * exposed with inode/object id 256 when reached through the parent subvolume.
+     *
+     * For live create/move-to events fanotify gives us parent handle + name. It
+     * does not directly give us the child subvolume root id, so if the child looks
+     * like a subvolume root, do not guess. Request a rescan instead.
+     */
+    static constexpr quint64 BtrfsFirstFreeObjectId = 256;
+
+    bool looksLikeBtrfsSubvolumeRoot(const ResolvedFanotifyHandle& resolved)
+    {
+        return resolved.ok &&
+               resolved.isDirectory &&
+               resolved.inode == BtrfsFirstFreeObjectId;
+    }
+
     template <typename T>
     T readLittleEndianUnaligned(const char* data)
     {
@@ -284,10 +301,28 @@ namespace {
         }
 
         /*
+         * A Btrfs subvolume boundary looks like a directory with object id 256
+         * from the parent filesystem view. The child belongs to a different Btrfs
+         * root/subvolume namespace, but this event does not provide that child
+         * root id directly.
+         *
+         * Do not index it as an ordinary directory in the parent namespace. That
+         * would make future parent/child identity ambiguous or wrong. A rescan can
+         * discover the new root id through the tree scanner and rebuild namespace
+         * sidecars correctly.
+         */
+        if (isBtrfs && looksLikeBtrfsSubvolumeRoot(child)) {
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = QStringLiteral(
+                "Btrfs subvolume boundary was created or moved; rescan required"
+            );
+            return operation;
+        }
+
+        /*
          * For ordinary creates/renames inside a Btrfs subvolume, the child belongs
          * to the same root id as the parent directory. If the child is actually a
-         * subvolume boundary, this may be wrong; that case should become a later
-         * conservative NeedsRescan path once boundary detection is added.
+         * subvolume boundary, the conservative NeedsRescan path above handles it.
          */
         if (isBtrfs) {
             operation.fsNamespace = operation.parentFsNamespace;
@@ -342,7 +377,9 @@ namespace {
             operation.kind = LiveUpdateOperationKind::Ignored;
             operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
             operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
-            operation.reason = QStringLiteral("redundant self delete/move notification");
+            operation.reason = isBtrfs
+                ? QStringLiteral("redundant Btrfs self delete/move notification; directory-entry event should carry the path change")
+                : QStringLiteral("redundant self delete/move notification");
             return operation;
         }
 

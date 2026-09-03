@@ -59,6 +59,18 @@ enum class LiveUpdateOperationKind : quint8 {
 struct LiveUpdateOperation {
     LiveUpdateOperationKind kind = LiveUpdateOperationKind::Ignored;
 
+    /*
+     * Filesystem namespace ids are 0 for ordinary filesystems.
+     *
+     * For Btrfs they contain the root/subvolume id. Btrfs inode/object ids
+     * are only unique within a root, so live-update identity must use:
+     *
+     *   object: (fsNamespace, inode)
+     *   entry:  (parentFsNamespace, parentInode, name)
+     */
+    quint64 fsNamespace = 0;
+    quint64 parentFsNamespace = 0;
+
     quint64 inode = 0;
     quint64 parentInode = 0;
 

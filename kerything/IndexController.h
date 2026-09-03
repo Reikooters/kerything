@@ -941,6 +941,84 @@ public:
                 : liveDirectoryFsIndexRecordRefs64.size();
         }
 
+        [[nodiscard]] std::optional<uint32_t> recordIdxForNamespacedFsIndex(
+            uint64_t fsNamespace,
+            uint64_t fsIndex
+        ) const {
+            const auto searchKey = NamespacedFsIndexRecordRef{
+                fsNamespace,
+                fsIndex,
+                0
+            };
+
+            const auto range = std::equal_range(
+                namespacedFsIndexRecordRefs.begin(),
+                namespacedFsIndexRecordRefs.end(),
+                searchKey,
+                [](const NamespacedFsIndexRecordRef& lhs, const NamespacedFsIndexRecordRef& rhs) {
+                    if (lhs.fsNamespace != rhs.fsNamespace) {
+                        return lhs.fsNamespace < rhs.fsNamespace;
+                    }
+
+                    return lhs.fsIndex < rhs.fsIndex;
+                }
+            );
+
+            for (auto it = range.first; it != range.second; ++it) {
+                if (it->recordIdx >= fileRecords.size()) {
+                    continue;
+                }
+
+                if (isDeletedRecord(it->recordIdx)) {
+                    continue;
+                }
+
+                return it->recordIdx;
+            }
+
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<uint32_t> findLiveEntryRecordByNamespacedParentAndName(
+            uint64_t parentFsNamespace,
+            uint64_t parentFsIndex,
+            std::string_view name,
+            uint64_t fsNamespace = 0,
+            uint64_t fsIndex = 0
+        ) const {
+            if (!hasFileRecordNamespaces() || name.empty()) {
+                return std::nullopt;
+            }
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+                const FileRecordNamespace namespaceEntry = fileRecordNamespaces[recordIdx];
+
+                if (namespaceEntry.parentFsNamespace != parentFsNamespace ||
+                    record.parentFsIndex != parentFsIndex) {
+                    continue;
+                }
+
+                if (fsIndex != 0 &&
+                    (namespaceEntry.fsNamespace != fsNamespace ||
+                     record.fsIndex != fsIndex)) {
+                    continue;
+                }
+
+                if (recordName(recordIdx) == name) {
+                    return recordIdx;
+                }
+            }
+
+            return std::nullopt;
+        }
+
         [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForNamespacedFsIndex(
     uint64_t fsNamespace,
     uint64_t fsIndex

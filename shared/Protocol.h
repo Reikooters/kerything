@@ -425,6 +425,8 @@ inline QByteArray makeLiveUpdateOperationBatchPayload(
 
     for (const LiveUpdateOperation& operation : operations) {
         out << static_cast<quint8>(operation.kind)
+            << operation.fsNamespace
+            << operation.parentFsNamespace
             << operation.inode
             << operation.parentInode
             << operation.name
@@ -465,6 +467,8 @@ parseLiveUpdateOperationBatchPayload(const QByteArray& payload)
         quint8 rawKind = 0;
 
         in >> rawKind
+           >> operation.fsNamespace
+           >> operation.parentFsNamespace
            >> operation.inode
            >> operation.parentInode
            >> operation.name

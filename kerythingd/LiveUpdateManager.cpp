@@ -45,12 +45,15 @@ namespace {
     LiveUpdateOperation deleteOperationFromDirectoryEntryEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event,
+        quint64 fsNamespace,
         const QString& fallbackReason)
     {
         const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
 
         LiveUpdateOperation operation;
         operation.kind = LiveUpdateOperationKind::DeleteEntry;
+        operation.fsNamespace = fsNamespace;
+        operation.parentFsNamespace = fsNamespace;
 
         if (!entryInfo) {
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
@@ -77,12 +80,15 @@ namespace {
     LiveUpdateOperation upsertOperationFromDirectoryEntryEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event,
+        quint64 fsNamespace,
         const QString& fallbackReason)
     {
         const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
 
         LiveUpdateOperation operation;
         operation.kind = LiveUpdateOperationKind::Upsert;
+        operation.fsNamespace = fsNamespace;
+        operation.parentFsNamespace = fsNamespace;
 
         if (!entryInfo) {
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
@@ -124,11 +130,14 @@ namespace {
 
     LiveUpdateOperation operationFromEvent(
         const FanotifyHandleResolver& resolver,
-        const LiveUpdateEvent& event)
+        const LiveUpdateEvent& event,
+        quint64 fsNamespace)
     {
         if (event.mask & FAN_Q_OVERFLOW) {
             LiveUpdateOperation operation;
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.fsNamespace = fsNamespace;
+            operation.parentFsNamespace = fsNamespace;
             operation.reason = QStringLiteral("fanotify queue overflow");
             return operation;
         }
@@ -137,6 +146,7 @@ namespace {
             return deleteOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
+                fsNamespace,
                 QStringLiteral("move-from event has no directory entry info")
             );
         }
@@ -145,6 +155,7 @@ namespace {
             return upsertOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
+                fsNamespace,
                 QStringLiteral("move-to event has no directory entry info")
             );
         }
@@ -160,6 +171,7 @@ namespace {
             return deleteOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
+                fsNamespace,
                 QStringLiteral("delete event has no directory entry info")
             );
         }
@@ -168,6 +180,7 @@ namespace {
             return upsertOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
+                fsNamespace,
                 QStringLiteral("create event has no directory entry info")
             );
         }
@@ -177,6 +190,8 @@ namespace {
 
             LiveUpdateOperation operation;
             operation.kind = LiveUpdateOperationKind::MetadataChanged;
+            operation.fsNamespace = fsNamespace;
+            operation.parentFsNamespace = fsNamespace;
 
             if (!objectInfo) {
                 operation.kind = LiveUpdateOperationKind::Ignored;
@@ -205,6 +220,8 @@ namespace {
 
         LiveUpdateOperation operation;
         operation.kind = LiveUpdateOperationKind::Ignored;
+        operation.fsNamespace = fsNamespace;
+        operation.parentFsNamespace = fsNamespace;
         operation.reason = QStringLiteral("unhandled fanotify event mask");
         return operation;
     }
@@ -213,6 +230,14 @@ namespace {
     {
         std::cout << "  operation kind="
                   << liveUpdateOperationKindToString(operation.kind).toStdString();
+
+        if (operation.fsNamespace != 0) {
+            std::cout << " fsNamespace=" << operation.fsNamespace;
+        }
+
+        if (operation.parentFsNamespace != 0) {
+            std::cout << " parentFsNamespace=" << operation.parentFsNamespace;
+        }
 
         if (operation.inode != 0) {
             std::cout << " inode=" << operation.inode;
@@ -310,6 +335,21 @@ namespace {
         }
 
         return coalesced;
+    }
+
+    quint64 liveUpdateNamespaceForWatchedMount(const BlockDevice& device)
+    {
+        if (device.fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) != 0) {
+            return 0;
+        }
+
+        for (const BlockDeviceMountInfo& mount : device.mounts) {
+            if (mount.mountPoint == device.primaryMountPoint) {
+                return mount.btrfsRootId;
+            }
+        }
+
+        return 0;
     }
 }
 
@@ -502,6 +542,8 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
         return;
     }
 
+    const quint64 watchedFsNamespace = liveUpdateNamespaceForWatchedMount(device);
+
     auto* watcher = new FanotifyWatcher(
         device.deviceId,
         device.primaryMountPoint,
@@ -533,7 +575,7 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
             });
 
     connect(watcher, &FanotifyWatcher::eventsReady,
-            this, [this](
+            this, [this, watchedFsNamespace](
                 const QString& deviceId,
                 const QString& mountPoint,
                 std::vector<LiveUpdateEvent> events
@@ -547,7 +589,11 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
                 operations.reserve(events.size());
 
                 for (const LiveUpdateEvent& event : events) {
-                    operations.push_back(operationFromEvent(resolver, event));
+                    operations.push_back(operationFromEvent(
+                        resolver,
+                        event,
+                        watchedFsNamespace
+                    ));
                 }
 
                 operations = coalesceOperations(operations);

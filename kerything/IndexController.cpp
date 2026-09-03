@@ -400,6 +400,32 @@ namespace {
         return key;
     }
 
+    QByteArray namespacedLiveEntryKey(
+        quint64 parentFsNamespace,
+        quint64 parentInode,
+        std::string_view name)
+    {
+        QByteArray key = QByteArray::number(static_cast<qulonglong>(parentFsNamespace));
+        key.append('\0');
+        key.append(QByteArray::number(static_cast<qulonglong>(parentInode)));
+        key.append('\0');
+        key.append(name.data(), static_cast<qsizetype>(name.size()));
+        return key;
+    }
+
+    QByteArray namespacedLiveEntryKey(
+        quint64 parentFsNamespace,
+        quint64 parentInode,
+        const QByteArray& name)
+    {
+        QByteArray key = QByteArray::number(static_cast<qulonglong>(parentFsNamespace));
+        key.append('\0');
+        key.append(QByteArray::number(static_cast<qulonglong>(parentInode)));
+        key.append('\0');
+        key.append(name);
+        return key;
+    }
+
     QString formatBytes(quint64 bytes)
     {
         static constexpr double KiB = 1024.0;
@@ -1511,7 +1537,21 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         return result;
     }
 
+    const bool useNamespaces = targetIndex->hasFileRecordNamespaces();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    if (targetIndex->fsType.compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0 &&
+        !useNamespaces) {
+        std::cerr << "live batch #" << liveBatchDebugId
+                  << " warning: Btrfs live update batch is not using namespace-aware matching"
+                  << " fileRecords=" << targetIndex->fileRecords.size()
+                  << " fileRecordNamespaces=" << targetIndex->fileRecordNamespaces.size()
+                  << "\n";
+    }
+#endif
+
     QSet<quint64> deleteParentInodes;
+    QSet<QByteArray> deleteParentNamespaceKeys;
     qsizetype deleteEntryOperationCount = 0;
 
     {
@@ -1528,7 +1568,16 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 continue;
             }
 
-            deleteParentInodes.insert(operation.parentInode);
+            if (useNamespaces) {
+                deleteParentNamespaceKeys.insert(
+                    QByteArray::number(static_cast<qulonglong>(operation.parentFsNamespace)) +
+                    QByteArrayLiteral("\0") +
+                    QByteArray::number(static_cast<qulonglong>(operation.parentInode))
+                );
+            } else {
+                deleteParentInodes.insert(operation.parentInode);
+            }
+
             ++deleteEntryOperationCount;
         }
     }
@@ -1536,13 +1585,14 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "live batch #" << liveBatchDebugId
               << " delete parents=" << deleteParentInodes.size()
+              << " namespacedDeleteParents=" << deleteParentNamespaceKeys.size()
               << " deleteEntryOperationCount=" << deleteEntryOperationCount
               << "\n";
 #endif
 
     QHash<QByteArray, uint32_t> liveEntryRecordByParentAndName;
 
-    if (!deleteParentInodes.isEmpty()) {
+    if (!deleteParentInodes.isEmpty() || !deleteParentNamespaceKeys.isEmpty()) {
         PhaseTimer timer(
             QStringLiteral("live batch #%1 build delete lookup").arg(liveBatchDebugId),
             10
@@ -1564,6 +1614,38 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             }
 
             const FileRecord& record = targetIndex->fileRecords[recordIdx];
+
+            if (useNamespaces) {
+                const FileRecordNamespace namespaceEntry = targetIndex->namespaceForRecord(recordIdx);
+
+                const QByteArray parentNamespaceKey =
+                    QByteArray::number(static_cast<qulonglong>(namespaceEntry.parentFsNamespace)) +
+                    QByteArrayLiteral("\0") +
+                    QByteArray::number(static_cast<qulonglong>(record.parentFsIndex));
+
+                if (!deleteParentNamespaceKeys.contains(parentNamespaceKey)) {
+                    continue;
+                }
+
+                ++parentMatchedRecords;
+
+                const std::string_view name = targetIndex->recordName(recordIdx);
+                if (name.empty()) {
+                    continue;
+                }
+
+                liveEntryRecordByParentAndName.insert(
+                    namespacedLiveEntryKey(
+                        namespaceEntry.parentFsNamespace,
+                        record.parentFsIndex,
+                        name
+                    ),
+                    recordIdx
+                );
+
+                ++insertedRecords;
+                continue;
+            }
 
             if (!deleteParentInodes.contains(record.parentFsIndex)) {
                 continue;
@@ -1764,33 +1846,61 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     continue;
                 }
 
-                const std::vector<uint32_t>* recordIndices =
-                    targetIndex->recordIndicesForFsIndex(operation.inode);
-
-                if (!recordIndices || recordIndices->empty()) {
-                    ++result.missingInode;
-                    continue;
-                }
-
                 bool updatedAny = false;
 
-                for (const uint32_t recordIdx : *recordIndices) {
-                    if (recordIdx >= targetIndex->fileRecords.size() ||
-                        targetIndex->isDeletedRecord(recordIdx)) {
+                if (useNamespaces) {
+                    const std::optional<uint32_t> recordIdx =
+                        targetIndex->recordIdxForNamespacedFsIndex(
+                            operation.fsNamespace,
+                            operation.inode
+                        );
+
+                    if (!recordIdx) {
+                        ++result.missingInode;
                         continue;
                     }
 
-                    FileRecord& record = targetIndex->fileRecords[recordIdx];
-                    const bool wasDirectory = (record.flags & FileRecord_IsDir) != 0;
+                    if (*recordIdx < targetIndex->fileRecords.size() &&
+                        !targetIndex->isDeletedRecord(*recordIdx)) {
+                        FileRecord& record = targetIndex->fileRecords[*recordIdx];
+                        const bool wasDirectory = (record.flags & FileRecord_IsDir) != 0;
 
-                    updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
+                        updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
 
-                    const bool isDirectory = (record.flags & FileRecord_IsDir) != 0;
-                    if (wasDirectory && !isDirectory) {
-                        addRecordToExtensionIndexIfApplicable(*targetIndex, recordIdx);
+                        const bool isDirectory = (record.flags & FileRecord_IsDir) != 0;
+                        if (wasDirectory && !isDirectory) {
+                            addRecordToExtensionIndexIfApplicable(*targetIndex, *recordIdx);
+                        }
+
+                        updatedAny = true;
+                    }
+                } else {
+                    const std::vector<uint32_t>* recordIndices =
+                        targetIndex->recordIndicesForFsIndex(operation.inode);
+
+                    if (!recordIndices || recordIndices->empty()) {
+                        ++result.missingInode;
+                        continue;
                     }
 
-                    updatedAny = true;
+                    for (const uint32_t recordIdx : *recordIndices) {
+                        if (recordIdx >= targetIndex->fileRecords.size() ||
+                            targetIndex->isDeletedRecord(recordIdx)) {
+                            continue;
+                        }
+
+                        FileRecord& record = targetIndex->fileRecords[recordIdx];
+                        const bool wasDirectory = (record.flags & FileRecord_IsDir) != 0;
+
+                        updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
+
+                        const bool isDirectory = (record.flags & FileRecord_IsDir) != 0;
+                        if (wasDirectory && !isDirectory) {
+                            addRecordToExtensionIndexIfApplicable(*targetIndex, recordIdx);
+                        }
+
+                        updatedAny = true;
+                    }
                 }
 
                 if (updatedAny) {
@@ -1831,9 +1941,17 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                         continue;
                     }
 
-                    const auto recordIt = liveEntryRecordByParentAndName.constFind(
-                        liveEntryKey(operation.parentInode, nameUtf8)
-                    );
+                    const auto recordIt = useNamespaces
+                        ? liveEntryRecordByParentAndName.constFind(
+                            namespacedLiveEntryKey(
+                                operation.parentFsNamespace,
+                                operation.parentInode,
+                                nameUtf8
+                            )
+                        )
+                        : liveEntryRecordByParentAndName.constFind(
+                            liveEntryKey(operation.parentInode, nameUtf8)
+                        );
 
                     if (recordIt == liveEntryRecordByParentAndName.cend()) {
                         ++deleteLookupsMissing;
@@ -1852,6 +1970,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     }
 
                     const FileRecord& record = targetIndex->fileRecords[recordIdx];
+                    const FileRecordNamespace namespaceEntry = targetIndex->namespaceForRecord(recordIdx);
 
                     std::size_t matchingUpsertIdx = pendingUpserts.size();
 
@@ -1861,6 +1980,13 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     if (pendingUpsertIndicesIt != pendingUpsertIndicesByInode.cend()) {
                         for (const std::size_t upsertIdx : pendingUpsertIndicesIt.value()) {
                             if (consumedUpserts[upsertIdx] != 0) {
+                                continue;
+                            }
+
+                            const LiveUpdateOperation& pendingUpsert = pendingUpserts[upsertIdx];
+
+                            if (useNamespaces &&
+                                pendingUpsert.fsNamespace != namespaceEntry.fsNamespace) {
                                 continue;
                             }
 
@@ -1879,6 +2005,11 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                             )) {
                             consumedUpserts[matchingUpsertIdx] = 1;
                             trigramIndexNeedsSort = true;
+
+                            if (useNamespaces) {
+                                fsIndexMapsNeedRebuild = true;
+                            }
+
                             ++result.upserted;
                             continue;
                         }
@@ -3186,7 +3317,7 @@ std::size_t IndexController::maxSearchResultCount() const
              recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
              ++recordIdx) {
             total += indexPtr->mountedResultMultiplicity(recordIdx);
-             }
+        }
     }
 
     return total;
@@ -3667,6 +3798,14 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         appendSparseLowercaseName(deviceIndex, nameView);
 
     deviceIndex.fileRecords.push_back(record);
+
+    if (deviceIndex.hasFileRecordNamespaces()) {
+        deviceIndex.fileRecordNamespaces.push_back({
+            operation.fsNamespace,
+            operation.parentFsNamespace
+        });
+    }
+
     deviceIndex.lowercaseNameOffsetByRecord.push_back(lowercaseNameOffset);
     deviceIndex.resizeDeletedRecordBitsForRecordCount(deviceIndex.fileRecords.size());
 
@@ -3691,6 +3830,22 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
         if ((record.flags & FileRecord_IsDir) != 0) {
             deviceIndex.liveDirectoryFsIndexRecordRefs64.push_back({
                 record.fsIndex,
+                recordIdx
+            });
+        }
+    }
+
+    if (deviceIndex.hasFileRecordNamespaces()) {
+        deviceIndex.namespacedFsIndexRecordRefs.push_back({
+            operation.fsNamespace,
+            operation.inode,
+            recordIdx
+        });
+
+        if ((record.flags & FileRecord_IsDir) != 0) {
+            deviceIndex.namespacedDirectoryFsIndexRecordRefs.push_back({
+                operation.fsNamespace,
+                operation.inode,
                 recordIdx
             });
         }
@@ -3837,6 +3992,21 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
         return false;
     }
 
+    const bool useNamespaces = deviceIndex.hasFileRecordNamespaces();
+
+    if (useNamespaces) {
+        if (recordIdx >= deviceIndex.fileRecordNamespaces.size()) {
+            return false;
+        }
+
+        const FileRecordNamespace existingNamespace =
+            deviceIndex.fileRecordNamespaces[recordIdx];
+
+        if (existingNamespace.fsNamespace != operation.fsNamespace) {
+            return false;
+        }
+    }
+
     deviceIndex.ensureFsIndexRefStorageCanStore(
         operation.inode,
         operation.parentInode
@@ -3844,9 +4014,18 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
 
     uint32_t parentRecordIdx = 0xFFFFFFFF;
 
-    if (operation.parentInode != operation.inode) {
-        const std::optional<uint32_t> parentRecord =
-            deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode);
+    if (operation.parentInode != operation.inode ||
+        (useNamespaces && operation.parentFsNamespace != operation.fsNamespace)) {
+        std::optional<uint32_t> parentRecord;
+
+        if (useNamespaces) {
+            parentRecord = deviceIndex.directoryRecordIdxForNamespacedFsIndex(
+                operation.parentFsNamespace,
+                operation.parentInode
+            );
+        } else {
+            parentRecord = deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode);
+        }
 
         if (!parentRecord) {
             return false;
@@ -3891,6 +4070,13 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     record.parentRecordIdx = parentRecordIdx;
     record.nameOffset = nameOffset;
     record.nameLen = nameLen;
+
+    if (useNamespaces) {
+        deviceIndex.fileRecordNamespaces[recordIdx] = {
+            operation.fsNamespace,
+            operation.parentFsNamespace
+        };
+    }
 
     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
@@ -3938,21 +4124,56 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
         return UpsertApplyResult::Invalid;
     }
 
+    const bool useNamespaces = deviceIndex.hasFileRecordNamespaces();
+
     /*
-     * First match by directory entry identity: parent inode + name.
+     * First match by directory entry identity.
+     *
+     * For ordinary filesystems this is:
+     *
+     *   (parent inode, name)
+     *
+     * For namespace-aware filesystems such as Btrfs this is:
+     *
+     *   (parent root/subvolume id, parent inode, name)
      *
      * A browser/download manager can replace an existing path by creating a
      * temp file and renaming it over the final path. In that case the visible
-     * path is the same, but the inode can change. Keeping both records live
-     * would create duplicate search results with the same path/name.
+     * directory entry is the same, but the object inode can change. Keeping
+     * both records live would create duplicate search results with the same
+     * path/name.
      */
-    const std::optional<uint32_t> existingSamePath =
-        findLiveEntryRecord(deviceIndex, operation.parentInode, nameUtf8, 0);
+    std::optional<uint32_t> existingSamePath;
+
+    if (useNamespaces) {
+        existingSamePath =
+            deviceIndex.findLiveEntryRecordByNamespacedParentAndName(
+                operation.parentFsNamespace,
+                operation.parentInode,
+                std::string_view(
+                    nameUtf8.constData(),
+                    static_cast<std::size_t>(nameUtf8.size())
+                )
+            );
+    } else {
+        existingSamePath =
+            findLiveEntryRecord(deviceIndex, operation.parentInode, nameUtf8, 0);
+    }
 
     if (existingSamePath) {
         FileRecord& existingRecord = deviceIndex.fileRecords[*existingSamePath];
 
         if (existingRecord.fsIndex == operation.inode) {
+            if (useNamespaces) {
+                const FileRecordNamespace existingNamespace =
+                    deviceIndex.namespaceForRecord(*existingSamePath);
+
+                if (existingNamespace.fsNamespace != operation.fsNamespace) {
+                    logSlowUpsert("same-path-namespace-mismatch");
+                    return UpsertApplyResult::NeedsRescan;
+                }
+            }
+
             updateFileRecordMetadataFromLiveUpdateOperation(existingRecord, operation);
             logSlowUpsert("updated-existing");
             return UpsertApplyResult::Applied;
@@ -3980,24 +4201,50 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
     }
 
     /*
-     * If the inode already exists but this exact parent/name pair does not, this
-     * is usually a new directory entry for the same inode, for example a hard link.
+     * If the filesystem object already exists but this exact directory-entry
+     * identity does not, this is usually a new directory entry for the same
+     * object, for example a hard link.
      *
-     * Paired renames/moves are handled earlier by DeleteEntry matching a pending
-     * Upsert with the same inode and updating that existing record's identity.
-     * Reaching this point means this Upsert is not consumed by a matching delete,
-     * so appending a second FileRecord is the safest representation for EXT4 hard
-     * links and avoids false stale-index warnings.
+     * For ordinary filesystems, object identity is the inode/MFT id.
+     * For namespace-aware filesystems such as Btrfs, object identity is:
+     *
+     *   (root/subvolume id, inode)
+     *
+     * Paired renames/moves are handled earlier by DeleteEntry matching a
+     * pending Upsert with the same object identity and updating that existing
+     * record's directory-entry identity. Reaching this point means this Upsert
+     * was not consumed by a matching delete, so appending another FileRecord is
+     * the safest representation for hard links and avoids false stale-index
+     * warnings.
      */
 
     /*
      * New non-root entries need their parent directory to exist in the index
      * before we append them, otherwise parentRecordIdx cannot be resolved.
+     *
+     * For Btrfs and other namespace-aware filesystems, parent lookup uses:
+     *
+     *   (parent root/subvolume id, parent inode)
+     *
+     * rather than parent inode alone.
      */
-    if (operation.parentInode != operation.inode &&
-        !deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode)) {
-        logSlowUpsert("missing-parent");
-        return UpsertApplyResult::MissingParent;
+    const bool isRootSelfParent =
+        operation.parentInode == operation.inode &&
+        (!useNamespaces || operation.parentFsNamespace == operation.fsNamespace);
+
+    if (!isRootSelfParent) {
+        const std::optional<uint32_t> parentRecord =
+            useNamespaces
+                ? deviceIndex.directoryRecordIdxForNamespacedFsIndex(
+                    operation.parentFsNamespace,
+                    operation.parentInode
+                )
+                : deviceIndex.directoryRecordIdxForFsIndex(operation.parentInode);
+
+        if (!parentRecord) {
+            logSlowUpsert("missing-parent");
+            return UpsertApplyResult::MissingParent;
+        }
     }
 
     if (!appendRecordFromLiveUpdateOperation(deviceIndex, operation)) {
@@ -4006,7 +4253,10 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
     }
 
     logSlowUpsert("appended");
-    return UpsertApplyResult::Applied;
+
+    return useNamespaces
+        ? UpsertApplyResult::AppliedNeedsFsIndexRebuild
+        : UpsertApplyResult::Applied;
 }
 
 IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string_view query)

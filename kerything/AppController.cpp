@@ -594,6 +594,14 @@ bool AppController::start() {
                     std::cout << "  operation kind="
                               << liveUpdateOperationKindToString(operation.kind).toStdString();
 
+                    if (operation.fsNamespace != 0) {
+                        std::cout << " fsNamespace=" << operation.fsNamespace;
+                    }
+
+                    if (operation.parentFsNamespace != 0) {
+                        std::cout << " parentFsNamespace=" << operation.parentFsNamespace;
+                    }
+
                     if (operation.inode != 0) {
                         std::cout << " inode=" << operation.inode;
                     }

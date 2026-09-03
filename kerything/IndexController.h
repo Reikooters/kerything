@@ -121,6 +121,17 @@ public:
 
         std::vector<FileRecord> fileRecords;
         std::vector<FileRecordNamespace> fileRecordNamespaces;
+
+        /*
+         * Sorted unique list of filesystem namespace ids present in this index.
+         *
+         * For Btrfs, these are root/subvolume ids. Live updates can refer to
+         * namespaces that are visible under the watched mount but not indexed by
+         * the current mounted-root scan policy. Those operations should be ignored
+         * rather than treated as missing-parent/stale-index failures.
+         */
+        std::vector<quint64> indexedFsNamespaces;
+
         std::vector<char> stringPool;
         std::vector<uint64_t> deletedRecordBits;
 
@@ -136,6 +147,77 @@ public:
             }
 
             return fileRecordNamespaces[recordIdx];
+        }
+
+        void rebuildIndexedFsNamespaces()
+        {
+            indexedFsNamespaces.clear();
+
+            if (!hasFileRecordNamespaces()) {
+                indexedFsNamespaces.shrink_to_fit();
+                return;
+            }
+
+            indexedFsNamespaces.reserve(fileRecordNamespaces.size());
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecordNamespaces.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecordNamespace namespaceEntry = fileRecordNamespaces[recordIdx];
+
+                if (namespaceEntry.fsNamespace != 0) {
+                    indexedFsNamespaces.push_back(namespaceEntry.fsNamespace);
+                }
+
+                if (namespaceEntry.parentFsNamespace != 0) {
+                    indexedFsNamespaces.push_back(namespaceEntry.parentFsNamespace);
+                }
+            }
+
+            std::sort(indexedFsNamespaces.begin(), indexedFsNamespaces.end());
+
+            indexedFsNamespaces.erase(
+                std::unique(indexedFsNamespaces.begin(), indexedFsNamespaces.end()),
+                indexedFsNamespaces.end()
+            );
+
+            indexedFsNamespaces.shrink_to_fit();
+        }
+
+        [[nodiscard]] bool hasIndexedFsNamespace(quint64 fsNamespace) const noexcept
+        {
+            if (fsNamespace == 0) {
+                return false;
+            }
+
+            return std::binary_search(
+                indexedFsNamespaces.begin(),
+                indexedFsNamespaces.end(),
+                fsNamespace
+            );
+        }
+
+        void addIndexedFsNamespaceIfMissing(quint64 fsNamespace)
+        {
+            if (fsNamespace == 0) {
+                return;
+            }
+
+            const auto it = std::lower_bound(
+                indexedFsNamespaces.begin(),
+                indexedFsNamespaces.end(),
+                fsNamespace
+            );
+
+            if (it != indexedFsNamespaces.end() && *it == fsNamespace) {
+                return;
+            }
+
+            indexedFsNamespaces.insert(it, fsNamespace);
         }
 
         [[nodiscard]] bool isBtrfs() const noexcept
@@ -1063,9 +1145,13 @@ public:
 
             if (hasFileRecordNamespaces()) {
                 rebuildNamespacedFsIndexMaps();
+                rebuildIndexedFsNamespaces();
                 fsIndexRefStorage = FsIndexRefStorage::UInt64;
                 return;
             }
+
+            indexedFsNamespaces.clear();
+            indexedFsNamespaces.shrink_to_fit();
 
             fsIndexRefStorage = allLiveFsIndexesFitUInt32()
                 ? FsIndexRefStorage::UInt32
@@ -1840,6 +1926,7 @@ public:
         qsizetype missingInode = 0;
         qsizetype missingParent = 0;
         qsizetype missingEntry = 0;
+        qsizetype ignoredUnindexedNamespace = 0;
     };
 
     const DeviceIndex* deviceIndex(quint64 indexId) const;

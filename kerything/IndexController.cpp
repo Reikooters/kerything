@@ -426,6 +426,37 @@ namespace {
         return key;
     }
 
+    bool operationReferencesUnindexedNamespace(
+            const IndexController::DeviceIndex& device,
+            const LiveUpdateOperation& operation)
+    {
+        if (!device.hasFileRecordNamespaces()) {
+            return false;
+        }
+
+        auto namespaceIsMissing = [&device](quint64 fsNamespace) {
+            return fsNamespace != 0 &&
+                   !device.hasIndexedFsNamespace(fsNamespace);
+        };
+
+        switch (operation.kind) {
+            case LiveUpdateOperationKind::MetadataChanged:
+                return namespaceIsMissing(operation.fsNamespace);
+
+            case LiveUpdateOperationKind::Upsert:
+                return namespaceIsMissing(operation.fsNamespace) ||
+                       namespaceIsMissing(operation.parentFsNamespace);
+
+            case LiveUpdateOperationKind::DeleteEntry:
+                return namespaceIsMissing(operation.parentFsNamespace);
+
+            case LiveUpdateOperationKind::NeedsRescan:
+            case LiveUpdateOperationKind::Ignored:
+            default:
+                return false;
+        }
+    }
+
     QString formatBytes(quint64 bytes)
     {
         static constexpr double KiB = 1024.0;
@@ -1048,6 +1079,7 @@ quint64 IndexController::addDevice(
             deviceIndex.isReady = false;
             deviceIndex.fileRecords.clear();
             deviceIndex.fileRecordNamespaces.clear();
+            deviceIndex.indexedFsNamespaces.clear();
             deviceIndex.stringPool.clear();
             deviceIndex.deletedRecordBits.clear();
             deviceIndex.lowercaseStringPool.clear();
@@ -1575,6 +1607,46 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
+    std::vector<LiveUpdateOperation> filteredOperations;
+    const std::vector<LiveUpdateOperation>* operationsToApply = &operations;
+
+    if (useNamespaces) {
+        filteredOperations.reserve(operations.size());
+
+        for (const LiveUpdateOperation& operation : operations) {
+            if (operationReferencesUnindexedNamespace(*targetIndex, operation)) {
+                ++result.ignoredUnindexedNamespace;
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cerr << "live batch #" << liveBatchDebugId
+                          << " ignored operation for unindexed namespace"
+                          << " kind=" << liveUpdateOperationKindToString(operation.kind).toStdString()
+                          << " fsNamespace=" << operation.fsNamespace
+                          << " parentFsNamespace=" << operation.parentFsNamespace
+                          << " inode=" << operation.inode
+                          << " parentInode=" << operation.parentInode
+                          << " name=" << operation.name.toStdString()
+                          << "\n";
+#endif
+                continue;
+            }
+
+            filteredOperations.push_back(operation);
+        }
+
+        operationsToApply = &filteredOperations;
+
+        if (operationsToApply->empty()) {
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "live batch #" << liveBatchDebugId
+                      << " ignored all operations because they only referenced unindexed namespaces"
+                      << " ignoredUnindexedNamespace=" << result.ignoredUnindexedNamespace
+                      << "\n";
+#endif
+            return result;
+        }
+    }
+
     QSet<quint64> deleteParentInodes;
     QSet<QByteArray> deleteParentNamespaceKeys;
     qsizetype deleteEntryOperationCount = 0;
@@ -1584,7 +1656,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             QStringLiteral("live batch #%1 collect delete parents").arg(liveBatchDebugId)
         );
 
-        for (const LiveUpdateOperation& operation : operations) {
+        for (const LiveUpdateOperation& operation : *operationsToApply) {
             if (operation.kind != LiveUpdateOperationKind::DeleteEntry) {
                 continue;
             }
@@ -1710,7 +1782,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             QStringLiteral("live batch #%1 collect pending upserts").arg(liveBatchDebugId)
         );
 
-        for (const LiveUpdateOperation& operation : operations) {
+        for (const LiveUpdateOperation& operation : *operationsToApply) {
             if (operation.kind == LiveUpdateOperationKind::Upsert) {
                 pendingUpserts.push_back(operation);
             }
@@ -1860,7 +1932,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             10
         );
 
-        for (const LiveUpdateOperation& operation : operations) {
+        for (const LiveUpdateOperation& operation : *operationsToApply) {
             if (operation.kind == LiveUpdateOperationKind::Upsert) {
                 continue;
             }
@@ -2275,6 +2347,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " missingInode=" << result.missingInode
               << " missingParent=" << result.missingParent
               << " missingEntry=" << result.missingEntry
+              << " ignoredUnindexedNamespace=" << result.ignoredUnindexedNamespace
               << "\n";
 
     std::cerr << "live batch #" << liveBatchDebugId
@@ -2289,6 +2362,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " missingInode=" << result.missingInode
               << " missingParent=" << result.missingParent
               << " missingEntry=" << result.missingEntry
+              << " ignoredUnindexedNamespace=" << result.ignoredUnindexedNamespace
               << " extensionIndexLiveDeltaEntries=" << targetIndex->extensionIndexLiveDeltaEntries
               << " extensionIndexEntries=" << targetIndex->extensionIndexEntryCount
               << "\n";
@@ -2355,6 +2429,7 @@ QString IndexController::memoryStatsText() const
     out << "Type sizes:\n";
     out << "  sizeof(FileRecord): " << sizeof(FileRecord) << " bytes\n";
     out << "  sizeof(FileRecordNamespace): " << sizeof(FileRecordNamespace) << " bytes\n";
+    out << "  sizeof(indexed namespace id): " << sizeof(quint64) << " bytes\n";
     out << "  sizeof(TrigramEntry): " << sizeof(TrigramEntry) << " bytes\n";
     out << "  sizeof(TrigramRange): " << sizeof(TrigramRange) << " bytes\n";
     out << "  sizeof(RecordHandle): " << sizeof(RecordHandle) << " bytes\n";
@@ -2394,6 +2469,7 @@ QString IndexController::memoryStatsText() const
 
     std::size_t grandRecords = 0;
     std::size_t grandFileRecordNamespaceEntries = 0;
+    std::size_t grandIndexedFsNamespaces = 0;
     std::size_t grandNamespacedDirectoryRefs = 0;
     std::size_t grandNamespacedFsIndexRefs = 0;
     std::size_t grandIndexesWithNamespaceSidecars = 0;
@@ -2443,6 +2519,7 @@ QString IndexController::memoryStatsText() const
 
         const quint64 fileRecordsBytes = vectorCapacityBytes(device.fileRecords);
         const quint64 fileRecordNamespacesBytes = vectorCapacityBytes(device.fileRecordNamespaces);
+        const quint64 indexedFsNamespacesBytes = vectorCapacityBytes(device.indexedFsNamespaces);
         const quint64 stringPoolBytes = vectorCapacityBytes(device.stringPool);
         const quint64 lowercaseStringPoolBytes = vectorCapacityBytes(device.lowercaseStringPool);
         const quint64 lowercaseNameOffsetByRecordBytes =
@@ -2563,6 +2640,7 @@ QString IndexController::memoryStatsText() const
         const quint64 deviceVectorBytes =
             fileRecordsBytes +
             fileRecordNamespacesBytes +
+            indexedFsNamespacesBytes +
             stringPoolBytes +
             lowercaseStringPoolBytes +
             lowercaseNameOffsetByRecordBytes +
@@ -2596,6 +2674,7 @@ QString IndexController::memoryStatsText() const
 
         grandRecords += device.fileRecords.size();
         grandFileRecordNamespaceEntries += device.fileRecordNamespaces.size();
+        grandIndexedFsNamespaces += device.indexedFsNamespaces.size();
         grandNamespacedDirectoryRefs += device.namespacedDirectoryFsIndexRecordRefs.size();
         grandNamespacedFsIndexRefs += device.namespacedFsIndexRecordRefs.size();
 
@@ -2683,6 +2762,13 @@ QString IndexController::memoryStatsText() const
             << (device.fileRecordNamespaces.empty() || device.hasFileRecordNamespaces()
                 ? "true"
                 : "false")
+            << '\n';
+        out << "    indexedFsNamespaces size/capacity: "
+            << device.indexedFsNamespaces.size()
+            << '/'
+            << device.indexedFsNamespaces.capacity()
+            << " => "
+            << formatBytes(indexedFsNamespacesBytes)
             << '\n';
         out << "    stringPool size/capacity: "
             << device.stringPool.size()
@@ -2996,6 +3082,9 @@ QString IndexController::memoryStatsText() const
     out << "  file records: " << grandRecords << '\n';
     out << "  fileRecordNamespace entries: "
         << grandFileRecordNamespaceEntries
+        << '\n';
+    out << "  indexed filesystem namespaces: "
+        << grandIndexedFsNamespaces
         << '\n';
     out << "  indexes with namespace sidecars: "
         << grandIndexesWithNamespaceSidecars
@@ -3860,6 +3949,9 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
             operation.fsNamespace,
             operation.parentFsNamespace
         });
+
+        deviceIndex.addIndexedFsNamespaceIfMissing(operation.fsNamespace);
+        deviceIndex.addIndexedFsNamespaceIfMissing(operation.parentFsNamespace);
     }
 
     deviceIndex.lowercaseNameOffsetByRecord.push_back(lowercaseNameOffset);

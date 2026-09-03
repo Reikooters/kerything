@@ -676,7 +676,8 @@ bool AppController::start() {
                     result.missingDevice > 0 ||
                     result.missingInode > 0 ||
                     result.missingParent > 0 ||
-                    result.missingEntry > 0) {
+                    result.missingEntry > 0 ||
+                    result.ignoredUnindexedNamespace > 0) {
                     std::cout << "GUI: applied live update operation batch"
                               << " deviceId=" << deviceId.toStdString()
                               << " metadataChanged=" << result.metadataChanged
@@ -688,6 +689,7 @@ bool AppController::start() {
                               << " missingInode=" << result.missingInode
                               << " missingParent=" << result.missingParent
                               << " missingEntry=" << result.missingEntry
+                              << " ignoredUnindexedNamespace=" << result.ignoredUnindexedNamespace
                               << "\n";
                 }
 #endif

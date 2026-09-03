@@ -5,13 +5,81 @@
 
 #include "FanotifyHandleResolver.h"
 
+#include <cstring>
 #include <iostream>
+#include <optional>
 
 #include <QSet>
 
 #include <linux/fanotify.h>
 
 namespace {
+    struct ParsedBtrfsFileHandle {
+        bool ok = false;
+        quint64 objectId = 0;
+        quint64 rootId = 0;
+        quint64 generation = 0;
+        QString errorText;
+    };
+
+    template <typename T>
+    T readLittleEndianUnaligned(const char* data)
+    {
+        T value = 0;
+
+        for (std::size_t i = 0; i < sizeof(T); ++i) {
+            value |= static_cast<T>(
+                static_cast<unsigned char>(data[i])
+            ) << (i * 8);
+        }
+
+        return value;
+    }
+
+    ParsedBtrfsFileHandle parseBtrfsFileHandle(const QByteArray& handle)
+    {
+        /*
+         * Btrfs file handles observed from fanotify/open_by_handle_at encode:
+         *
+         *   u64 objectid
+         *   u64 root/subvolume id
+         *   u32 generation
+         *
+         * This parser intentionally accepts handles with trailing bytes so it
+         * remains useful if the kernel returns a larger compatible handle.
+         */
+        static constexpr qsizetype MinimumBtrfsHandleSize =
+            static_cast<qsizetype>(sizeof(quint64) + sizeof(quint64) + sizeof(quint32));
+
+        ParsedBtrfsFileHandle parsed;
+
+        if (handle.size() < MinimumBtrfsHandleSize) {
+            parsed.errorText = QStringLiteral("Btrfs file handle too short: %1 bytes")
+                .arg(handle.size());
+            return parsed;
+        }
+
+        parsed.objectId = readLittleEndianUnaligned<quint64>(handle.constData());
+        parsed.rootId = readLittleEndianUnaligned<quint64>(
+            handle.constData() + sizeof(quint64)
+        );
+        parsed.generation = readLittleEndianUnaligned<quint32>(
+            handle.constData() + sizeof(quint64) + sizeof(quint64)
+        );
+
+        if (parsed.objectId == 0 || parsed.rootId == 0) {
+            parsed.errorText = QStringLiteral(
+                "Btrfs file handle contains invalid object/root id: objectId=%1 rootId=%2"
+            )
+                .arg(parsed.objectId)
+                .arg(parsed.rootId);
+            return parsed;
+        }
+
+        parsed.ok = true;
+        return parsed;
+    }
+
     const LiveUpdateEventInfo* firstRawInfoOfType(
         const LiveUpdateEvent& event,
         const QString& infoType)
@@ -42,18 +110,97 @@ namespace {
         return nullptr;
     }
 
+    bool deviceIsBtrfs(const QString& fsType)
+    {
+        return fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0;
+    }
+
+    LiveUpdateOperation needsRescanOperation(const QString& reason)
+    {
+        LiveUpdateOperation operation;
+        operation.kind = LiveUpdateOperationKind::NeedsRescan;
+        operation.reason = reason;
+        return operation;
+    }
+
+    bool applyParentIdentityFromDirectoryEntryInfo(
+        LiveUpdateOperation& operation,
+        const LiveUpdateEventInfo& entryInfo,
+        bool isBtrfs,
+        quint64 fallbackFsNamespace)
+    {
+        if (!isBtrfs) {
+            operation.parentFsNamespace = 0;
+            return true;
+        }
+
+        const ParsedBtrfsFileHandle parsed =
+            parseBtrfsFileHandle(entryInfo.handle);
+
+        if (!parsed.ok) {
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = QStringLiteral("could not parse Btrfs parent file handle: %1")
+                .arg(parsed.errorText);
+            return false;
+        }
+
+        operation.parentFsNamespace = parsed.rootId;
+
+        /*
+         * Do not force operation.parentInode from the parsed handle here.
+         * We still resolve the parent through open_by_handle_at + fstat below
+         * because that keeps ordinary and Btrfs behavior consistent and validates
+         * that the handle is currently usable.
+         */
+        Q_UNUSED(fallbackFsNamespace);
+        return true;
+    }
+
+    bool applyObjectIdentityFromObjectInfo(
+        LiveUpdateOperation& operation,
+        const LiveUpdateEventInfo& objectInfo,
+        bool isBtrfs,
+        quint64 fallbackFsNamespace)
+    {
+        if (!isBtrfs) {
+            operation.fsNamespace = 0;
+            return true;
+        }
+
+        const ParsedBtrfsFileHandle parsed =
+            parseBtrfsFileHandle(objectInfo.handle);
+
+        if (!parsed.ok) {
+            operation.kind = LiveUpdateOperationKind::NeedsRescan;
+            operation.reason = QStringLiteral("could not parse Btrfs object file handle: %1")
+                .arg(parsed.errorText);
+            return false;
+        }
+
+        operation.fsNamespace = parsed.rootId;
+
+        /*
+         * This should match fstat(open_by_handle_at()).st_ino for normal Btrfs
+         * file handles. Keep fstat as the authoritative liveness/metadata source,
+         * but log/propagate namespace from the parsed handle.
+         */
+        Q_UNUSED(fallbackFsNamespace);
+        return true;
+    }
+
     LiveUpdateOperation deleteOperationFromDirectoryEntryEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event,
-        quint64 fsNamespace,
+        bool isBtrfs,
+        quint64 fallbackFsNamespace,
         const QString& fallbackReason)
     {
         const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
 
         LiveUpdateOperation operation;
         operation.kind = LiveUpdateOperationKind::DeleteEntry;
-        operation.fsNamespace = fsNamespace;
-        operation.parentFsNamespace = fsNamespace;
+        operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
+        operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
 
         if (!entryInfo) {
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
@@ -62,6 +209,14 @@ namespace {
         }
 
         operation.name = entryInfo->name;
+
+        if (!applyParentIdentityFromDirectoryEntryInfo(
+                operation,
+                *entryInfo,
+                isBtrfs,
+                fallbackFsNamespace)) {
+            return operation;
+        }
 
         const ResolvedFanotifyHandle parent =
             resolver.resolveObjectHandle(entryInfo->handle, entryInfo->handleType);
@@ -80,15 +235,16 @@ namespace {
     LiveUpdateOperation upsertOperationFromDirectoryEntryEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event,
-        quint64 fsNamespace,
+        bool isBtrfs,
+        quint64 fallbackFsNamespace,
         const QString& fallbackReason)
     {
         const LiveUpdateEventInfo* entryInfo = firstRawDirectoryEntryInfo(event);
 
         LiveUpdateOperation operation;
         operation.kind = LiveUpdateOperationKind::Upsert;
-        operation.fsNamespace = fsNamespace;
-        operation.parentFsNamespace = fsNamespace;
+        operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
+        operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
 
         if (!entryInfo) {
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
@@ -97,6 +253,14 @@ namespace {
         }
 
         operation.name = entryInfo->name;
+
+        if (!applyParentIdentityFromDirectoryEntryInfo(
+                operation,
+                *entryInfo,
+                isBtrfs,
+                fallbackFsNamespace)) {
+            return operation;
+        }
 
         const ResolvedFanotifyHandle child =
             resolver.resolveChildByParentHandleAndName(
@@ -119,6 +283,16 @@ namespace {
             operation.parentInode = parent.inode;
         }
 
+        /*
+         * For ordinary creates/renames inside a Btrfs subvolume, the child belongs
+         * to the same root id as the parent directory. If the child is actually a
+         * subvolume boundary, this may be wrong; that case should become a later
+         * conservative NeedsRescan path once boundary detection is added.
+         */
+        if (isBtrfs) {
+            operation.fsNamespace = operation.parentFsNamespace;
+        }
+
         operation.inode = child.inode;
         operation.size = child.size;
         operation.modificationTime = child.modificationTime;
@@ -131,13 +305,14 @@ namespace {
     LiveUpdateOperation operationFromEvent(
         const FanotifyHandleResolver& resolver,
         const LiveUpdateEvent& event,
-        quint64 fsNamespace)
+        bool isBtrfs,
+        quint64 fallbackFsNamespace)
     {
         if (event.mask & FAN_Q_OVERFLOW) {
             LiveUpdateOperation operation;
             operation.kind = LiveUpdateOperationKind::NeedsRescan;
-            operation.fsNamespace = fsNamespace;
-            operation.parentFsNamespace = fsNamespace;
+            operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
+            operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
             operation.reason = QStringLiteral("fanotify queue overflow");
             return operation;
         }
@@ -146,7 +321,8 @@ namespace {
             return deleteOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
-                fsNamespace,
+                isBtrfs,
+                fallbackFsNamespace,
                 QStringLiteral("move-from event has no directory entry info")
             );
         }
@@ -155,7 +331,8 @@ namespace {
             return upsertOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
-                fsNamespace,
+                isBtrfs,
+                fallbackFsNamespace,
                 QStringLiteral("move-to event has no directory entry info")
             );
         }
@@ -163,6 +340,8 @@ namespace {
         if (event.mask & (FAN_DELETE_SELF | FAN_MOVE_SELF)) {
             LiveUpdateOperation operation;
             operation.kind = LiveUpdateOperationKind::Ignored;
+            operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
+            operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
             operation.reason = QStringLiteral("redundant self delete/move notification");
             return operation;
         }
@@ -171,7 +350,8 @@ namespace {
             return deleteOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
-                fsNamespace,
+                isBtrfs,
+                fallbackFsNamespace,
                 QStringLiteral("delete event has no directory entry info")
             );
         }
@@ -180,7 +360,8 @@ namespace {
             return upsertOperationFromDirectoryEntryEvent(
                 resolver,
                 event,
-                fsNamespace,
+                isBtrfs,
+                fallbackFsNamespace,
                 QStringLiteral("create event has no directory entry info")
             );
         }
@@ -190,12 +371,20 @@ namespace {
 
             LiveUpdateOperation operation;
             operation.kind = LiveUpdateOperationKind::MetadataChanged;
-            operation.fsNamespace = fsNamespace;
-            operation.parentFsNamespace = fsNamespace;
+            operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
+            operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
 
             if (!objectInfo) {
                 operation.kind = LiveUpdateOperationKind::Ignored;
                 operation.reason = QStringLiteral("metadata event has no object FID");
+                return operation;
+            }
+
+            if (!applyObjectIdentityFromObjectInfo(
+                    operation,
+                    *objectInfo,
+                    isBtrfs,
+                    fallbackFsNamespace)) {
                 return operation;
             }
 
@@ -220,8 +409,8 @@ namespace {
 
         LiveUpdateOperation operation;
         operation.kind = LiveUpdateOperationKind::Ignored;
-        operation.fsNamespace = fsNamespace;
-        operation.parentFsNamespace = fsNamespace;
+        operation.fsNamespace = isBtrfs ? fallbackFsNamespace : 0;
+        operation.parentFsNamespace = isBtrfs ? fallbackFsNamespace : 0;
         operation.reason = QStringLiteral("unhandled fanotify event mask");
         return operation;
     }
@@ -266,15 +455,23 @@ namespace {
         std::cout << "\n";
     }
 
+    QByteArray operationObjectKey(const LiveUpdateOperation& operation)
+    {
+        QByteArray key = QByteArray::number(static_cast<qulonglong>(operation.fsNamespace));
+        key.append('\0');
+        key.append(QByteArray::number(static_cast<qulonglong>(operation.inode)));
+        return key;
+    }
+
     std::vector<LiveUpdateOperation> coalesceOperations(
         const std::vector<LiveUpdateOperation>& operations)
     {
-        QSet<quint64> upsertInodes;
+        QSet<QByteArray> upsertObjects;
         bool hasResolvedDeleteEntry = false;
 
         for (const LiveUpdateOperation& operation : operations) {
             if (operation.kind == LiveUpdateOperationKind::Upsert && operation.inode != 0) {
-                upsertInodes.insert(operation.inode);
+                upsertObjects.insert(operationObjectKey(operation));
             }
             else if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
                 if (operation.parentInode != 0) {
@@ -287,11 +484,13 @@ namespace {
         coalescedReverse.reserve(operations.size());
 
         /*
-         * Walk backwards so the last metadata snapshot for each inode wins.
-         * This is important with FAN_MODIFY, where a busy writer can produce many
-         * metadata events for the same file in one fanotify batch.
+         * Walk backwards so the last metadata snapshot for each filesystem object
+         * wins. This is important with FAN_MODIFY, where a busy writer can produce
+         * many metadata events for the same file in one fanotify batch.
+         *
+         * For Btrfs, object identity is (root/subvolume id, inode), not inode alone.
          */
-        QSet<quint64> emittedMetadataInodes;
+        QSet<QByteArray> emittedMetadataObjects;
 
         for (auto it = operations.rbegin(); it != operations.rend(); ++it) {
             const LiveUpdateOperation& operation = *it;
@@ -305,15 +504,17 @@ namespace {
                     continue;
                 }
 
-                if (upsertInodes.contains(operation.inode)) {
+                const QByteArray objectKey = operationObjectKey(operation);
+
+                if (upsertObjects.contains(objectKey)) {
                     continue;
                 }
 
-                if (emittedMetadataInodes.contains(operation.inode)) {
+                if (emittedMetadataObjects.contains(objectKey)) {
                     continue;
                 }
 
-                emittedMetadataInodes.insert(operation.inode);
+                emittedMetadataObjects.insert(objectKey);
                 coalescedReverse.push_back(operation);
                 continue;
             }
@@ -501,8 +702,11 @@ QString LiveUpdateManager::maskToString(quint64 mask)
 void LiveUpdateManager::logEventBatch(
     const QString& deviceId,
     const QString& mountPoint,
+    const QString& fsType,
     const std::vector<LiveUpdateEvent>& events)
 {
+    const bool isBtrfs = deviceIsBtrfs(fsType);
+
     std::cout << "live update batch: deviceId="
               << deviceId.toStdString()
               << " mountPoint="
@@ -525,6 +729,23 @@ void LiveUpdateManager::logEventBatch(
                       << " handle="
                       << info.handle.toHex().constData();
 
+            if (isBtrfs && !info.handle.isEmpty()) {
+                const ParsedBtrfsFileHandle parsed =
+                    parseBtrfsFileHandle(info.handle);
+
+                if (parsed.ok) {
+                    std::cout << " btrfsObjectId="
+                              << parsed.objectId
+                              << " btrfsRootId="
+                              << parsed.rootId
+                              << " btrfsGeneration="
+                              << parsed.generation;
+                } else {
+                    std::cout << " btrfsHandleParseError="
+                              << parsed.errorText.toStdString();
+                }
+            }
+
             if (!info.name.isEmpty()) {
                 std::cout << " name="
                           << info.name.toStdString();
@@ -543,6 +764,24 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
     }
 
     const quint64 watchedFsNamespace = liveUpdateNamespaceForWatchedMount(device);
+
+    const QString fsType = device.fsType;
+    const bool isBtrfs = deviceIsBtrfs(fsType);
+
+    if (isBtrfs && watchedFsNamespace == 0) {
+        Q_EMIT liveUpdateStatusChanged(
+            device.deviceId,
+            LiveUpdateStatus::StaleNeedsRescan,
+            QStringLiteral("Btrfs live updates require a known mount subvolid")
+        );
+
+        Q_EMIT deviceNeedsRescan(
+            device.deviceId,
+            QStringLiteral("Btrfs live updates require a known mount subvolid")
+        );
+
+        return;
+    }
 
     auto* watcher = new FanotifyWatcher(
         device.deviceId,
@@ -575,13 +814,13 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
             });
 
     connect(watcher, &FanotifyWatcher::eventsReady,
-            this, [this, watchedFsNamespace](
+            this, [this, watchedFsNamespace, fsType, isBtrfs](
                 const QString& deviceId,
                 const QString& mountPoint,
                 std::vector<LiveUpdateEvent> events
             ) {
 #ifdef KERYTHING_ENABLE_LOGGING
-                logEventBatch(deviceId, mountPoint, events);
+                logEventBatch(deviceId, mountPoint, fsType, events);
 #endif
 
                 FanotifyHandleResolver resolver(mountPoint);
@@ -592,6 +831,7 @@ void LiveUpdateManager::startWatcherForDevice(const BlockDevice& device)
                     operations.push_back(operationFromEvent(
                         resolver,
                         event,
+                        isBtrfs,
                         watchedFsNamespace
                     ));
                 }

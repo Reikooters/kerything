@@ -1550,6 +1550,31 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
     }
 #endif
 
+    if (useNamespaces) {
+        for (const LiveUpdateOperation& operation : operations) {
+            if ((operation.kind == LiveUpdateOperationKind::Upsert ||
+                 operation.kind == LiveUpdateOperationKind::MetadataChanged) &&
+                operation.fsNamespace == 0) {
+                ++result.needsRescan;
+            }
+
+            if ((operation.kind == LiveUpdateOperationKind::Upsert ||
+                 operation.kind == LiveUpdateOperationKind::DeleteEntry) &&
+                operation.parentFsNamespace == 0) {
+                ++result.needsRescan;
+            }
+        }
+
+        if (result.needsRescan > 0) {
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "live batch #" << liveBatchDebugId
+                      << " rejected namespace-aware operation batch because at least one operation had namespace 0"
+                      << "\n";
+#endif
+            return result;
+        }
+    }
+
     QSet<quint64> deleteParentInodes;
     QSet<QByteArray> deleteParentNamespaceKeys;
     qsizetype deleteEntryOperationCount = 0;

@@ -46,6 +46,7 @@ private:
     void logEventBatch(
         const QString& deviceId,
         const QString& mountPoint,
+        const QString& fsType,
         const std::vector<LiveUpdateEvent>& events
     );
 

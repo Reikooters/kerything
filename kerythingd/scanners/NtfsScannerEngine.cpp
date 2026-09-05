@@ -11,6 +11,21 @@
 
 namespace NtfsScannerEngine {
 
+    bool reportError(const ScannerHelper::ErrorCallback& onError, const QString& message) {
+        std::cerr << message.toStdString() << "\n";
+
+        if (onError) {
+            onError(message);
+        }
+
+        return false;
+    }
+
+    bool readExact(std::ifstream& disk, char* data, std::streamsize size) {
+        disk.read(data, size);
+        return disk && disk.gcount() == size;
+    }
+
     void parseMftRuns(char* buffer, uint32_t attrOffset, std::vector<MftRun>& mftRuns) {
         auto* attr = reinterpret_cast<AttributeHeader*>(buffer + attrOffset);
 
@@ -52,6 +67,22 @@ namespace NtfsScannerEngine {
     void applyFixups(char* buffer, uint32_t recordSize) {
         auto* header = reinterpret_cast<MFT_RecordHeader*>(buffer);
 
+        if (recordSize < sizeof(MFT_RecordHeader)) {
+            return;
+        }
+
+        if (header->updateSequenceSize == 0) {
+            return;
+        }
+
+        const uint32_t updateSequenceBytes =
+            static_cast<uint32_t>(header->updateSequenceSize) * sizeof(uint16_t);
+
+        if (header->updateSequenceOffset > recordSize ||
+            updateSequenceBytes > recordSize - header->updateSequenceOffset) {
+            return;
+        }
+
         // updateSequenceOffset is relative to the start of the record
         uint16_t* updateSequenceArray = reinterpret_cast<uint16_t*>(buffer + header->updateSequenceOffset);
         uint16_t sequenceNumber = updateSequenceArray[0];
@@ -61,6 +92,10 @@ namespace NtfsScannerEngine {
         int sectorCount = header->updateSequenceSize - 1;
 
         if (sectorCount <= 0) {
+            return;
+        }
+
+        if (recordSize % static_cast<uint32_t>(sectorCount) != 0) {
             return;
         }
 
@@ -434,21 +469,50 @@ namespace NtfsScannerEngine {
         NTFS_BootSector boot;
 
         // Step 1: Read the boot sector to find the start of the MFT
-        disk.read(reinterpret_cast<char*>(&boot), sizeof(boot));
+        if (!readExact(
+                disk,
+                reinterpret_cast<char*>(&boot),
+                static_cast<std::streamsize>(sizeof(boot)))) {
+            return reportError(
+                onError,
+                QStringLiteral("Failed to read NTFS boot sector from %1").arg(devicePath)
+            );
+        }
 
         if (std::string(boot.oemID, 8) != "NTFS    ") {
-            std::cerr << "Error: " << devicePath.toStdString() << " does not appear to be a valid NTFS partition.\n";
-            std::cerr << "OEM ID found: [" << std::string(boot.oemID, 8) << "]\n";
-            return false;
+            return reportError(
+                onError,
+                QStringLiteral("%1 does not appear to be a valid NTFS partition").arg(devicePath)
+            );
         }
 
         uint64_t bytesPerCluster = static_cast<uint64_t>(boot.bytesPerSector) * boot.sectorsPerCluster;
         uint64_t mftOffset = boot.mftStartLcn * bytesPerCluster;
 
+        if (boot.bytesPerSector == 0 ||
+            boot.sectorsPerCluster == 0 ||
+            bytesPerCluster == 0) {
+            return reportError(
+                onError,
+                QStringLiteral("Invalid NTFS cluster geometry for %1").arg(devicePath)
+            );
+        }
+
         // Determine Record Size: Usually 1024 bytes.
         // If clustersPerFileRecord is negative, size is 2^(abs(value)).
         int32_t clustersPerFileRecord = boot.clustersPerFileRecord;
         uint32_t mftRecordSize = (clustersPerFileRecord > 0) ? (clustersPerFileRecord * bytesPerCluster) : (1 << (-clustersPerFileRecord));
+
+        if (mftRecordSize < sizeof(MFT_RecordHeader) ||
+            mftRecordSize > 1024 * 1024 ||
+            (8 * 1024 * 1024) / mftRecordSize == 0) {
+            return reportError(
+                onError,
+                QStringLiteral("Invalid NTFS MFT record size %1 for %2")
+                    .arg(mftRecordSize)
+                    .arg(devicePath)
+            );
+        }
 
         std::cerr << "--- NTFS Volume Info ---" << "\n";
         std::cerr << "Bytes per Sector:    " << boot.bytesPerSector << "\n";
@@ -469,31 +533,81 @@ namespace NtfsScannerEngine {
 
         // Step 2: Read MFT Record 0 (The MFT's own entry) to find all fragments of the MFT.
         disk.seekg(mftOffset);
-        disk.read(buffer.data(), mftRecordSize);
+        if (!disk ||
+            !readExact(
+                disk,
+                buffer.data(),
+                static_cast<std::streamsize>(mftRecordSize))) {
+            return reportError(
+                onError,
+                QStringLiteral("Failed to read NTFS MFT record 0 from %1").arg(devicePath)
+            );
+        }
+
         auto* mftHeader = reinterpret_cast<MFT_RecordHeader*>(buffer.data());
+
+        if (std::string_view(mftHeader->signature, 4) != "FILE") {
+            return reportError(
+                onError,
+                QStringLiteral("Invalid NTFS MFT record 0 signature for %1").arg(devicePath)
+            );
+        }
+
+        applyFixups(buffer.data(), mftRecordSize);
+
+        if (mftHeader->firstAttributeOffset >= mftRecordSize ||
+            mftHeader->usedSize < mftHeader->firstAttributeOffset ||
+            mftHeader->usedSize > mftRecordSize) {
+            return reportError(
+                onError,
+                QStringLiteral("Invalid NTFS MFT record 0 attribute layout for %1").arg(devicePath)
+            );
+        }
 
         uint32_t mftAttrOffset = mftHeader->firstAttributeOffset;
         uint64_t totalMftSize = 0;
-        while (mftAttrOffset + 16 <= mftHeader->usedSize) {
+        while (mftAttrOffset + sizeof(AttributeHeader) <= mftHeader->usedSize) {
             auto* attr = reinterpret_cast<AttributeHeader*>(buffer.data() + mftAttrOffset);
 
-            if (attr->type == 0x80) { // $DATA Attribute
-                parseMftRuns(buffer.data(), mftAttrOffset, mftRuns);
-
-                if (attr->nonResident) {
-                    auto* nonResident = reinterpret_cast<NonResidentHeader*>(
-                        buffer.data() + mftAttrOffset + sizeof(AttributeHeader));
-                    totalMftSize = nonResident->dataSize;
-                }
+            // 0xFFFFFFFF is the end-of-attributes marker in NTFS
+            if (attr->type == 0xFFFFFFFF) {
                 break;
             }
 
-            // 0xFFFFFFFF is the end-of-attributes marker in NTFS
-            if (attr->type == 0xFFFFFFFF || attr->length == 0) {
+            if (attr->length == 0 ||
+                mftAttrOffset + attr->length > mftHeader->usedSize) {
+                return reportError(
+                    onError,
+                    QStringLiteral("Invalid NTFS MFT record 0 attribute length for %1").arg(devicePath)
+                );
+            }
+
+            if (attr->type == 0x80) { // $DATA Attribute
+                if (attr->nonResident == 0 ||
+                    mftAttrOffset + sizeof(AttributeHeader) + sizeof(NonResidentHeader) > mftHeader->usedSize) {
+                    return reportError(
+                        onError,
+                        QStringLiteral("Invalid NTFS $MFT data attribute for %1").arg(devicePath)
+                    );
+                }
+
+                parseMftRuns(buffer.data(), mftAttrOffset, mftRuns);
+
+                auto* nonResident = reinterpret_cast<NonResidentHeader*>(
+                    buffer.data() + mftAttrOffset + sizeof(AttributeHeader));
+
+                totalMftSize = nonResident->dataSize;
                 break;
             }
 
             mftAttrOffset += attr->length;
+        }
+
+        if (mftRuns.empty() || totalMftSize == 0) {
+            return reportError(
+                onError,
+                QStringLiteral("Could not locate NTFS MFT data runs for %1").arg(devicePath)
+            );
         }
 
         uint64_t totalRecords = totalMftSize / mftRecordSize;
@@ -539,14 +653,18 @@ namespace NtfsScannerEngine {
 
                 uint64_t toRead = std::min(mftScanBatchSizeInRecords, recordsInRun - r);
                 disk.seekg(runOffset + (r * mftRecordSize));
-                disk.read(batchBuffer.data(), toRead * mftRecordSize);
 
-                if (!disk) {
-                    if (onError) {
-                        onError(QStringLiteral("Failed to read NTFS MFT records from %1").arg(devicePath));
-                    }
-
-                    return false;
+                const uint64_t bytesToRead = toRead * mftRecordSize;
+                if (!disk ||
+                    bytesToRead > static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()) ||
+                    !readExact(
+                        disk,
+                        batchBuffer.data(),
+                        static_cast<std::streamsize>(bytesToRead))) {
+                    return reportError(
+                        onError,
+                        QStringLiteral("Failed to read NTFS MFT records from %1").arg(devicePath)
+                    );
                 }
 
                 for (uint64_t i = 0; i < toRead; ++i) {

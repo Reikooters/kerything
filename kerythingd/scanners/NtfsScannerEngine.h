@@ -270,6 +270,28 @@ namespace NtfsScannerEngine {
      */
 
     /**
+     * Reports an error by logging the message to the standard error output
+     * and invoking the provided error callback, if available.
+     *
+     * @param onError A callback invoked when an error occurs. If not provided, the error
+     *                is only logged to the console.
+     * @param message The error message to log and send to the callback.
+     * @return Always returns false to indicate an error occurred.
+     */
+    bool reportError(const ScannerHelper::ErrorCallback& onError, const QString& message);
+
+    /**
+     * Reads an exact amount of bytes from the given input stream into the provided buffer.
+     * Ensures that the number of bytes read matches the requested size.
+     *
+     * @param disk The input stream from which data is to be read.
+     * @param data The buffer where the read data will be stored.
+     * @param size The number of bytes to read from the stream.
+     * @return True if the exact number of bytes specified by size was successfully read, otherwise false.
+     */
+    bool readExact(std::ifstream& disk, char* data, std::streamsize size);
+
+    /**
      * Scans an NTFS device to process its Master File Table (MFT), extracting metadata and file information.
      *
      * This method attempts to open and scan the specified NTFS device. It processes the MFT records

@@ -4,6 +4,7 @@
 #include "LiveUpdateManager.h"
 
 #include "FanotifyHandleResolver.h"
+#include "FilesystemConstants.h"
 
 #include <cstring>
 #include <iostream>
@@ -23,20 +24,18 @@ namespace {
     };
 
     /*
-     * BTRFS_FIRST_FREE_OBJECTID is 256. A subvolume root directory is commonly
-     * exposed with inode/object id 256 when reached through the parent subvolume.
+     * A Btrfs subvolume root directory is commonly exposed with object id 256
+     * when reached through the parent subvolume.
      *
      * For live create/move-to events fanotify gives us parent handle + name. It
      * does not directly give us the child subvolume root id, so if the child looks
      * like a subvolume root, do not guess. Request a rescan instead.
      */
-    static constexpr quint64 BtrfsFirstFreeObjectId = 256;
-
     bool looksLikeBtrfsSubvolumeRoot(const ResolvedFanotifyHandle& resolved)
     {
         return resolved.ok &&
                resolved.isDirectory &&
-               resolved.inode == BtrfsFirstFreeObjectId;
+               resolved.inode == FilesystemConstants::BtrfsFirstFreeObjectId;
     }
 
     template <typename T>

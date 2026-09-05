@@ -20,6 +20,7 @@
 #include "SearchResultColumns.h"
 
 #include "IndexController.h"
+#include "FilesystemConstants.h"
 
 namespace {
     constexpr uint8_t NoMountPoint = IndexController::RecordHandle::NoMountPoint;
@@ -78,6 +79,66 @@ namespace {
             static_cast<int>(handle.mountPointIdx),
             filesystemPath
         );
+    }
+
+    bool isBtrfsNamespaceRootRecord(
+        const IndexController::DeviceIndex& deviceIndex,
+        const IndexController::RecordHandle& handle,
+        const FileRecord& record
+    ) {
+        if (!deviceIndex.usesNamespaceAwareMountExpansion()) {
+            return false;
+        }
+
+        if (record.fsIndex != FilesystemConstants::BtrfsFirstFreeObjectId) {
+            return false;
+        }
+
+        const int mountInfoIndex = deviceIndex.mountInfoIndexForMountPointIndex(
+            static_cast<int>(handle.mountPointIdx)
+        );
+
+        if (mountInfoIndex < 0 ||
+            mountInfoIndex >= static_cast<int>(deviceIndex.mounts.size())) {
+            return false;
+        }
+
+        const FileRecordNamespace namespaceEntry =
+            deviceIndex.namespaceForRecord(handle.recordIdx);
+
+        const BlockDeviceMountInfo& mount =
+            deviceIndex.mounts[static_cast<std::size_t>(mountInfoIndex)];
+
+        return mount.btrfsRootId != 0 &&
+               mount.btrfsRootId == namespaceEntry.fsNamespace;
+    }
+
+    QString mountedFullPathForHandle(
+        const IndexController::DeviceIndex& deviceIndex,
+        const IndexController::RecordHandle& handle,
+        const FileRecord& record
+    ) {
+        if (!hasMountedPath(deviceIndex, handle)) {
+            return {};
+        }
+
+        if (record.nameOffset + record.nameLen > deviceIndex.stringPool.size()) {
+            return {};
+        }
+
+        if (isBtrfsNamespaceRootRecord(deviceIndex, handle, record)) {
+            return QDir::cleanPath(deviceIndex.mountPoints.at(handle.mountPointIdx));
+        }
+
+        const QString fileName = QString::fromUtf8(
+            &deviceIndex.stringPool[record.nameOffset],
+            record.nameLen
+        );
+
+        const std::string parentPath = deviceIndex.getFullPath(record.parentRecordIdx);
+        const QString mountedParentPath = mountedPathForHandle(deviceIndex, handle, parentPath);
+
+        return QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
     }
 
     QString fileTypeText(const FileRecord& rec)
@@ -867,18 +928,15 @@ std::optional<QUrl> FileModel::localUrlForRow(const int row) const {
 
             const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
 
-            if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
-                return std::nullopt;
-            }
-
-            const QString fileName = QString::fromUtf8(
-                &deviceIndex->stringPool[rec.nameOffset],
-                rec.nameLen
+            const QString fullPath = mountedFullPathForHandle(
+                *deviceIndex,
+                handle,
+                rec
             );
 
-            const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-            const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
-            const QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
+            if (fullPath.isEmpty()) {
+                return std::nullopt;
+            }
 
             return QUrl::fromLocalFile(fullPath);
         }
@@ -1072,22 +1130,15 @@ QMimeData *FileModel::mimeData(const QModelIndexList &indexes) const {
 
                     const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
 
-                    if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
-                        return std::nullopt;
-                    }
-
-                    // Resolve file name from string pool
-                    const QString fileName = QString::fromUtf8(
-                        &deviceIndex->stringPool[rec.nameOffset],
-                        rec.nameLen
+                    const QString fullPath = mountedFullPathForHandle(
+                        *deviceIndex,
+                        handle,
+                        rec
                     );
 
-                    // Resolve parent directory path
-                    const std::string parentPath = deviceIndex->getFullPath(rec.parentRecordIdx);
-                    const QString mountedParentPath = mountedPathForHandle(*deviceIndex, handle, parentPath);
-
-                    // Construct the absolute Linux path and wrap it in a QUrl
-                    const QString fullPath = QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
+                    if (fullPath.isEmpty()) {
+                        return std::nullopt;
+                    }
 
                     return QUrl::fromLocalFile(fullPath);
                 }

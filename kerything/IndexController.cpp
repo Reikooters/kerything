@@ -252,7 +252,7 @@ namespace {
             : IndexController::contains(haystack, needle);
     }
 
-        uint32_t makeTrigram(std::string_view text, std::size_t offset)
+    uint32_t makeTrigram(std::string_view text, std::size_t offset)
     {
         return (static_cast<uint32_t>(static_cast<unsigned char>(text[offset])) << 16) |
                (static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 1])) << 8) |
@@ -271,6 +271,32 @@ namespace {
             }
         );
         return out;
+    }
+
+    std::string regexPatternFromParsedQuery(
+        const IndexController::ParsedSearchQuery& parsedQuery
+    ) {
+        std::string regexPattern;
+
+        for (std::size_t i = 0; i < parsedQuery.keywords.size(); ++i) {
+            if (i != 0) {
+                regexPattern += ' ';
+            }
+
+            regexPattern += parsedQuery.keywords[i];
+        }
+
+        return regexPattern;
+    }
+
+    re2::RE2::Options kerythingRegexOptions(
+        const IndexController::SearchOptions& searchOptions
+    ) {
+        re2::RE2::Options options;
+        options.set_log_errors(false);
+        options.set_never_nl(true);
+        options.set_case_sensitive(searchOptions.matchCase);
+        return options;
     }
 
     bool regexMetaCharacterCanMakePreviousOptional(char c) noexcept
@@ -338,14 +364,69 @@ namespace {
             current.clear();
         };
 
-        bool hasAlternation = false;
+        auto skipCharacterClass = [&](std::size_t& i) {
+            bool escaped = false;
+
+            while (++i < pattern.size()) {
+                const char classChar = pattern[i];
+
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+
+                if (classChar == '\\') {
+                    escaped = true;
+                    continue;
+                }
+
+                if (classChar == ']') {
+                    break;
+                }
+            }
+        };
+
+        auto skipGroup = [&](std::size_t& i) {
+            int depth = 1;
+            bool escaped = false;
+
+            while (++i < pattern.size() && depth > 0) {
+                const char groupChar = pattern[i];
+
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+
+                if (groupChar == '\\') {
+                    escaped = true;
+                    continue;
+                }
+
+                if (groupChar == '[') {
+                    skipCharacterClass(i);
+                    continue;
+                }
+
+                if (groupChar == '(') {
+                    ++depth;
+                    continue;
+                }
+
+                if (groupChar == ')') {
+                    --depth;
+                    continue;
+                }
+            }
+        };
 
         for (std::size_t i = 0; i < pattern.size(); ++i) {
             const char c = pattern[i];
 
             if (c == '|') {
-                hasAlternation = true;
-                flush();
+                // Top-level alternation means the literal before and after the
+                // operator are branch-specific, not globally mandatory.
+                current.clear();
                 continue;
             }
 
@@ -354,26 +435,16 @@ namespace {
                 // For example, [0-2] must not contribute the literal "0-2"
                 // to the trigram prefilter.
                 flush();
+                skipCharacterClass(i);
+                continue;
+            }
 
-                bool escaped = false;
-                while (++i < pattern.size()) {
-                    const char classChar = pattern[i];
-
-                    if (escaped) {
-                        escaped = false;
-                        continue;
-                    }
-
-                    if (classChar == '\\') {
-                        escaped = true;
-                        continue;
-                    }
-
-                    if (classChar == ']') {
-                        break;
-                    }
-                }
-
+            if (c == '(') {
+                // Do not extract from inside groups. This avoids treating
+                // branch-specific literals in (png|jpg) as mandatory while
+                // still allowing literals before/after the group.
+                flush();
+                skipGroup(i);
                 continue;
             }
 
@@ -388,7 +459,7 @@ namespace {
                 if (escapedRegexCharIsLiteral(escaped)) {
                     current.push_back(escaped);
                 } else {
-                    // Character classes like \d, \w, \s are not literals.
+                    // Classes like \d, \w, and \s are not fixed literals.
                     flush();
                 }
 
@@ -422,12 +493,6 @@ namespace {
 
         flush();
 
-        if (hasAlternation) {
-            // First implementation: do not try to prove mandatory literals across
-            // alternation branches. Falling back to a full indexed-name scan is safe.
-            return {};
-        }
-
         std::sort(
             runs.begin(),
             runs.end(),
@@ -451,6 +516,225 @@ namespace {
         }
 
         return runs;
+    }
+
+    bool isRegexLiteralExtensionCharacter(unsigned char c) noexcept
+    {
+        return std::isalnum(c) || c == '_' || c == '-' || c == '+';
+    }
+
+    std::optional<IndexController::ExtensionSet> extractRegexFinalExtensionAlternation(
+        std::string_view pattern
+    ) {
+        std::optional<IndexController::ExtensionSet> result;
+
+        for (std::size_t i = 0; i + 2 < pattern.size(); ++i) {
+            if (pattern[i] != '\\' || pattern[i + 1] != '.' || pattern[i + 2] != '(') {
+                continue;
+            }
+
+            std::size_t pos = i + 3;
+
+            if (pos + 1 < pattern.size() &&
+                pattern[pos] == '?' &&
+                pattern[pos + 1] == ':') {
+                pos += 2;
+            }
+
+            std::vector<std::string> extensions;
+            std::string current;
+            bool valid = true;
+
+            while (pos < pattern.size()) {
+                const char c = pattern[pos];
+
+                if (c == ')') {
+                    if (!current.empty()) {
+                        extensions.push_back(std::move(current));
+                        current.clear();
+                    }
+
+                    ++pos;
+                    break;
+                }
+
+                if (c == '|') {
+                    if (current.empty()) {
+                        valid = false;
+                        break;
+                    }
+
+                    extensions.push_back(std::move(current));
+                    current.clear();
+                    ++pos;
+                    continue;
+                }
+
+                if (c == '\\') {
+                    // Keep the first pass intentionally conservative. Escaped
+                    // characters inside the extension alternatives are unusual,
+                    // and treating them as unsupported avoids false prefilters.
+                    valid = false;
+                    break;
+                }
+
+                if (!isRegexLiteralExtensionCharacter(static_cast<unsigned char>(c))) {
+                    valid = false;
+                    break;
+                }
+
+                current.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                ++pos;
+            }
+
+            if (!valid || extensions.empty()) {
+                continue;
+            }
+
+            while (pos < pattern.size() && pattern[pos] == '$') {
+                ++pos;
+            }
+
+            // Only use this optimization when the extension group is at the end
+            // of the regex, apart from an optional trailing '$'. This keeps the
+            // prefilter safe and predictable.
+            if (pos != pattern.size()) {
+                continue;
+            }
+
+            IndexController::ExtensionSet extensionSet;
+            extensionSet.reserve(extensions.size());
+
+            for (std::string& extension : extensions) {
+                extension = IndexController::normalizeExtensionToken(extension);
+
+                if (!extension.empty()) {
+                    extensionSet.insert(std::move(extension));
+                }
+            }
+
+            if (!extensionSet.empty()) {
+                result = std::move(extensionSet);
+            }
+        }
+
+        return result;
+    }
+
+    std::optional<IndexController::ExtensionSet> extractRegexFinalSimpleExtension(
+        std::string_view pattern
+    ) {
+        std::size_t end = pattern.size();
+
+        while (end > 0 && pattern[end - 1] == '$') {
+            --end;
+        }
+
+        if (end < 4) {
+            return std::nullopt;
+        }
+
+        std::size_t dotPos = std::string_view::npos;
+
+        for (std::size_t i = 0; i + 1 < end; ++i) {
+            if (pattern[i] == '\\' && pattern[i + 1] == '.') {
+                dotPos = i;
+            }
+        }
+
+        if (dotPos == std::string_view::npos) {
+            return std::nullopt;
+        }
+
+        const std::size_t extensionStart = dotPos + 2;
+        if (extensionStart >= end) {
+            return std::nullopt;
+        }
+
+        std::string extension;
+        extension.reserve(end - extensionStart);
+
+        for (std::size_t i = extensionStart; i < end; ++i) {
+            const unsigned char c = static_cast<unsigned char>(pattern[i]);
+
+            if (!isRegexLiteralExtensionCharacter(c)) {
+                return std::nullopt;
+            }
+
+            extension.push_back(static_cast<char>(std::tolower(c)));
+        }
+
+        extension = IndexController::normalizeExtensionToken(extension);
+        if (extension.empty()) {
+            return std::nullopt;
+        }
+
+        IndexController::ExtensionSet extensionSet;
+        extensionSet.insert(std::move(extension));
+        return extensionSet;
+    }
+
+    std::vector<uint32_t> collectExtensionCandidates(
+        const IndexController::DeviceIndex& index,
+        const IndexController::ExtensionSet& extensions
+    ) {
+        std::vector<uint32_t> candidates;
+
+        if (extensions.empty()) {
+            return candidates;
+        }
+
+        std::size_t estimatedSize = 0;
+
+        for (const std::string& extension : extensions) {
+            if (const std::vector<uint32_t>* records =
+                    index.recordIndicesForExtension(extension)) {
+                estimatedSize += records->size();
+                    }
+        }
+
+        candidates.reserve(estimatedSize);
+
+        for (const std::string& extension : extensions) {
+            const std::vector<uint32_t>* records =
+                index.recordIndicesForExtension(extension);
+
+            if (!records) {
+                continue;
+            }
+
+            candidates.insert(
+                candidates.end(),
+                records->begin(),
+                records->end()
+            );
+        }
+
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(
+            std::unique(candidates.begin(), candidates.end()),
+            candidates.end()
+        );
+
+        return candidates;
+    }
+
+    void intersectSortedUniqueCandidates(
+        std::vector<uint32_t>& candidates,
+        const std::vector<uint32_t>& filter
+    ) {
+        std::vector<uint32_t> nextCandidates;
+        nextCandidates.reserve(std::min(candidates.size(), filter.size()));
+
+        std::set_intersection(
+            candidates.begin(),
+            candidates.end(),
+            filter.begin(),
+            filter.end(),
+            std::back_inserter(nextCandidates)
+        );
+
+        candidates = std::move(nextCandidates);
     }
 
     std::size_t trigramPostingCount(
@@ -623,18 +907,7 @@ namespace {
             trigramRecordIndices.end()
         );
 
-        std::vector<uint32_t> nextCandidates;
-        nextCandidates.reserve(std::min(candidates.size(), trigramRecordIndices.size()));
-
-        std::set_intersection(
-            candidates.begin(),
-            candidates.end(),
-            trigramRecordIndices.begin(),
-            trigramRecordIndices.end(),
-            std::back_inserter(nextCandidates)
-        );
-
-        candidates = std::move(nextCandidates);
+        intersectSortedUniqueCandidates(candidates, trigramRecordIndices);
         return !candidates.empty();
     }
 
@@ -5343,33 +5616,33 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
         return results;
     }
 
-    std::string regexPattern;
+    const std::string regexPattern = regexPatternFromParsedQuery(parsedQuery);
+    const std::string prefilterPattern = asciiLowercaseCopy(regexPattern);
 
-    for (std::size_t i = 0; i < regexTokens.size(); ++i) {
-        if (i != 0) {
-            regexPattern += ' ';
-        }
-
-        regexPattern += regexTokens[i];
-    }
-
-    if (!options.matchCase) {
-        regexPattern = asciiLowercaseCopy(regexPattern);
-    }
-
-    re2::RE2::Options re2Options;
-    re2Options.set_log_errors(false);
-    re2Options.set_never_nl(true);
-    re2Options.set_case_sensitive(true);
-
-    const re2::RE2 regex(regexPattern, re2Options);
+    re2::RE2 regex(regexPattern, kerythingRegexOptions(options));
 
     if (!regex.ok()) {
         return results;
     }
 
     std::vector<std::string> literalRuns =
-        extractConservativeRegexLiteralRuns(regexPattern);
+        extractConservativeRegexLiteralRuns(prefilterPattern);
+
+    std::optional<ExtensionSet> regexExtensionFilter =
+        extractRegexFinalExtensionAlternation(prefilterPattern);
+
+    if (!regexExtensionFilter) {
+        regexExtensionFilter = extractRegexFinalSimpleExtension(prefilterPattern);
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "regex search prefilter"
+              << " pattern=" << regexPattern
+              << " literalRuns=" << literalRuns.size()
+              << " extensionFilter="
+              << (regexExtensionFilter ? regexExtensionFilter->size() : 0)
+              << "\n";
+#endif
 
     auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
         if (index.indexId > RecordHandle::MaxIndexId) {
@@ -5406,51 +5679,6 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
         );
     };
 
-    auto collectExtensionCandidates = [](
-        const DeviceIndex& index,
-        const ExtensionSet& extensions
-    ) {
-        std::vector<uint32_t> candidates;
-
-        if (extensions.empty()) {
-            return candidates;
-        }
-
-        std::size_t estimatedSize = 0;
-
-        for (const std::string& extension : extensions) {
-            if (const std::vector<uint32_t>* records =
-                    index.recordIndicesForExtension(extension)) {
-                estimatedSize += records->size();
-            }
-        }
-
-        candidates.reserve(estimatedSize);
-
-        for (const std::string& extension : extensions) {
-            const std::vector<uint32_t>* records =
-                index.recordIndicesForExtension(extension);
-
-            if (!records) {
-                continue;
-            }
-
-            candidates.insert(
-                candidates.end(),
-                records->begin(),
-                records->end()
-            );
-        }
-
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(
-            std::unique(candidates.begin(), candidates.end()),
-            candidates.end()
-        );
-
-        return candidates;
-    };
-
     for (const auto& [indexId, indexPtr] : indexByIndexId_) {
         Q_UNUSED(indexId);
 
@@ -5463,7 +5691,18 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
         std::vector<uint32_t> candidates;
         bool firstTrigram = true;
         bool trigramsUsed = false;
+        bool extensionCandidatesUsed = false;
         bool skipDevice = false;
+
+        if (regexExtensionFilter && !regexExtensionFilter->empty()) {
+            candidates = collectExtensionCandidates(index, *regexExtensionFilter);
+            extensionCandidatesUsed = true;
+            firstTrigram = candidates.empty();
+
+            if (candidates.empty()) {
+                continue;
+            }
+        }
 
         for (const std::string& literalRun : literalRuns) {
             const std::vector<QueryTrigram> literalTrigrams =
@@ -5525,20 +5764,14 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
                 return;
             }
 
-            std::string_view name;
-
-            if (options.matchCase) {
-                if (rec.nameOffset + rec.nameLen > index.stringPool.size()) {
-                    return;
-                }
-
-                name = std::string_view(
-                    &index.stringPool[rec.nameOffset],
-                    rec.nameLen
-                );
-            } else {
-                name = lowercaseName;
+            if (rec.nameOffset + rec.nameLen > index.stringPool.size()) {
+                return;
             }
+
+            const std::string_view name(
+                &index.stringPool[rec.nameOffset],
+                rec.nameLen
+            );
 
             const re2::StringPiece input(name.data(), static_cast<int>(name.size()));
             if (!re2::RE2::PartialMatch(input, regex)) {
@@ -5548,7 +5781,7 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
             appendResult(index, recordIdx);
         };
 
-        if (trigramsUsed) {
+        if (trigramsUsed || extensionCandidatesUsed) {
             for (const uint32_t recordIdx : candidates) {
                 resultCallback(recordIdx);
             }
@@ -5573,6 +5806,27 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
     }
 
     return results;
+}
+
+std::optional<QString> IndexController::validateRegexSearchQuery(
+    const std::string& query,
+    SearchOptions options
+) const {
+    const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
+
+    if (parsedQuery.keywords.empty()) {
+        return std::nullopt;
+    }
+
+    const std::string regexPattern = regexPatternFromParsedQuery(parsedQuery);
+
+    re2::RE2 regex(regexPattern, kerythingRegexOptions(options));
+
+    if (regex.ok()) {
+        return std::nullopt;
+    }
+
+    return QString::fromStdString(regex.error());
 }
 
 std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(

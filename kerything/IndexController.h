@@ -2010,6 +2010,10 @@ public:
     );
     std::vector<RecordHandle> performTrigramSearch(const std::string& query, SearchOptions options);
     std::vector<RecordHandle> performRegexSearch(const std::string& query, SearchOptions options);
+    [[nodiscard]] std::optional<QString> validateRegexSearchQuery(
+        const std::string& query,
+        SearchOptions options
+    ) const;
     std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;
     std::vector<RecordHandle> sortSearchResults(
         std::vector<RecordHandle> results,

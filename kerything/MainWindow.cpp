@@ -478,7 +478,13 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     regexAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
     regexAct_->setCheckable(true);
     regexAct_->setChecked(regexEnabled_);
-    regexAct_->setStatusTip(QStringLiteral("Interpret the search text as a regular expression"));
+    regexAct_->setStatusTip(QStringLiteral("Interpret the search text as an RE2 regular expression"));
+    regexAct_->setToolTip(
+        QStringLiteral(
+            "Interpret the search text as an RE2 regular expression.\n"
+            "RE2 is fast and safe for interactive search, but does not support every PCRE feature."
+        )
+    );
     connect(regexAct_, &QAction::toggled, this, &MainWindow::setRegexEnabled);
     addAction(regexAct_);
 
@@ -644,16 +650,47 @@ void MainWindow::updateSearch(const QString &text) {
         effectiveQuery += activeSearchFilter_;
     }
 
-    auto results = regexEnabled_
-        ? controller_->indexController()->performRegexSearch(
+    std::vector<IndexController::RecordHandle> results;
+
+    if (regexEnabled_) {
+        const IndexController::SearchOptions regexOptions{
+            .matchCase = matchCaseEnabled_,
+            .matchWholeWord = false,
+            .useRegex = true
+        };
+
+        if (const std::optional<QString> regexError =
+                controller_->indexController()->validateRegexSearchQuery(
+                    effectiveQuery.toStdString(),
+                    regexOptions
+                )) {
+            auto end1 = std::chrono::steady_clock::now();
+
+            model_->setSortedSearchResults(
+                {},
+                tableView_->horizontalHeader()->sortIndicatorSection(),
+                tableView_->horizontalHeader()->sortIndicatorOrder()
+            );
+
+            restoreSelectedRecordHandles(selectedHandles, currentHandle);
+
+            std::chrono::duration<double> elapsed1 = end1 - start1;
+
+            statusBar()->showMessage(
+                QStringLiteral("Invalid regex: %1 (checked in %2s)")
+                    .arg(*regexError)
+                    .arg(elapsed1.count(), 0, 'f', 4)
+            );
+
+            return;
+        }
+
+        results = controller_->indexController()->performRegexSearch(
             effectiveQuery.toStdString(),
-            IndexController::SearchOptions{
-                .matchCase = matchCaseEnabled_,
-                .matchWholeWord = false,
-                .useRegex = true
-            }
-        )
-        : controller_->indexController()->performTrigramSearch(
+            regexOptions
+        );
+    } else {
+        results = controller_->indexController()->performTrigramSearch(
             effectiveQuery.toStdString(),
             IndexController::SearchOptions{
                 .matchCase = matchCaseEnabled_,
@@ -661,6 +698,8 @@ void MainWindow::updateSearch(const QString &text) {
                 .useRegex = false
             }
         );
+    }
+
     auto end1 = std::chrono::steady_clock::now();
 
     auto start2 = std::chrono::steady_clock::now();
@@ -976,7 +1015,20 @@ void MainWindow::updateSearchLineFilterHint()
     if (activeSearchFilter_.isEmpty()) {
         searchLine_->setPlaceholderText(QStringLiteral("Search files..."));
         searchLine_->setToolTip(
-            QStringLiteral("Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, or folder:.")
+            regexEnabled_
+                ? QStringLiteral(
+                    "Search indexed file names using RE2 regular expressions.\n"
+                    "The Match Case option controls regex case sensitivity.\n\n"
+                    "Examples:\n"
+                    "  \\.cpp$                  files ending in .cpp\n"
+                    "  screenshot[0-9]{4}      screenshot followed by four digits\n"
+                    "  holiday\\.(png|jpg)$     holiday image files\n"
+                    "  .*(draft|final)\\.pdf$   draft or final PDFs\n\n"
+                    "Filters such as ext:mp4, ext:wav;mp3, or folder: can still be used."
+                )
+                : QStringLiteral(
+                    "Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, or folder:."
+                )
         );
         updateFilterChip();
         updateFilterMenuTitle();
@@ -1356,6 +1408,7 @@ void MainWindow::setRegexEnabled(bool enabled)
 
     updateSearchOptionChips();
     updateSearchMenuTitle();
+    updateSearchLineFilterHint();
     refreshSearchHighlighting();
     updateSearch(searchLine_ ? searchLine_->text() : QString());
 }

@@ -12,6 +12,7 @@ install='kerything.install'
 
 depends=(
   'qt6-base' # Qt6::Widgets, Qt6::Core, Qt6::Network
+  're2' # Regular expression support for search
   'onetbb' # TBB::tbb
   'e2fsprogs' # ext2fs, com_err
   'util-linux-libs' # blkid, mount

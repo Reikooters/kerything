@@ -599,34 +599,6 @@ namespace NtfsScannerEngine {
 
         totalStringPoolLength += name.length();
 
-        // auto flushChunk = [&]() -> bool {
-        //     if (chunk.empty()) {
-        //         return true;
-        //     }
-        //
-        //     if (onChunk && !onChunk(chunk)) {
-        //         return false;
-        //     }
-        //
-        //     filesEmitted += chunk.size();
-        //     chunk.clear();
-        //
-        //     if (onProgress) {
-        //         onProgress(filesSeen, filesEmitted);
-        //     }
-        //
-        //     return true;
-        // };
-
-        //     if (chunk.size() >= 1024) {
-        //         if (!flushChunk()) {
-        //             if (onError) {
-        //                 onError(QStringLiteral("scan aborted by receiver"));
-        //             }
-        //             return false;
-        //         }
-        //     }
-
         // Check whether the string pool will exceed the target buffer size
         if (stringPool.size() + name.length() > kMaxIpcBufferSizeBytes) {
             // Copy string pool chunk, so we can clear it after sending

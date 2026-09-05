@@ -5365,80 +5365,15 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             for (const QueryTrigram& queryTrigram : keywordTrigrams) {
                 trigramsUsed = true;
 
-                if (queryTrigram.postingCount == 0) {
-                    // A required trigram is absent from this device, so this
-                    // keyword cannot match anything on the device.
+                if (!intersectCandidateSetWithTrigram(
+                        *indexPtr,
+                        queryTrigram.trigram,
+                        queryTrigram.postingCount,
+                        candidates,
+                        firstTrigram
+                    )) {
                     skipDevice = true;
                     break;
-                }
-
-                // 3. Intersect candidates (Candidate Filtering)
-                if (firstTrigram) {
-                    candidates.reserve(queryTrigram.postingCount);
-
-                    forEachRecordIdxForTrigram(
-                        indexPtr->trigramRanges,
-                        indexPtr->trigramPostings,
-                        queryTrigram.trigram,
-                        [&](uint32_t recordIdx) {
-                            candidates.push_back(recordIdx);
-                        }
-                    );
-
-                    forEachRecordIdxForTrigram(
-                        indexPtr->liveDeltaFlatIndex,
-                        queryTrigram.trigram,
-                        [&](uint32_t recordIdx) {
-                            candidates.push_back(recordIdx);
-                        }
-                    );
-
-                    std::sort(candidates.begin(), candidates.end());
-                    candidates.erase(
-                        std::unique(candidates.begin(), candidates.end()),
-                        candidates.end()
-                    );
-
-                    firstTrigram = false;
-                } else {
-                    std::vector<uint32_t> trigramRecordIndices;
-                    trigramRecordIndices.reserve(queryTrigram.postingCount);
-
-                    forEachRecordIdxForTrigram(
-                        indexPtr->trigramRanges,
-                        indexPtr->trigramPostings,
-                        queryTrigram.trigram,
-                        [&](uint32_t recordIdx) {
-                            trigramRecordIndices.push_back(recordIdx);
-                        }
-                    );
-
-                    forEachRecordIdxForTrigram(
-                        indexPtr->liveDeltaFlatIndex,
-                        queryTrigram.trigram,
-                        [&](uint32_t recordIdx) {
-                            trigramRecordIndices.push_back(recordIdx);
-                        }
-                    );
-
-                    std::sort(trigramRecordIndices.begin(), trigramRecordIndices.end());
-                    trigramRecordIndices.erase(
-                        std::unique(trigramRecordIndices.begin(), trigramRecordIndices.end()),
-                        trigramRecordIndices.end()
-                    );
-
-                    std::vector<uint32_t> nextCandidates;
-                    nextCandidates.reserve(std::min(candidates.size(), trigramRecordIndices.size()));
-
-                    std::set_intersection(
-                        candidates.begin(),
-                        candidates.end(),
-                        trigramRecordIndices.begin(),
-                        trigramRecordIndices.end(),
-                        std::back_inserter(nextCandidates)
-                    );
-
-                    candidates = std::move(nextCandidates);
                 }
 
                 if (candidates.empty()) {
@@ -5544,13 +5479,18 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     return results;
 }
 
-std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
+IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     const std::string& query,
     SearchOptions options
 ) {
+#ifdef KERYTHING_ENABLE_LOGGING
+    const auto regexSearchStart = Clock::now();
+#endif
+
     std::shared_lock lock(indexMutex_);
 
-    std::vector<RecordHandle> results;
+    RegexSearchResult searchResult;
+    std::vector<RecordHandle>& results = searchResult.records;
 
     const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
     const std::vector<std::string>& regexTokens = parsedQuery.keywords;
@@ -5559,16 +5499,11 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
     const bool foldersOnly = parsedQuery.foldersOnly;
 
     if (foldersOnly && hasExtensionFilter) {
-        return results;
+        return searchResult;
     }
 
     if (regexTokens.empty()) {
-        // SearchOptions nonRegexOptions = options;
-        // nonRegexOptions.useRegex = false;
-        // nonRegexOptions.matchWholeWord = false;
-        // return performTrigramSearch(query, nonRegexOptions);
-
-        return results;
+        return searchResult;
     }
 
     const std::string regexPattern = regexPatternFromParsedQuery(parsedQuery);
@@ -5577,7 +5512,18 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
     re2::RE2 regex(regexPattern, kerythingRegexOptions(options));
 
     if (!regex.ok()) {
-        return results;
+        searchResult.errorText = QString::fromStdString(regex.error());
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cerr << "performRegexSearchWithError"
+                  << " invalid regex"
+                  << " query=" << query
+                  << " error=" << regex.error()
+                  << " elapsed=" << elapsedMsSince(regexSearchStart)
+                  << "ms\n";
+#endif
+
+        return searchResult;
     }
 
     std::vector<std::string> literalRuns =
@@ -5760,7 +5706,15 @@ std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
         }
     }
 
-    return results;
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "performRegexSearchWithError"
+              << " query=" << query
+              << " results=" << results.size()
+              << " elapsed=" << elapsedMsSince(regexSearchStart)
+              << "ms\n";
+#endif
+
+    return searchResult;
 }
 
 std::optional<QString> IndexController::validateRegexSearchQuery(

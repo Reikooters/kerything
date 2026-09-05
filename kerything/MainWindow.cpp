@@ -665,11 +665,13 @@ void MainWindow::updateSearch(const QString &text) {
             .useRegex = true
         };
 
-        if (const std::optional<QString> regexError =
-                controller_->indexController()->validateRegexSearchQuery(
-                    effectiveQuery.toStdString(),
-                    regexOptions
-                )) {
+        IndexController::RegexSearchResult regexResult =
+            controller_->indexController()->performRegexSearchWithError(
+                effectiveQuery.toStdString(),
+                regexOptions
+            );
+
+        if (regexResult.errorText) {
             auto end1 = std::chrono::steady_clock::now();
 
             if (model_) {
@@ -694,17 +696,14 @@ void MainWindow::updateSearch(const QString &text) {
 
             statusBar()->showMessage(
                 QStringLiteral("Invalid regex: %1 (checked in %2s)")
-                    .arg(*regexError)
+                    .arg(*regexResult.errorText)
                     .arg(elapsed1.count(), 0, 'f', 4)
             );
 
             return;
         }
 
-        results = controller_->indexController()->performRegexSearch(
-            effectiveQuery.toStdString(),
-            regexOptions
-        );
+        results = std::move(regexResult.records);
     } else {
         results = controller_->indexController()->performTrigramSearch(
             effectiveQuery.toStdString(),

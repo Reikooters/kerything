@@ -1964,6 +1964,11 @@ public:
         bool useRegex = false;
     };
 
+    struct RegexSearchResult {
+        std::vector<RecordHandle> records;
+        std::optional<QString> errorText;
+    };
+
     struct LiveUpdateApplyResult {
         qsizetype metadataChanged = 0;
         qsizetype upserted = 0;
@@ -2009,7 +2014,7 @@ public:
         const std::vector<BlockDeviceMountInfo>& mounts = {}
     );
     std::vector<RecordHandle> performTrigramSearch(const std::string& query, SearchOptions options);
-    std::vector<RecordHandle> performRegexSearch(const std::string& query, SearchOptions options);
+    RegexSearchResult performRegexSearchWithError(const std::string& query, SearchOptions options);
     [[nodiscard]] std::optional<QString> validateRegexSearchQuery(
         const std::string& query,
         SearchOptions options

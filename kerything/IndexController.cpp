@@ -5053,13 +5053,13 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 }
 
                 const auto& record = device->fileRecords[handle.recordIdx];
-                const std::string_view lowercaseName =
-                    device->lowercaseRecordName(record);
 
-                if (!lowercaseName.empty()) {
-                    key.nameKey = lowercaseName;
-                    key.valid = true;
+                if (record.nameOffset + record.nameLen > device->stringPool.size()) {
+                    continue;
                 }
+
+                key.nameKey = device->lowercaseRecordName(record);
+                key.valid = true;
             }
         }
 

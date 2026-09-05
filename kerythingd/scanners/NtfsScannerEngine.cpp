@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include "../lib/utfcpp/utf8.h"
 
 #include "NtfsScannerEngine.h"
@@ -88,7 +89,7 @@ namespace NtfsScannerEngine {
         }
     }
 
-    void processMftRecord(
+    bool processMftRecord(
         MFT_RecordHeader* header,
         char* buffer,
         uint64_t mftIndex,
@@ -199,7 +200,16 @@ namespace NtfsScannerEngine {
         // to process them later.
         if (isBaseRecord && !attributeListFound) {
             // Record is on its own, we can add it to the database now.
-            finalizeAndAddFile(info, allNames, dataAttrFound, sizeFromData, db, mftIndex, onFileRecordChunk, onStringPoolChunk);
+            return finalizeAndAddFile(
+                info,
+                allNames,
+                dataAttrFound,
+                sizeFromData,
+                db,
+                mftIndex,
+                onFileRecordChunk,
+                onStringPoolChunk
+            );
         }
         else {
             // Record is part of two or more records related to the file.
@@ -219,7 +229,7 @@ namespace NtfsScannerEngine {
             if (!dataAttrFound && allNames.empty()) {
                 // Record doesn't contain any information we care about,
                 // don't need to keep track of it for later
-                return;
+                return true;
             }
 
             db.extensionRecordFileInfos[baseIndex].emplace_back(
@@ -233,9 +243,11 @@ namespace NtfsScannerEngine {
 
             // Note for future me: 'allNames' is moved into the record - it must not be used afterward.
         }
+
+        return true;
     }
 
-    void finalizeAndAddFile(
+    bool finalizeAndAddFile(
         FileInfo& info,
         const std::vector<TempFileLink>& allNames,
         bool dataAttrFound,
@@ -282,6 +294,10 @@ namespace NtfsScannerEngine {
 
         // Add file information to the database
         for (const auto& link : info.links) {
+            if (link.name.empty()) {
+                continue;
+            }
+
             // System files starting with $ are usually hidden in Everything
             if (link.name[0] == '$' && mftIndex <= 38) {
                 continue;
@@ -289,15 +305,40 @@ namespace NtfsScannerEngine {
 
             // Insert root directory as empty string to match EXT4 scanner behaviour
             if (link.name == ".") {
-                db.add("", info.mftIndex, link.parentIndex, info.size, info.modificationTime, info.isDir, info.isSymlink, onFileRecordChunk, onStringPoolChunk);
+                if (!db.add(
+                        "",
+                        info.mftIndex,
+                        link.parentIndex,
+                        info.size,
+                        info.modificationTime,
+                        info.isDir,
+                        info.isSymlink,
+                        onFileRecordChunk,
+                        onStringPoolChunk)) {
+                    return false;
+                }
+
                 continue;
             }
 
-            db.add(link.name, mftIndex, link.parentIndex, info.size, info.modificationTime, info.isDir, info.isSymlink, onFileRecordChunk, onStringPoolChunk);
+            if (!db.add(
+                    link.name,
+                    mftIndex,
+                    link.parentIndex,
+                    info.size,
+                    info.modificationTime,
+                    info.isDir,
+                    info.isSymlink,
+                    onFileRecordChunk,
+                    onStringPoolChunk)) {
+                return false;
+            }
         }
+
+        return true;
     }
 
-    void processExtensionRecords(
+    bool processExtensionRecords(
         NtfsDatabase& db,
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
@@ -328,19 +369,21 @@ namespace NtfsScannerEngine {
                 );
             }
 
-            finalizeAndAddFile(
-                info,
-                allNames,
-                dataAttrFound,
-                sizeFromData,
-                db,
-                baseMftIndex,
-                onFileRecordChunk,
-                onStringPoolChunk
-            );
+            if (!finalizeAndAddFile(
+                    info,
+                    allNames,
+                    dataAttrFound,
+                    sizeFromData,
+                    db,
+                    baseMftIndex,
+                    onFileRecordChunk,
+                    onStringPoolChunk)) {
+                return false;
+            }
         }
 
         db.extensionRecordFileInfos.clear();
+        return true;
     }
 
     std::string utf16ToUtf8(const char16_t* utf16_ptr, size_t length) {
@@ -468,14 +511,21 @@ namespace NtfsScannerEngine {
 
         uint64_t scannedRecords = 0;
 
+        if (onProgress) {
+            onProgress(Protocol::ScanProgress{
+                .phase = QStringLiteral("Reading MFT"),
+                .unit = QStringLiteral("records"),
+                .processed = 0,
+                .total = totalRecords
+            });
+        }
+
         // Step 3: Collect all valid records.
-
-        // TODO:
-        // - Implement file processing
-        // - Add calls to onProgress()
-        // - Add checks for cancellation requested and stop if requested
-
         for (const auto& run : mftRuns) {
+            if (shouldCancel && shouldCancel()) {
+                return false;
+            }
+
             uint64_t runOffset = run.logicalClusterNumber * bytesPerCluster;
             uint64_t recordsInRun = (run.length * bytesPerCluster) / mftRecordSize;
 
@@ -483,12 +533,28 @@ namespace NtfsScannerEngine {
             uint64_t runStartIndex = (run.virtualClusterNumber * bytesPerCluster) / mftRecordSize;
 
             for (uint64_t r = 0; r < recordsInRun; r += mftScanBatchSizeInRecords) {
+                if (shouldCancel && shouldCancel()) {
+                    return false;
+                }
+
                 uint64_t toRead = std::min(mftScanBatchSizeInRecords, recordsInRun - r);
                 disk.seekg(runOffset + (r * mftRecordSize));
                 disk.read(batchBuffer.data(), toRead * mftRecordSize);
 
+                if (!disk) {
+                    if (onError) {
+                        onError(QStringLiteral("Failed to read NTFS MFT records from %1").arg(devicePath));
+                    }
+
+                    return false;
+                }
+
                 for (uint64_t i = 0; i < toRead; ++i) {
                     ++scannedRecords;
+
+                    if (shouldCancel && shouldCancel()) {
+                        return false;
+                    }
 
                     // Notify progress
                     static constexpr uint64_t kProgressEvery = 4096; // must be power of two
@@ -512,7 +578,19 @@ namespace NtfsScannerEngine {
                     applyFixups(mftRecordPtr, mftRecordSize);
                     uint64_t mftRecordIndex = runStartIndex + r + i;
 
-                    processMftRecord(mftRecordHeader, mftRecordPtr, mftRecordIndex, db, onFileRecordChunk, onStringPoolChunk);
+                    if (!processMftRecord(
+                            mftRecordHeader,
+                            mftRecordPtr,
+                            mftRecordIndex,
+                            db,
+                            onFileRecordChunk,
+                            onStringPoolChunk)) {
+                        if (onError) {
+                            onError(QStringLiteral("NTFS scan was aborted while streaming file records"));
+                        }
+
+                        return false;
+                    }
                 }
             }
         }
@@ -524,35 +602,25 @@ namespace NtfsScannerEngine {
         // or files represented by extension records can be absent from the index,
         // causing their children to resolve as mount-root entries.
         if (!db.extensionRecordFileInfos.empty()) {
-            processExtensionRecords(
-                db,
-                onFileRecordChunk,
-                onStringPoolChunk
-            );
-        }
+            if (!processExtensionRecords(
+                    db,
+                    onFileRecordChunk,
+                    onStringPoolChunk)) {
+                if (onError) {
+                    onError(QStringLiteral("NTFS scan was aborted while streaming extension records"));
+                }
 
-        // Flush remaining file records
-        if (!db.records.empty()) {
-            // Copy string pool chunk, so we can clear it after sending
-            std::vector<FileRecord> fileRecordChunk = db.records;
-            if (!onFileRecordChunk(fileRecordChunk)) {
-                // TODO: scan aborted by receiver
-                std::cerr << "scan aborted by receiver\n";
                 return false;
             }
-            db.records.clear();
         }
 
-        // Flush remaining string pool records
-        if (!db.stringPool.empty()) {
-            // Copy string pool chunk, so we can clear it after sending
-            std::vector<char> stringPoolChunk = db.stringPool;
-            if (!onStringPoolChunk(stringPoolChunk)) {
-                // TODO: scan aborted by receiver
-                std::cerr << "scan aborted by receiver\n";
-                return false;
+        // Flush remaining records
+        if (!db.flush(onFileRecordChunk, onStringPoolChunk)) {
+            if (onError) {
+                onError(QStringLiteral("NTFS scan was aborted while flushing final records"));
             }
-            db.stringPool.clear();
+
+            return false;
         }
 
         // Report completion
@@ -568,7 +636,7 @@ namespace NtfsScannerEngine {
         return true;
     }
 
-    void NtfsDatabase::add(
+    bool NtfsDatabase::add(
         std::string_view name,
         uint64_t mftIndex,
         uint64_t parentMftIndex,
@@ -579,6 +647,16 @@ namespace NtfsScannerEngine {
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
     {
+        if (name.size() > std::numeric_limits<uint16_t>::max()) {
+            return true;
+        }
+
+        if (stringPool.size() + name.length() > kMaxIpcBufferSizeBytes) {
+            if (!flush(onFileRecordChunk, onStringPoolChunk)) {
+                return false;
+            }
+        }
+
         FileRecord rec{};
         rec.fsIndex = mftIndex;
         rec.parentFsIndex = parentMftIndex;
@@ -599,31 +677,46 @@ namespace NtfsScannerEngine {
 
         totalStringPoolLength += name.length();
 
-        // Check whether the string pool will exceed the target buffer size
-        if (stringPool.size() + name.length() > kMaxIpcBufferSizeBytes) {
-            // Copy string pool chunk, so we can clear it after sending
-            std::vector<char> stringPoolChunk = stringPool;
-            if (!onStringPoolChunk(stringPoolChunk)) {
-                // TODO: scan aborted by receiver
-                std::cerr << "scan aborted by receiver\n";
-                return;
-            }
-            stringPool.clear();
-        }
-
         records.push_back(rec);
         stringPool.insert(stringPool.end(), name.begin(), name.end());
 
         if (records.size() >= kRecordsPerIpcChunk) {
-            // Copy string pool chunk, so we can clear it after sending
-            std::vector<FileRecord> fileRecordChunk = records;
-            if (!onFileRecordChunk(fileRecordChunk)) {
-                // TODO: scan aborted by receiver
-                std::cerr << "scan aborted by receiver\n";
-                return;
+            if (!flush(onFileRecordChunk, onStringPoolChunk)) {
+                return false;
             }
-            records.clear();
         }
+
+        return true;
     }
 
+    bool NtfsDatabase::flush(
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
+    {
+        if (!records.empty()) {
+            std::vector<FileRecord> fileRecordChunk = std::move(records);
+
+            records.clear();
+            records.reserve(kRecordsPerIpcChunk);
+
+            if (!onFileRecordChunk(fileRecordChunk)) {
+                std::cerr << "NTFS scan aborted by file record receiver\n";
+                return false;
+            }
+        }
+
+        if (!stringPool.empty()) {
+            std::vector<char> stringPoolChunk = std::move(stringPool);
+
+            stringPool.clear();
+            stringPool.reserve(kMaxIpcBufferSizeBytes);
+
+            if (!onStringPoolChunk(stringPoolChunk)) {
+                std::cerr << "NTFS scan aborted by string pool receiver\n";
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

@@ -237,7 +237,7 @@ namespace NtfsScannerEngine {
          * @param onFileRecordChunk A callback function to handle file record chunk processing.
          * @param onStringPoolChunk A callback function to handle string pool chunk processing.
          */
-        void add(
+        bool add(
             std::string_view name,
             uint64_t mftIndex,
             uint64_t parentMftIndex,
@@ -245,6 +245,23 @@ namespace NtfsScannerEngine {
             uint64_t mod,
             bool isDir,
             bool isSymlink,
+            const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+            const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+
+        /**
+         * Flushes pending file records and string pool data by invoking the provided callback functions.
+         *
+         * Transfers the current file records and strings from the internal buffers to the respective
+         * callbacks for further processing. After the transfer, the buffers are cleared and resized
+         * for subsequent operations.
+         *
+         * @param onFileRecordChunk A callback function to handle processing of a chunk of file records.
+         *                          Returns false to indicate an error or to abort the operation.
+         * @param onStringPoolChunk A callback function to handle processing of a chunk of string pool data.
+         *                          Returns false to indicate an error or to abort the operation.
+         * @return True if both callbacks successfully processed their respective chunks; otherwise, false.
+         */
+        bool flush(
             const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
             const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
     };
@@ -321,7 +338,7 @@ namespace NtfsScannerEngine {
      * @param onFileRecordChunk Callback function to handle file record chunks.
      * @param onStringPoolChunk Callback function to handle string pool chunks.
      */
-    void processMftRecord(
+    bool processMftRecord(
         MFT_RecordHeader* header,
         char* buffer,
         uint64_t mftxInex,
@@ -341,7 +358,7 @@ namespace NtfsScannerEngine {
      * @param onFileRecordChunk A callback function to handle file record chunk processing.
      * @param onStringPoolChunk A callback function to handle string pool chunk processing.
      */
-    void finalizeAndAddFile(
+    bool finalizeAndAddFile(
         FileInfo& info,
         const std::vector<TempFileLink>& allNames,
         bool dataAttrFound,
@@ -358,7 +375,7 @@ namespace NtfsScannerEngine {
      * Records belonging to the same base MFT index are merged, then emitted via
      * finalizeAndAddFile().
      */
-    void processExtensionRecords(
+    bool processExtensionRecords(
         NtfsDatabase& db,
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);

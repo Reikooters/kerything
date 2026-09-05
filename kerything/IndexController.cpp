@@ -23,6 +23,9 @@
 #include <QSet>
 #include <QTextStream>
 
+#include <re2/re2.h>
+#include <re2/stringpiece.h>
+
 #include <chrono>
 
 #include "SearchResultColumns.h"
@@ -249,38 +252,205 @@ namespace {
             : IndexController::contains(haystack, needle);
     }
 
-    // Overload using TrigramEntry
-    bool containsTrigram(
-        const std::vector<IndexController::TrigramEntry>& index,
-        uint32_t trigram)
+        uint32_t makeTrigram(std::string_view text, std::size_t offset)
     {
-        const auto range = std::equal_range(
-            index.begin(),
-            index.end(),
-            IndexController::TrigramEntry{trigram, 0},
-            [](const auto& a, const auto& b) {
-                return a.trigram < b.trigram;
-            }
-        );
-
-        return range.first != range.second;
+        return (static_cast<uint32_t>(static_cast<unsigned char>(text[offset])) << 16) |
+               (static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 1])) << 8) |
+               static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 2]));
     }
 
-    // Overload using compacted trigram index
-    bool containsTrigram(
-        const std::vector<IndexController::TrigramRange>& ranges,
-        uint32_t trigram)
+    std::string asciiLowercaseCopy(std::string_view text)
     {
-        const auto it = std::lower_bound(
-            ranges.begin(),
-            ranges.end(),
-            IndexController::TrigramRange{trigram, 0, 0},
-            [](const auto& a, const auto& b) {
-                return a.trigram < b.trigram;
+        std::string out(text);
+        std::transform(
+            out.begin(),
+            out.end(),
+            out.begin(),
+            [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            }
+        );
+        return out;
+    }
+
+    bool regexMetaCharacterCanMakePreviousOptional(char c) noexcept
+    {
+        return c == '*' || c == '?' || c == '{';
+    }
+
+    bool regexOperatorBreaksMandatoryLiteralRun(char c) noexcept
+    {
+        switch (c) {
+            case '.':
+            case '^':
+            case '$':
+            case '|':
+            case '(':
+            case ')':
+            case '[':
+            case ']':
+            case '+':
+            case '*':
+            case '?':
+            case '{':
+            case '}':
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    bool escapedRegexCharIsLiteral(char c) noexcept
+    {
+        switch (c) {
+            case '.':
+            case '\\':
+            case '+':
+            case '*':
+            case '?':
+            case '^':
+            case '$':
+            case '(':
+            case ')':
+            case '[':
+            case ']':
+            case '{':
+            case '}':
+            case '|':
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    std::vector<std::string> extractConservativeRegexLiteralRuns(std::string_view pattern)
+    {
+        std::vector<std::string> runs;
+        std::string current;
+
+        auto flush = [&]() {
+            if (current.size() >= 3) {
+                runs.push_back(std::move(current));
+            }
+
+            current.clear();
+        };
+
+        bool hasAlternation = false;
+
+        for (std::size_t i = 0; i < pattern.size(); ++i) {
+            const char c = pattern[i];
+
+            if (c == '|') {
+                hasAlternation = true;
+                flush();
+                continue;
+            }
+
+            if (c == '[') {
+                // Character classes are alternatives, not literal text.
+                // For example, [0-2] must not contribute the literal "0-2"
+                // to the trigram prefilter.
+                flush();
+
+                bool escaped = false;
+                while (++i < pattern.size()) {
+                    const char classChar = pattern[i];
+
+                    if (escaped) {
+                        escaped = false;
+                        continue;
+                    }
+
+                    if (classChar == '\\') {
+                        escaped = true;
+                        continue;
+                    }
+
+                    if (classChar == ']') {
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            if (c == '\\') {
+                if (i + 1 >= pattern.size()) {
+                    flush();
+                    break;
+                }
+
+                const char escaped = pattern[++i];
+
+                if (escapedRegexCharIsLiteral(escaped)) {
+                    current.push_back(escaped);
+                } else {
+                    // Character classes like \d, \w, \s are not literals.
+                    flush();
+                }
+
+                continue;
+            }
+
+            if (regexMetaCharacterCanMakePreviousOptional(c)) {
+                // Avoid treating a literal before *, ?, or {m,n} as mandatory.
+                if (!current.empty()) {
+                    current.pop_back();
+                }
+
+                flush();
+
+                if (c == '{') {
+                    while (i < pattern.size() && pattern[i] != '}') {
+                        ++i;
+                    }
+                }
+
+                continue;
+            }
+
+            if (regexOperatorBreaksMandatoryLiteralRun(c)) {
+                flush();
+                continue;
+            }
+
+            current.push_back(c);
+        }
+
+        flush();
+
+        if (hasAlternation) {
+            // First implementation: do not try to prove mandatory literals across
+            // alternation branches. Falling back to a full indexed-name scan is safe.
+            return {};
+        }
+
+        std::sort(
+            runs.begin(),
+            runs.end(),
+            [](const std::string& lhs, const std::string& rhs) {
+                if (lhs.size() != rhs.size()) {
+                    return lhs.size() > rhs.size();
+                }
+
+                return lhs < rhs;
             }
         );
 
-        return it != ranges.end() && it->trigram == trigram;
+        runs.erase(
+            std::unique(runs.begin(), runs.end()),
+            runs.end()
+        );
+
+        static constexpr std::size_t MaxLiteralRunsForPrefilter = 4;
+        if (runs.size() > MaxLiteralRunsForPrefilter) {
+            runs.resize(MaxLiteralRunsForPrefilter);
+        }
+
+        return runs;
     }
 
     std::size_t trigramPostingCount(
@@ -317,6 +487,189 @@ namespace {
         }
 
         return it->count;
+    }
+
+    std::vector<QueryTrigram> trigramsForLiteral(
+        const IndexController::DeviceIndex& index,
+        std::string_view literal
+    ) {
+        std::vector<QueryTrigram> trigrams;
+
+        if (literal.size() < 3) {
+            return trigrams;
+        }
+
+        trigrams.reserve(literal.size() - 2);
+
+        for (std::size_t i = 0; i <= literal.size() - 3; ++i) {
+            const uint32_t trigram = makeTrigram(literal, i);
+
+            trigrams.push_back({
+                trigram,
+                trigramPostingCount(index.trigramRanges, trigram) +
+                trigramPostingCount(index.liveDeltaFlatIndex, trigram)
+            });
+        }
+
+        std::sort(
+            trigrams.begin(),
+            trigrams.end(),
+            [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
+                if (lhs.trigram != rhs.trigram) {
+                    return lhs.trigram < rhs.trigram;
+                }
+
+                return lhs.postingCount < rhs.postingCount;
+            }
+        );
+
+        trigrams.erase(
+            std::unique(
+                trigrams.begin(),
+                trigrams.end(),
+                [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
+                    return lhs.trigram == rhs.trigram;
+                }
+            ),
+            trigrams.end()
+        );
+
+        for (QueryTrigram& queryTrigram : trigrams) {
+            queryTrigram.postingCount =
+                trigramPostingCount(index.trigramRanges, queryTrigram.trigram) +
+                trigramPostingCount(index.liveDeltaFlatIndex, queryTrigram.trigram);
+        }
+
+        std::sort(
+            trigrams.begin(),
+            trigrams.end(),
+            [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
+                if (lhs.postingCount != rhs.postingCount) {
+                    return lhs.postingCount < rhs.postingCount;
+                }
+
+                return lhs.trigram < rhs.trigram;
+            }
+        );
+
+        return trigrams;
+    }
+
+    bool intersectCandidateSetWithTrigram(
+        const IndexController::DeviceIndex& index,
+        uint32_t trigram,
+        std::size_t postingCount,
+        std::vector<uint32_t>& candidates,
+        bool& firstTrigram
+    ) {
+        if (postingCount == 0) {
+            candidates.clear();
+            return false;
+        }
+
+        if (firstTrigram) {
+            candidates.reserve(postingCount);
+
+            forEachRecordIdxForTrigram(
+                index.trigramRanges,
+                index.trigramPostings,
+                trigram,
+                [&](uint32_t recordIdx) {
+                    candidates.push_back(recordIdx);
+                }
+            );
+
+            forEachRecordIdxForTrigram(
+                index.liveDeltaFlatIndex,
+                trigram,
+                [&](uint32_t recordIdx) {
+                    candidates.push_back(recordIdx);
+                }
+            );
+
+            std::sort(candidates.begin(), candidates.end());
+            candidates.erase(
+                std::unique(candidates.begin(), candidates.end()),
+                candidates.end()
+            );
+
+            firstTrigram = false;
+            return !candidates.empty();
+        }
+
+        std::vector<uint32_t> trigramRecordIndices;
+        trigramRecordIndices.reserve(postingCount);
+
+        forEachRecordIdxForTrigram(
+            index.trigramRanges,
+            index.trigramPostings,
+            trigram,
+            [&](uint32_t recordIdx) {
+                trigramRecordIndices.push_back(recordIdx);
+            }
+        );
+
+        forEachRecordIdxForTrigram(
+            index.liveDeltaFlatIndex,
+            trigram,
+            [&](uint32_t recordIdx) {
+                trigramRecordIndices.push_back(recordIdx);
+            }
+        );
+
+        std::sort(trigramRecordIndices.begin(), trigramRecordIndices.end());
+        trigramRecordIndices.erase(
+            std::unique(trigramRecordIndices.begin(), trigramRecordIndices.end()),
+            trigramRecordIndices.end()
+        );
+
+        std::vector<uint32_t> nextCandidates;
+        nextCandidates.reserve(std::min(candidates.size(), trigramRecordIndices.size()));
+
+        std::set_intersection(
+            candidates.begin(),
+            candidates.end(),
+            trigramRecordIndices.begin(),
+            trigramRecordIndices.end(),
+            std::back_inserter(nextCandidates)
+        );
+
+        candidates = std::move(nextCandidates);
+        return !candidates.empty();
+    }
+
+    // Overload using TrigramEntry
+    bool containsTrigram(
+        const std::vector<IndexController::TrigramEntry>& index,
+        uint32_t trigram)
+    {
+        const auto range = std::equal_range(
+            index.begin(),
+            index.end(),
+            IndexController::TrigramEntry{trigram, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        return range.first != range.second;
+    }
+
+    // Overload using compacted trigram index
+    bool containsTrigram(
+        const std::vector<IndexController::TrigramRange>& ranges,
+        uint32_t trigram)
+    {
+        const auto it = std::lower_bound(
+            ranges.begin(),
+            ranges.end(),
+            IndexController::TrigramRange{trigram, 0, 0},
+            [](const auto& a, const auto& b) {
+                return a.trigram < b.trigram;
+            }
+        );
+
+        return it != ranges.end() && it->trigram == trigram;
     }
 
     std::size_t totalDecodedTrigramPostingCount(
@@ -4957,6 +5310,265 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             for (uint32_t idx : candidates) {
                 resultCallback(idx);
             }
+        }
+    }
+
+    return results;
+}
+
+std::vector<IndexController::RecordHandle> IndexController::performRegexSearch(
+    const std::string& query,
+    SearchOptions options
+) {
+    std::shared_lock lock(indexMutex_);
+
+    std::vector<RecordHandle> results;
+
+    const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
+    const std::vector<std::string>& regexTokens = parsedQuery.keywords;
+    const ExtensionSet& extensionFilter = parsedQuery.extensions;
+    const bool hasExtensionFilter = !extensionFilter.empty();
+    const bool foldersOnly = parsedQuery.foldersOnly;
+
+    if (foldersOnly && hasExtensionFilter) {
+        return results;
+    }
+
+    if (regexTokens.empty()) {
+        // SearchOptions nonRegexOptions = options;
+        // nonRegexOptions.useRegex = false;
+        // nonRegexOptions.matchWholeWord = false;
+        // return performTrigramSearch(query, nonRegexOptions);
+
+        return results;
+    }
+
+    std::string regexPattern;
+
+    for (std::size_t i = 0; i < regexTokens.size(); ++i) {
+        if (i != 0) {
+            regexPattern += ' ';
+        }
+
+        regexPattern += regexTokens[i];
+    }
+
+    if (!options.matchCase) {
+        regexPattern = asciiLowercaseCopy(regexPattern);
+    }
+
+    re2::RE2::Options re2Options;
+    re2Options.set_log_errors(false);
+    re2Options.set_never_nl(true);
+    re2Options.set_case_sensitive(true);
+
+    const re2::RE2 regex(regexPattern, re2Options);
+
+    if (!regex.ok()) {
+        return results;
+    }
+
+    std::vector<std::string> literalRuns =
+        extractConservativeRegexLiteralRuns(regexPattern);
+
+    auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
+        if (index.indexId > RecordHandle::MaxIndexId) {
+            return;
+        }
+
+        if (index.isDeletedRecord(recordIdx)) {
+            return;
+        }
+
+        const auto indexId = static_cast<uint16_t>(index.indexId);
+        const auto generation = static_cast<uint8_t>(index.generation);
+
+        if (index.mountPoints.isEmpty()) {
+            results.push_back({
+                recordIdx,
+                indexId,
+                generation,
+                RecordHandle::NoMountPoint
+            });
+            return;
+        }
+
+        index.forEachVisibleMountPointForRecord(
+            recordIdx,
+            [&](int mountPointIdx) {
+                results.push_back({
+                    recordIdx,
+                    indexId,
+                    generation,
+                    static_cast<uint8_t>(mountPointIdx)
+                });
+            }
+        );
+    };
+
+    auto collectExtensionCandidates = [](
+        const DeviceIndex& index,
+        const ExtensionSet& extensions
+    ) {
+        std::vector<uint32_t> candidates;
+
+        if (extensions.empty()) {
+            return candidates;
+        }
+
+        std::size_t estimatedSize = 0;
+
+        for (const std::string& extension : extensions) {
+            if (const std::vector<uint32_t>* records =
+                    index.recordIndicesForExtension(extension)) {
+                estimatedSize += records->size();
+            }
+        }
+
+        candidates.reserve(estimatedSize);
+
+        for (const std::string& extension : extensions) {
+            const std::vector<uint32_t>* records =
+                index.recordIndicesForExtension(extension);
+
+            if (!records) {
+                continue;
+            }
+
+            candidates.insert(
+                candidates.end(),
+                records->begin(),
+                records->end()
+            );
+        }
+
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(
+            std::unique(candidates.begin(), candidates.end()),
+            candidates.end()
+        );
+
+        return candidates;
+    };
+
+    for (const auto& [indexId, indexPtr] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
+            continue;
+        }
+
+        const DeviceIndex& index = *indexPtr;
+
+        std::vector<uint32_t> candidates;
+        bool firstTrigram = true;
+        bool trigramsUsed = false;
+        bool skipDevice = false;
+
+        for (const std::string& literalRun : literalRuns) {
+            const std::vector<QueryTrigram> literalTrigrams =
+                trigramsForLiteral(index, literalRun);
+
+            for (const QueryTrigram& queryTrigram : literalTrigrams) {
+                trigramsUsed = true;
+
+                if (!intersectCandidateSetWithTrigram(
+                        index,
+                        queryTrigram.trigram,
+                        queryTrigram.postingCount,
+                        candidates,
+                        firstTrigram
+                    )) {
+                    skipDevice = true;
+                    break;
+                }
+            }
+
+            if (skipDevice) {
+                break;
+            }
+        }
+
+        if (skipDevice) {
+            continue;
+        }
+
+        auto resultCallback = [&](uint32_t recordIdx) {
+            if (recordIdx >= index.fileRecords.size()) {
+                return;
+            }
+
+            if (index.isDeletedRecord(recordIdx)) {
+                return;
+            }
+
+            const FileRecord& rec = index.fileRecords[recordIdx];
+            const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+            if (foldersOnly && !isDirectory) {
+                return;
+            }
+
+            if (hasExtensionFilter && isDirectory) {
+                return;
+            }
+
+            const std::string_view lowercaseName =
+                index.lowercaseRecordName(rec, recordIdx);
+
+            if (lowercaseName.empty()) {
+                return;
+            }
+
+            if (hasExtensionFilter &&
+                !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) {
+                return;
+            }
+
+            std::string_view name;
+
+            if (options.matchCase) {
+                if (rec.nameOffset + rec.nameLen > index.stringPool.size()) {
+                    return;
+                }
+
+                name = std::string_view(
+                    &index.stringPool[rec.nameOffset],
+                    rec.nameLen
+                );
+            } else {
+                name = lowercaseName;
+            }
+
+            const re2::StringPiece input(name.data(), static_cast<int>(name.size()));
+            if (!re2::RE2::PartialMatch(input, regex)) {
+                return;
+            }
+
+            appendResult(index, recordIdx);
+        };
+
+        if (trigramsUsed) {
+            for (const uint32_t recordIdx : candidates) {
+                resultCallback(recordIdx);
+            }
+            continue;
+        }
+
+        if (hasExtensionFilter) {
+            const auto extensionCandidates =
+                collectExtensionCandidates(index, extensionFilter);
+
+            for (const uint32_t recordIdx : extensionCandidates) {
+                resultCallback(recordIdx);
+            }
+            continue;
+        }
+
+        for (uint32_t recordIdx = 0;
+             recordIdx < static_cast<uint32_t>(index.fileRecords.size());
+             ++recordIdx) {
+            resultCallback(recordIdx);
         }
     }
 

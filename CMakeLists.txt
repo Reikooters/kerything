@@ -74,6 +74,9 @@ pkg_check_modules(MOUNT REQUIRED mount)
 # libsystemd for socket activation
 pkg_check_modules(SYSTEMD REQUIRED libsystemd)
 
+# RE2 for fast, predictable user-supplied regular expressions in the GUI search path
+pkg_check_modules(RE2 REQUIRED re2)
+
 add_executable(kerything
         kerything/main.cpp
         kerything/AppController.cpp
@@ -172,6 +175,7 @@ target_compile_definitions(kerythingd PRIVATE QT_NO_KEYWORDS)
 target_compile_options(kerything
         PRIVATE
         $<$<CONFIG:Release>:-O2>
+        ${RE2_CFLAGS_OTHER}
 )
 
 target_compile_options(kerythingd
@@ -184,6 +188,7 @@ target_link_libraries(kerything
         TBB::tbb # Parallelism
         Qt6::Widgets
         Qt6::Network
+        ${RE2_LIBRARIES}
 )
 
 if(KERYTHING_WITH_KF6)
@@ -208,7 +213,12 @@ target_link_libraries(kerythingd
         ${SYSTEMD_LIBRARIES}
 )
 
-target_include_directories(kerything PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared")
+target_include_directories(kerything
+        PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/shared"
+        ${RE2_INCLUDE_DIRS}
+)
+
 target_include_directories(kerythingd
         PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/shared"

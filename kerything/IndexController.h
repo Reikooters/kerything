@@ -1961,6 +1961,7 @@ public:
     struct SearchOptions {
         bool matchCase = false;
         bool matchWholeWord = false;
+        bool useRegex = false;
     };
 
     struct LiveUpdateApplyResult {
@@ -2008,6 +2009,7 @@ public:
         const std::vector<BlockDeviceMountInfo>& mounts = {}
     );
     std::vector<RecordHandle> performTrigramSearch(const std::string& query, SearchOptions options);
+    std::vector<RecordHandle> performRegexSearch(const std::string& query, SearchOptions options);
     std::vector<RecordHandle> sortSearchResults(std::vector<RecordHandle> results, int column, Qt::SortOrder sortOrder) const;
     std::vector<RecordHandle> sortSearchResults(
         std::vector<RecordHandle> results,

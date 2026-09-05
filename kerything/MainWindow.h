@@ -176,12 +176,14 @@ private:
     void handleSortSectionClicked(int section);
     void setMatchCaseEnabled(bool enabled);
     void setMatchWholeWordEnabled(bool enabled);
+    void setRegexEnabled(bool enabled);
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
     QToolButton* filterChip_ = nullptr;
     QToolButton* matchCaseChip_ = nullptr;
     QToolButton* matchWholeWordChip_ = nullptr;
+    QToolButton* regexChip_ = nullptr;
     QWidget* chipContainer_ = nullptr;
     QTableView *tableView_ = nullptr;
     FileModel *model_ = nullptr;
@@ -192,6 +194,7 @@ private:
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
     QAction* matchCaseAct_ = nullptr;
     QAction* matchWholeWordAct_ = nullptr;
+    QAction* regexAct_ = nullptr;
 
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;
@@ -200,6 +203,7 @@ private:
     bool liveMetadataRefreshDirty_ = false;
     bool matchCaseEnabled_ = false;
     bool matchWholeWordEnabled_ = false;
+    bool regexEnabled_ = false;
     int lastSortSection_ = 0;
 
     int hoveredRow_ = -1;

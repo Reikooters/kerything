@@ -292,6 +292,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     matchCaseChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Case"));
     matchWholeWordChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Whole Word"));
+    regexChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Regex"));
 
     connect(filterChip_, &QToolButton::clicked, this, [this]() {
         applySearchFilter(QString(), QString(), QString());
@@ -305,12 +306,17 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         setMatchWholeWordEnabled(false);
     });
 
+    connect(regexChip_, &QToolButton::clicked, this, [this]() {
+        setRegexEnabled(false);
+    });
+
     chipContainer_ = new QWidget(this);
     auto* chipLayout = new QHBoxLayout(chipContainer_);
     chipLayout->setContentsMargins(6, 0, 0, 0);
     chipLayout->setSpacing(1);
     chipLayout->addWidget(matchCaseChip_);
     chipLayout->addWidget(matchWholeWordChip_);
+    chipLayout->addWidget(regexChip_);
     chipLayout->addWidget(filterChip_);
     chipContainer_->setVisible(false);
 
@@ -467,6 +473,15 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(matchWholeWordAct_, &QAction::toggled, this, &MainWindow::setMatchWholeWordEnabled);
     addAction(matchWholeWordAct_);
 
+    // Regex
+    regexAct_ = new QAction(QStringLiteral("Regex"), this);
+    regexAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
+    regexAct_->setCheckable(true);
+    regexAct_->setChecked(regexEnabled_);
+    regexAct_->setStatusTip(QStringLiteral("Interpret the search text as a regular expression"));
+    connect(regexAct_, &QAction::toggled, this, &MainWindow::setRegexEnabled);
+    addAction(regexAct_);
+
     // Enter: Open
     auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
     openAct->setShortcuts({
@@ -540,6 +555,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     searchMenu_ = menuBar()->addMenu(QStringLiteral("Search"));
     searchMenu_->addAction(matchCaseAct_);
     searchMenu_->addAction(matchWholeWordAct_);
+    searchMenu_->addAction(regexAct_);
     updateSearchMenuTitle();
 
     // Filter Menu
@@ -604,8 +620,8 @@ void MainWindow::updateSearch(const QString &text) {
 
     if (model_) {
         model_->setSearchHighlightTerms(
-            highlightTermsForSearchText(text),
-            controller_ && controller_->showHighlightedSearchTerms(),
+            regexEnabled_ ? QStringList{} : highlightTermsForSearchText(text),
+            controller_ && controller_->showHighlightedSearchTerms() && !regexEnabled_,
             matchCaseEnabled_,
             matchWholeWordEnabled_
         );
@@ -628,13 +644,23 @@ void MainWindow::updateSearch(const QString &text) {
         effectiveQuery += activeSearchFilter_;
     }
 
-    auto results = controller_->indexController()->performTrigramSearch(
-    effectiveQuery.toStdString(),
-        IndexController::SearchOptions{
-            .matchCase = matchCaseEnabled_,
-            .matchWholeWord = matchWholeWordEnabled_
-        }
-    );
+    auto results = regexEnabled_
+        ? controller_->indexController()->performRegexSearch(
+            effectiveQuery.toStdString(),
+            IndexController::SearchOptions{
+                .matchCase = matchCaseEnabled_,
+                .matchWholeWord = false,
+                .useRegex = true
+            }
+        )
+        : controller_->indexController()->performTrigramSearch(
+            effectiveQuery.toStdString(),
+            IndexController::SearchOptions{
+                .matchCase = matchCaseEnabled_,
+                .matchWholeWord = matchWholeWordEnabled_,
+                .useRegex = false
+            }
+        );
     auto end1 = std::chrono::steady_clock::now();
 
     auto start2 = std::chrono::steady_clock::now();
@@ -782,8 +808,8 @@ void MainWindow::refreshSearchHighlighting()
     }
 
     model_->setSearchHighlightTerms(
-        highlightTermsForSearchText(searchLine_->text()),
-        controller_ && controller_->showHighlightedSearchTerms(),
+        regexEnabled_ ? QStringList{} : highlightTermsForSearchText(searchLine_->text()),
+        controller_ && controller_->showHighlightedSearchTerms() && !regexEnabled_,
         matchCaseEnabled_,
         matchWholeWordEnabled_
     );
@@ -1074,6 +1100,25 @@ void MainWindow::updateSearchOptionChips()
         }
     }
 
+    if (regexChip_) {
+        if (regexEnabled_) {
+            regexChip_->setText(QStringLiteral("Regex  ×"));
+            regexChip_->setToolTip(
+                QStringLiteral(
+                    "Search option enabled: Regex\n\n"
+                    "Click to turn off Regex."
+                )
+            );
+            regexChip_->setStatusTip(QStringLiteral("Click to turn off Regex"));
+            regexChip_->show();
+        } else {
+            regexChip_->hide();
+            regexChip_->setText(QString());
+            regexChip_->setToolTip(QString());
+            regexChip_->setStatusTip(QStringLiteral("Regex is off"));
+        }
+    }
+
     updateChipSpacing();
 }
 
@@ -1091,6 +1136,10 @@ void MainWindow::updateSearchMenuTitle()
 
     if (matchWholeWordEnabled_) {
         activeOptions << QStringLiteral("Match Whole Word");
+    }
+
+    if (regexEnabled_) {
+        activeOptions << QStringLiteral("Regex");
     }
 
     if (activeOptions.isEmpty()) {
@@ -1116,6 +1165,7 @@ void MainWindow::updateChipSpacing()
     const QList<QToolButton*> chips = {
         matchCaseChip_,
         matchWholeWordChip_,
+        regexChip_,
         filterChip_
     };
 
@@ -1253,6 +1303,10 @@ void MainWindow::setMatchCaseEnabled(bool enabled)
 
 void MainWindow::setMatchWholeWordEnabled(bool enabled)
 {
+    if (regexEnabled_ && enabled) {
+        return;
+    }
+
     if (matchWholeWordEnabled_ == enabled) {
         return;
     }
@@ -1266,6 +1320,43 @@ void MainWindow::setMatchWholeWordEnabled(bool enabled)
 
     updateSearchOptionChips();
     updateSearchMenuTitle();
+    updateSearch(searchLine_ ? searchLine_->text() : QString());
+}
+
+void MainWindow::setRegexEnabled(bool enabled)
+{
+    if (regexEnabled_ == enabled) {
+        return;
+    }
+
+    regexEnabled_ = enabled;
+
+    if (regexAct_ && regexAct_->isChecked() != enabled) {
+        const QSignalBlocker blocker(regexAct_);
+        regexAct_->setChecked(enabled);
+    }
+
+    if (regexEnabled_ && matchWholeWordEnabled_) {
+        matchWholeWordEnabled_ = false;
+
+        if (matchWholeWordAct_) {
+            const QSignalBlocker blocker(matchWholeWordAct_);
+            matchWholeWordAct_->setChecked(false);
+        }
+    }
+
+    if (matchWholeWordAct_) {
+        matchWholeWordAct_->setEnabled(!regexEnabled_);
+        matchWholeWordAct_->setStatusTip(
+            regexEnabled_
+                ? QStringLiteral("Match Whole Word is unavailable while Regex is enabled")
+                : QStringLiteral("Match complete words in file names")
+        );
+    }
+
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
+    refreshSearchHighlighting();
     updateSearch(searchLine_ ? searchLine_->text() : QString());
 }
 

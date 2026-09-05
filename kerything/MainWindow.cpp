@@ -1043,7 +1043,11 @@ void MainWindow::updateSearchLineFilterHint()
     }
 
     if (activeSearchFilter_.isEmpty()) {
-        searchLine_->setPlaceholderText(QStringLiteral("Search files..."));
+        searchLine_->setPlaceholderText(
+            regexEnabled_
+                ? QStringLiteral("Search files with regex...")
+                : QStringLiteral("Search files...")
+        );
         searchLine_->setToolTip(
             regexEnabled_
                 ? QStringLiteral(
@@ -1066,21 +1070,36 @@ void MainWindow::updateSearchLineFilterHint()
     }
 
     if (activeSearchFilterId_ == QStringLiteral("builtin-folders")) {
-        searchLine_->setPlaceholderText(QStringLiteral("Search folders..."));
+        searchLine_->setPlaceholderText(
+            regexEnabled_
+                ? QStringLiteral("Search folders with regex...")
+                : QStringLiteral("Search folders...")
+        );
     } else {
         searchLine_->setPlaceholderText(
-            QStringLiteral("Search files in %1...").arg(activeSearchFilterName_)
+            regexEnabled_
+                ? QStringLiteral("Search files in %1 with regex...").arg(activeSearchFilterName_)
+                : QStringLiteral("Search files in %1...").arg(activeSearchFilterName_)
         );
     }
 
     searchLine_->setToolTip(
-        QStringLiteral(
-            "Active filter: %1\n"
-            "Query fragment: %2"
-        ).arg(
-            activeSearchFilterName_,
-            activeSearchFilter_
-        )
+        regexEnabled_
+            ? QStringLiteral(
+                "Active filter: %1\n"
+                "Query fragment: %2\n\n"
+                "Search text is interpreted as an RE2 regular expression."
+            ).arg(
+                activeSearchFilterName_,
+                activeSearchFilter_
+            )
+            : QStringLiteral(
+                "Active filter: %1\n"
+                "Query fragment: %2"
+            ).arg(
+                activeSearchFilterName_,
+                activeSearchFilter_
+            )
     );
 
     updateFilterChip();

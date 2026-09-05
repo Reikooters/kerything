@@ -5299,7 +5299,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                      recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
                      ++recordIdx) {
                     totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
-                     }
+                }
             }
         }
 

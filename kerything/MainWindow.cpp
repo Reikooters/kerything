@@ -625,9 +625,13 @@ void MainWindow::updateSearch(const QString &text) {
     }
 
     if (model_) {
+        const QString trimmedSearchText = text.trimmed();
+
         const QStringList highlightTerms =
             regexEnabled_
-                ? QStringList{ text.trimmed() }
+                ? (trimmedSearchText.isEmpty()
+                    ? QStringList{}
+                    : QStringList{ trimmedSearchText })
                 : highlightTermsForSearchText(text);
 
         model_->setSearchHighlightTerms(
@@ -862,9 +866,13 @@ void MainWindow::refreshSearchHighlighting()
     }
 
     const QString searchText = searchLine_->text();
+    const QString trimmedSearchText = searchText.trimmed();
+
     const QStringList highlightTerms =
         regexEnabled_
-            ? QStringList{ searchText.trimmed() }
+            ? (trimmedSearchText.isEmpty()
+                ? QStringList{}
+                : QStringList{ trimmedSearchText })
             : highlightTermsForSearchText(searchText);
 
     model_->setSearchHighlightTerms(

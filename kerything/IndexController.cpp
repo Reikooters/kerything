@@ -719,6 +719,84 @@ namespace {
         return candidates;
     }
 
+    template <typename AppendResultFn>
+    void collectRecordsMatchingNonKeywordFilters(
+        const IndexController::DeviceIndex& index,
+        const IndexController::ExtensionSet& extensionFilter,
+        bool foldersOnly,
+        AppendResultFn&& appendResult
+    ) {
+        const bool hasExtensionFilter = !extensionFilter.empty();
+
+        // Extension filters are file-only, so this combination can never match.
+        if (foldersOnly && hasExtensionFilter) {
+            return;
+        }
+
+        auto appendIfMatches = [&](uint32_t recordIdx) {
+            if (recordIdx >= index.fileRecords.size()) {
+                return;
+            }
+
+            if (index.isDeletedRecord(recordIdx)) {
+                return;
+            }
+
+            const FileRecord& rec = index.fileRecords[recordIdx];
+            const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+            if (foldersOnly && !isDirectory) {
+                return;
+            }
+
+            // Extension filters apply to files only. Reject directories before
+            // touching the string pool or scanning the name for a final extension.
+            if (hasExtensionFilter && isDirectory) {
+                return;
+            }
+
+            if (rec.nameOffset + rec.nameLen > index.stringPool.size()) {
+                return;
+            }
+
+            if (hasExtensionFilter) {
+                const std::string_view lowercaseName =
+                    index.lowercaseRecordName(rec, recordIdx);
+
+                if (lowercaseName.empty()) {
+                    return;
+                }
+
+                if (!IndexController::matchesFileExtensionFilter(
+                        rec,
+                        lowercaseName,
+                        extensionFilter
+                    )) {
+                    return;
+                }
+            }
+
+            appendResult(index, recordIdx);
+        };
+
+        if (hasExtensionFilter) {
+            const std::vector<uint32_t> extensionCandidates =
+                collectExtensionCandidates(index, extensionFilter);
+
+            for (const uint32_t recordIdx : extensionCandidates) {
+                appendIfMatches(recordIdx);
+            }
+
+            return;
+        }
+
+        for (uint32_t recordIdx = 0;
+             recordIdx < static_cast<uint32_t>(index.fileRecords.size());
+             ++recordIdx) {
+            appendIfMatches(recordIdx);
+        }
+    }
+
     void intersectSortedUniqueCandidates(
         std::vector<uint32_t>& candidates,
         const std::vector<uint32_t>& filter
@@ -5203,12 +5281,14 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         std::size_t totalSize = 0;
 
         for (const auto& [indexId, indexPtr] : indexByIndexId_) {
+            Q_UNUSED(indexId);
+
             if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
                 continue;
             }
 
             if (hasExtensionFilter) {
-                const auto extensionCandidates =
+                const std::vector<uint32_t> extensionCandidates =
                     collectExtensionCandidates(*indexPtr, extensionFilter);
 
                 for (const uint32_t recordIdx : extensionCandidates) {
@@ -5219,63 +5299,25 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                      recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
                      ++recordIdx) {
                     totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
-                }
+                     }
             }
         }
 
         results.reserve(totalSize);
 
         for (const auto& [indexId, indexPtr] : indexByIndexId_) {
+            Q_UNUSED(indexId);
+
             if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
                 continue;
             }
 
-            const auto& index = *indexPtr;
-
-            auto appendIfMatches = [&](uint32_t i) {
-                if (index.isDeletedRecord(i)) {
-                    return;
-                }
-
-                const FileRecord& rec = index.fileRecords[i];
-                const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
-
-                if (foldersOnly && !isDirectory) {
-                    return;
-                }
-
-                // Extension filters apply to files only. Reject directories before
-                // touching the string pool or scanning the name for a final extension.
-                if (hasExtensionFilter && isDirectory) {
-                    return;
-                }
-
-                if (rec.nameOffset + rec.nameLen > index.stringPool.size()) {
-                    return;
-                }
-
-                const std::string_view name = index.lowercaseRecordName(rec);
-
-                if (hasExtensionFilter &&
-                    !matchesFileExtensionFilter(rec, name, extensionFilter)) {
-                    return;
-                }
-
-                appendResult(index, i);
-            };
-
-            if (hasExtensionFilter) {
-                const auto extensionCandidates =
-                    collectExtensionCandidates(index, extensionFilter);
-
-                for (const uint32_t recordIdx : extensionCandidates) {
-                    appendIfMatches(recordIdx);
-                }
-            } else {
-                for (uint32_t i = 0; i < index.fileRecords.size(); ++i) {
-                    appendIfMatches(i);
-                }
-            }
+            collectRecordsMatchingNonKeywordFilters(
+                *indexPtr,
+                extensionFilter,
+                foldersOnly,
+                appendResult
+            );
         }
 
         return results;
@@ -5502,7 +5544,57 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         return searchResult;
     }
 
+    auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
+        if (index.indexId > RecordHandle::MaxIndexId) {
+            return;
+        }
+
+        if (index.isDeletedRecord(recordIdx)) {
+            return;
+        }
+
+        const auto indexId = static_cast<uint16_t>(index.indexId);
+        const auto generation = static_cast<uint8_t>(index.generation);
+
+        if (index.mountPoints.isEmpty()) {
+            results.push_back({
+                recordIdx,
+                indexId,
+                generation,
+                RecordHandle::NoMountPoint
+            });
+            return;
+        }
+
+        index.forEachVisibleMountPointForRecord(
+            recordIdx,
+            [&](int mountPointIdx) {
+                results.push_back({
+                    recordIdx,
+                    indexId,
+                    generation,
+                    static_cast<uint8_t>(mountPointIdx)
+                });
+            }
+        );
+    };
+
     if (regexTokens.empty()) {
+        for (const auto& [indexId, indexPtr] : indexByIndexId_) {
+            Q_UNUSED(indexId);
+
+            if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
+                continue;
+            }
+
+            collectRecordsMatchingNonKeywordFilters(
+                *indexPtr,
+                extensionFilter,
+                foldersOnly,
+                appendResult
+            );
+        }
+
         return searchResult;
     }
 
@@ -5544,41 +5636,6 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
               << (regexExtensionFilter ? regexExtensionFilter->size() : 0)
               << "\n";
 #endif
-
-    auto appendResult = [&results](const DeviceIndex& index, uint32_t recordIdx) {
-        if (index.indexId > RecordHandle::MaxIndexId) {
-            return;
-        }
-
-        if (index.isDeletedRecord(recordIdx)) {
-            return;
-        }
-
-        const auto indexId = static_cast<uint16_t>(index.indexId);
-        const auto generation = static_cast<uint8_t>(index.generation);
-
-        if (index.mountPoints.isEmpty()) {
-            results.push_back({
-                recordIdx,
-                indexId,
-                generation,
-                RecordHandle::NoMountPoint
-            });
-            return;
-        }
-
-        index.forEachVisibleMountPointForRecord(
-            recordIdx,
-            [&](int mountPointIdx) {
-                results.push_back({
-                    recordIdx,
-                    indexId,
-                    generation,
-                    static_cast<uint8_t>(mountPointIdx)
-                });
-            }
-        );
-    };
 
     for (const auto& [indexId, indexPtr] : indexByIndexId_) {
         Q_UNUSED(indexId);

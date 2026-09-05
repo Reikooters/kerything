@@ -25,6 +25,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <QActionGroup>
+#include <QSignalBlocker>
 #include <QStatusBar>
 #include <QToolButton>
 #include <QUrl>
@@ -360,6 +361,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         searchLine_->setFocus();
     };
 
+    auto resetSearchAndFocus = [this]() {
+        resetSearchStateAndFocus();
+    };
+
     // Escape in the search line clears the search.
     auto *clearSearch = new QShortcut(QKeySequence(Qt::Key_Escape), searchLine_);
     clearSearch->setContext(Qt::WidgetShortcut);
@@ -369,6 +374,11 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto *clearSearchFromTable = new QShortcut(QKeySequence(Qt::Key_Escape), tableView_);
     clearSearchFromTable->setContext(Qt::WidgetShortcut);
     connect(clearSearchFromTable, &QShortcut::activated, this, clearSearchAndFocus);
+
+    // Ctrl+Escape resets the search text, active filter, search options, and focuses the search line.
+    auto* resetSearchShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Escape), this);
+    resetSearchShortcut->setContext(Qt::WindowShortcut);
+    connect(resetSearchShortcut, &QShortcut::activated, this, resetSearchAndFocus);
     // ---------------------
 
     // --- Global Window Actions (Shortcuts + Menu items) ---
@@ -909,6 +919,53 @@ void MainWindow::trimSortScratch()
     if (model_) {
         model_->trimSortScratch();
     }
+}
+
+void MainWindow::resetSearchStateAndFocus()
+{
+    activeSearchFilterId_.clear();
+    activeSearchFilterName_.clear();
+    activeSearchFilter_.clear();
+
+    matchCaseEnabled_ = false;
+    matchWholeWordEnabled_ = false;
+    regexEnabled_ = false;
+
+    if (matchCaseAct_) {
+        const QSignalBlocker blocker(matchCaseAct_);
+        matchCaseAct_->setChecked(false);
+    }
+
+    if (matchWholeWordAct_) {
+        const QSignalBlocker blocker(matchWholeWordAct_);
+        matchWholeWordAct_->setChecked(false);
+        matchWholeWordAct_->setEnabled(true);
+        matchWholeWordAct_->setStatusTip(QStringLiteral("Match complete words in file names"));
+    }
+
+    if (regexAct_) {
+        const QSignalBlocker blocker(regexAct_);
+        regexAct_->setChecked(false);
+    }
+
+    rebuildFilterMenu();
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
+    updateSearchLineFilterHint();
+
+    if (!searchLine_) {
+        updateSearch(QString());
+        return;
+    }
+
+    if (searchLine_->text().isEmpty()) {
+        updateSearch(QString());
+    } else {
+        searchLine_->clear();
+    }
+
+    searchLine_->setFocus();
+    showTemporaryStatus(QStringLiteral("Search reset"), 2500);
 }
 
 bool MainWindow::event(QEvent* event)

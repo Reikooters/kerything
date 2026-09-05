@@ -177,6 +177,7 @@ private:
     void setMatchCaseEnabled(bool enabled);
     void setMatchWholeWordEnabled(bool enabled);
     void setRegexEnabled(bool enabled);
+    void resetSearchStateAndFocus();
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;

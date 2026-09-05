@@ -4669,15 +4669,16 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                     return;
                 }
 
-                const std::string_view name = index.lowercaseRecordName(rec);
-                if (name.empty()) {
+                if (rec.nameOffset + rec.nameLen > index.stringPool.size()) {
                     return;
                 }
+
+                const std::string_view name = index.lowercaseRecordName(rec);
 
                 if (hasExtensionFilter &&
                     !matchesFileExtensionFilter(rec, name, extensionFilter)) {
                     return;
-                    }
+                }
 
                 appendResult(index, i);
             };

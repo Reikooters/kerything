@@ -12,6 +12,9 @@
 #include <QStyledItemDelegate>
 #include <QTextLayout>
 
+#include <re2/re2.h>
+#include <re2/stringpiece.h>
+
 #include "FileModel.h"
 #include "SearchResultColumns.h"
 
@@ -161,6 +164,145 @@ namespace {
         return merged;
     }
 
+    QList<HighlightSpan> highlightSpansForRegexText(
+        const QString& text,
+        const QStringList& terms,
+        bool matchCase
+    ) {
+        QList<HighlightSpan> spans;
+
+        if (text.isEmpty() || terms.isEmpty()) {
+            return spans;
+        }
+
+        const QString patternText = terms.first().trimmed();
+        if (patternText.isEmpty()) {
+            return spans;
+        }
+
+        const QByteArray patternBytes = patternText.toUtf8();
+        const QByteArray textBytes = text.toUtf8();
+
+        re2::RE2::Options options;
+        options.set_log_errors(false);
+        options.set_never_nl(true);
+        options.set_case_sensitive(matchCase);
+
+        const re2::RE2 regex(
+            std::string_view(
+                patternBytes.constData(),
+                static_cast<std::size_t>(patternBytes.size())
+            ),
+            options
+        );
+
+        if (!regex.ok()) {
+            return spans;
+        }
+
+        re2::StringPiece input(
+            textBytes.constData(),
+            static_cast<int>(textBytes.size())
+        );
+
+        int searchStart = 0;
+
+        while (searchStart <= textBytes.size()) {
+            re2::StringPiece match;
+
+            const bool matched = regex.Match(
+                input,
+                searchStart,
+                static_cast<int>(textBytes.size()),
+                re2::RE2::UNANCHORED,
+                &match,
+                1
+            );
+
+            if (!matched) {
+                break;
+            }
+
+            const auto* matchBegin = match.data();
+            const auto* inputBegin = textBytes.constData();
+
+            const int byteStart = static_cast<int>(matchBegin - inputBegin);
+            const int byteLength = static_cast<int>(match.size());
+
+            if (byteStart < 0 || byteStart > textBytes.size()) {
+                break;
+            }
+
+            const QString before = QString::fromUtf8(
+                textBytes.constData(),
+                byteStart
+            );
+
+            const QString matchedText = QString::fromUtf8(
+                textBytes.constData() + byteStart,
+                byteLength
+            );
+
+            if (!matchedText.isEmpty()) {
+                spans.append(HighlightSpan{
+                    .start = before.size(),
+                    .length = matchedText.size(),
+                });
+            }
+
+            const int nextStart = byteStart + std::max(byteLength, 1);
+
+            if (nextStart <= searchStart) {
+                break;
+            }
+
+            searchStart = nextStart;
+        }
+
+        if (spans.isEmpty()) {
+            return spans;
+        }
+
+        std::ranges::sort(spans, [](const HighlightSpan& lhs, const HighlightSpan& rhs) {
+            if (lhs.start == rhs.start) {
+                return lhs.length > rhs.length;
+            }
+
+            return lhs.start < rhs.start;
+        });
+
+        QList<HighlightSpan> merged;
+
+        for (const HighlightSpan& span : spans) {
+            if (merged.isEmpty() ||
+                span.start > merged.last().start + merged.last().length) {
+                merged.append(span);
+                continue;
+            }
+
+            HighlightSpan& last = merged.last();
+            const qsizetype lastEnd = last.start + last.length;
+            const qsizetype spanEnd = span.start + span.length;
+            last.length = std::max(lastEnd, spanEnd) - last.start;
+        }
+
+        return merged;
+    }
+
+    QList<HighlightSpan> highlightSpansForText(
+        const QString& text,
+        const QStringList& terms,
+        bool matchCase,
+        bool matchWholeWord,
+        bool useRegex
+    ) {
+        if (useRegex) {
+            return highlightSpansForRegexText(text, terms, matchCase);
+        }
+
+        return highlightSpansForText(text, terms, matchCase, matchWholeWord);
+    }
+
     QList<QTextLayout::FormatRange> formatRangesForSpans(
         const QList<HighlightSpan>& spans,
         const QFont& font,
@@ -210,6 +352,7 @@ namespace {
         const QStringList& terms,
         bool matchCase,
         bool matchWholeWord,
+        bool useRegex,
         const QFont& font,
         int width
     ) {
@@ -218,7 +361,7 @@ namespace {
         }
 
         const QList<HighlightSpan> fullSpans =
-            highlightSpansForText(text, terms, matchCase, matchWholeWord);
+            highlightSpansForText(text, terms, matchCase, matchWholeWord, useRegex);
         const QList<QTextLayout::FormatRange> fullFormats =
             formatRangesForSpans(fullSpans, font, Qt::black);
 
@@ -237,7 +380,7 @@ namespace {
             const QString candidate = text.left(mid) + Ellipsis;
 
             const QList<HighlightSpan> candidateSpans =
-                highlightSpansForText(candidate, terms, matchCase, matchWholeWord);
+                highlightSpansForText(candidate, terms, matchCase, matchWholeWord, useRegex);
             const QList<QTextLayout::FormatRange> candidateFormats =
                 formatRangesForSpans(candidateSpans, font, Qt::black);
 
@@ -275,6 +418,7 @@ namespace {
 
             const bool matchCase = index.data(FileModel::HighlightMatchCaseRole).toBool();
             const bool matchWholeWord = index.data(FileModel::HighlightMatchWholeWordRole).toBool();
+            const bool useRegex = index.data(FileModel::HighlightUseRegexRole).toBool();
 
             const QString plainText = opt.text;
 
@@ -334,12 +478,13 @@ namespace {
                 terms,
                 matchCase,
                 matchWholeWord,
+                useRegex,
                 opt.font,
                 availableWidth
             );
 
             QList<HighlightSpan> spans =
-                highlightSpansForText(elidedText, terms, matchCase, matchWholeWord);
+                highlightSpansForText(elidedText, terms, matchCase, matchWholeWord, useRegex);
             QList<QTextLayout::FormatRange> formats =
                 formatRangesForSpans(spans, opt.font, textColor);
 

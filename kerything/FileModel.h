@@ -22,6 +22,7 @@ public:
     static constexpr int HighlightTermsRole = Qt::UserRole + 100;
     static constexpr int HighlightMatchCaseRole = Qt::UserRole + 101;
     static constexpr int HighlightMatchWholeWordRole = Qt::UserRole + 102;
+    static constexpr int HighlightUseRegexRole = Qt::UserRole + 103;
 
     explicit FileModel(AppController* controller, QObject *parent = nullptr);
 
@@ -43,7 +44,8 @@ public:
         QStringList terms,
         bool enabled,
         bool matchCase = false,
-        bool matchWholeWord = false
+        bool matchWholeWord = false,
+        bool useRegex = false
     );
 
     /**
@@ -166,6 +168,7 @@ private:
     bool searchHighlightTermsEnabled_ = true;
     bool searchHighlightMatchCase_ = false;
     bool searchHighlightMatchWholeWord_ = false;
+    bool searchHighlightUseRegex_ = false;
 };
 
 #endif //KERYTHING_FILEMODEL_H

@@ -625,11 +625,17 @@ void MainWindow::updateSearch(const QString &text) {
     }
 
     if (model_) {
+        const QStringList highlightTerms =
+            regexEnabled_
+                ? QStringList{ text.trimmed() }
+                : highlightTermsForSearchText(text);
+
         model_->setSearchHighlightTerms(
-            regexEnabled_ ? QStringList{} : highlightTermsForSearchText(text),
-            controller_ && controller_->showHighlightedSearchTerms() && !regexEnabled_,
+            highlightTerms,
+            controller_ && controller_->showHighlightedSearchTerms(),
             matchCaseEnabled_,
-            matchWholeWordEnabled_
+            matchWholeWordEnabled_,
+            regexEnabled_
         );
     }
 
@@ -665,6 +671,16 @@ void MainWindow::updateSearch(const QString &text) {
                     regexOptions
                 )) {
             auto end1 = std::chrono::steady_clock::now();
+
+            if (model_) {
+                model_->setSearchHighlightTerms(
+                    {},
+                    false,
+                    matchCaseEnabled_,
+                    false,
+                    true
+                );
+            }
 
             model_->setSortedSearchResults(
                 {},
@@ -846,11 +862,18 @@ void MainWindow::refreshSearchHighlighting()
         return;
     }
 
+    const QString searchText = searchLine_->text();
+    const QStringList highlightTerms =
+        regexEnabled_
+            ? QStringList{ searchText.trimmed() }
+            : highlightTermsForSearchText(searchText);
+
     model_->setSearchHighlightTerms(
-        regexEnabled_ ? QStringList{} : highlightTermsForSearchText(searchLine_->text()),
-        controller_ && controller_->showHighlightedSearchTerms() && !regexEnabled_,
+        highlightTerms,
+        controller_ && controller_->showHighlightedSearchTerms(),
         matchCaseEnabled_,
-        matchWholeWordEnabled_
+        matchWholeWordEnabled_,
+        regexEnabled_
     );
 
     if (tableView_ && tableView_->viewport()) {

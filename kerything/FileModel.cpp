@@ -393,7 +393,8 @@ void FileModel::setSearchHighlightTerms(
     QStringList terms,
     bool enabled,
     bool matchCase,
-    bool matchWholeWord
+    bool matchWholeWord,
+    bool useRegex
 ) {
     terms.removeAll(QString());
 
@@ -406,7 +407,8 @@ void FileModel::setSearchHighlightTerms(
     if (searchHighlightTerms_ == terms &&
         searchHighlightTermsEnabled_ == enabled &&
         searchHighlightMatchCase_ == matchCase &&
-        searchHighlightMatchWholeWord_ == matchWholeWord) {
+        searchHighlightMatchWholeWord_ == matchWholeWord &&
+        searchHighlightUseRegex_ == useRegex) {
         return;
     }
 
@@ -414,6 +416,7 @@ void FileModel::setSearchHighlightTerms(
     searchHighlightTermsEnabled_ = enabled;
     searchHighlightMatchCase_ = matchCase;
     searchHighlightMatchWholeWord_ = matchWholeWord;
+    searchHighlightUseRegex_ = useRegex;
 
     if (rowCount() > 0) {
         Q_EMIT dataChanged(
@@ -422,7 +425,8 @@ void FileModel::setSearchHighlightTerms(
             {
                 HighlightTermsRole,
                 HighlightMatchCaseRole,
-                HighlightMatchWholeWordRole
+                HighlightMatchWholeWordRole,
+                HighlightUseRegexRole
             }
         );
     }
@@ -749,7 +753,8 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         role == Qt::DecorationRole ||
         role == HighlightTermsRole ||
         role == HighlightMatchCaseRole ||
-        role == HighlightMatchWholeWordRole;
+        role == HighlightMatchWholeWordRole ||
+        role == HighlightUseRegexRole;
 
     if (!supportedRole) {
         return {};
@@ -783,6 +788,16 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         }
 
         return searchHighlightMatchWholeWord_;
+    }
+
+    if (role == HighlightUseRegexRole) {
+        if (!searchHighlightTermsEnabled_ ||
+            index.column() != SearchResultColumn::Name ||
+            searchHighlightTerms_.isEmpty()) {
+            return {};
+        }
+
+        return searchHighlightUseRegex_;
     }
 
     if (!controller_ || !controller_->indexController()) {

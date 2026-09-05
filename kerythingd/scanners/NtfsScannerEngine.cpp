@@ -297,6 +297,52 @@ namespace NtfsScannerEngine {
         }
     }
 
+    void processExtensionRecords(
+        NtfsDatabase& db,
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
+    {
+        for (const auto& [baseMftIndex, extensionRecords] : db.extensionRecordFileInfos) {
+            // Combine the data from all records that belong to the same base
+            // MFT record, then finalize the file once.
+            FileInfo info{};
+            info.mftIndex = baseMftIndex;
+
+            std::vector<TempFileLink> allNames;
+            bool dataAttrFound = false;
+            uint64_t sizeFromData = 0;
+
+            for (const ExtensionFileInfo& fileInfo : extensionRecords) {
+                info.isDir |= fileInfo.isDir;
+                info.isSymlink |= fileInfo.isSymlink;
+
+                if (fileInfo.dataAttrFound) {
+                    dataAttrFound = true;
+                    sizeFromData = std::max(sizeFromData, fileInfo.sizeFromData);
+                }
+
+                allNames.insert(
+                    allNames.end(),
+                    fileInfo.tempLinks.begin(),
+                    fileInfo.tempLinks.end()
+                );
+            }
+
+            finalizeAndAddFile(
+                info,
+                allNames,
+                dataAttrFound,
+                sizeFromData,
+                db,
+                baseMftIndex,
+                onFileRecordChunk,
+                onStringPoolChunk
+            );
+        }
+
+        db.extensionRecordFileInfos.clear();
+    }
+
     std::string utf16ToUtf8(const char16_t* utf16_ptr, size_t length) {
         if (!utf16_ptr || length == 0) {
             return "";
@@ -469,6 +515,20 @@ namespace NtfsScannerEngine {
                     processMftRecord(mftRecordHeader, mftRecordPtr, mftRecordIndex, db, onFileRecordChunk, onStringPoolChunk);
                 }
             }
+        }
+
+        // Now that the whole MFT has been scanned, process records that were
+        // deferred because they used $ATTRIBUTE_LIST / extension records.
+        //
+        // This must happen before the final chunk flush, otherwise directories
+        // or files represented by extension records can be absent from the index,
+        // causing their children to resolve as mount-root entries.
+        if (!db.extensionRecordFileInfos.empty()) {
+            processExtensionRecords(
+                db,
+                onFileRecordChunk,
+                onStringPoolChunk
+            );
         }
 
         // Flush remaining file records

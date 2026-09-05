@@ -352,6 +352,18 @@ namespace NtfsScannerEngine {
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
 
     /**
+     * Processes base/extension MFT records that were deferred because the file
+     * used an $ATTRIBUTE_LIST.
+     *
+     * Records belonging to the same base MFT index are merged, then emitted via
+     * finalizeAndAddFile().
+     */
+    void processExtensionRecords(
+        NtfsDatabase& db,
+        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+        const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+
+    /**
      * Converts a UTF-16 string to a UTF-8 encoded string.
      *
      * This function takes a pointer to a UTF-16 encoded string and its length,

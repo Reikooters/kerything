@@ -69,6 +69,12 @@
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
 
+    QString menuTextFromUserText(QString text)
+    {
+        text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+        return text;
+    }
+
     QStringList highlightTermsForSearchText(const QString& text)
     {
         QStringList terms;
@@ -981,7 +987,7 @@ void MainWindow::rebuildFilterMenu()
         controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
 
     for (const SearchFilterPreference& filter : filters) {
-        auto* filterAction = new QAction(filter.name, filterMenu_);
+        auto* filterAction = new QAction(menuTextFromUserText(filter.name), filterMenu_);
         filterAction->setCheckable(true);
         filterAction->setStatusTip(filter.query);
         filterAction->setToolTip(filter.query);
@@ -1122,7 +1128,7 @@ void MainWindow::updateFilterChip()
         return;
     }
 
-    filterChip_->setText(QStringLiteral("%1  ×").arg(activeSearchFilterName_));
+    filterChip_->setText(QStringLiteral("%1  ×").arg(menuTextFromUserText(activeSearchFilterName_)));
     filterChip_->setToolTip(
         QStringLiteral(
             "Active filter: %1\n"

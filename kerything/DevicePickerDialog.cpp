@@ -277,19 +277,20 @@ void DevicePickerDialog::populateTable(const std::vector<BlockDevice>& blockDevi
         nameItem->setToolTip(blockDevice.deviceId);
         table_->setItem(row, NameColumn, nameItem);
 
-        auto* fsTypeItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayOrDash(blockDevice.fsType));
-        fsTypeItem->setToolTip(BlockDeviceDisplayUtils::displayOrDash(blockDevice.fsType));
+        auto* fsTypeItem = new QTableWidgetItem(
+            BlockDeviceDisplayUtils::filesystemDisplayTextForBlockDevice(blockDevice)
+        );
+        fsTypeItem->setToolTip(
+            BlockDeviceDisplayUtils::filesystemToolTipForBlockDevice(blockDevice)
+        );
         table_->setItem(row, FsTypeColumn, fsTypeItem);
 
-        const QString mountPointText = blockDevice.primaryMountPoint.trimmed().isEmpty()
-            ? QStringLiteral("Not mounted")
-            : blockDevice.primaryMountPoint.trimmed();
+        const QString mountPointText =
+            BlockDeviceDisplayUtils::mountPointSummaryForBlockDevice(blockDevice);
 
         auto* mountPointItem = new QTableWidgetItem(mountPointText);
         mountPointItem->setToolTip(
-            blockDevice.mountPoints.isEmpty()
-                ? QStringLiteral("This device is not currently mounted.")
-                : blockDevice.mountPoints.join(QStringLiteral("\n"))
+            BlockDeviceDisplayUtils::mountPointToolTipForBlockDevice(blockDevice)
         );
         table_->setItem(row, MountPointColumn, mountPointItem);
 

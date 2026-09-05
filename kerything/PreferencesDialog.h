@@ -22,6 +22,7 @@ class QListWidget;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
+class QTextBrowser;
 
 class PreferencesDialog final : public QDialog {
     Q_OBJECT
@@ -115,7 +116,7 @@ private:
     QCheckBox* showOfflineResultsCheckBox_ = nullptr;
     QLabel* liveUpdatesWarningIconLabel_ = nullptr;
     QCheckBox* liveUpdatesEnabledCheckBox_ = nullptr;
-    QLabel* selectedDeviceLabel_ = nullptr;
+    QTextBrowser* selectedDeviceDetailsText_ = nullptr;
 
     QTableWidget* filterTable_ = nullptr;
     QPushButton* addFilterButton_ = nullptr;

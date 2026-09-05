@@ -4,6 +4,7 @@
 #include "PreferencesDialog.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -20,10 +21,16 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTextBrowser>
+#include <QTextDocument>
+#include <QTextOption>
+#include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
 
@@ -367,9 +374,29 @@ QWidget* PreferencesDialog::createDevicesPage()
 
     auto* optionsGroup = new QGroupBox(QStringLiteral("Selected device options"), page);
     auto* optionsLayout = new QVBoxLayout(optionsGroup);
+    optionsLayout->setSpacing(3);
 
-    selectedDeviceLabel_ = new QLabel(QStringLiteral("No device selected."), optionsGroup);
-    selectedDeviceLabel_->setWordWrap(true);
+    selectedDeviceDetailsText_ = new QTextBrowser(optionsGroup);
+    selectedDeviceDetailsText_->setReadOnly(true);
+    selectedDeviceDetailsText_->setOpenLinks(false);
+    selectedDeviceDetailsText_->setFrameShape(QFrame::NoFrame);
+    selectedDeviceDetailsText_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    selectedDeviceDetailsText_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    selectedDeviceDetailsText_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    selectedDeviceDetailsText_->setFocusPolicy(Qt::NoFocus);
+    selectedDeviceDetailsText_->setTextInteractionFlags(Qt::NoTextInteraction);
+    selectedDeviceDetailsText_->setAutoFillBackground(false);
+    selectedDeviceDetailsText_->viewport()->setAutoFillBackground(false);
+    selectedDeviceDetailsText_->setStyleSheet(QStringLiteral(
+        "QTextBrowser {"
+        "  background: transparent;"
+        "  border: none;"
+        "}"
+        "QTextBrowser viewport {"
+        "  background: transparent;"
+        "}"
+    ));
+    selectedDeviceDetailsText_->document()->setDocumentMargin(0);
 
     scanWhenUnmountedCheckBox_ = new QCheckBox(
         QStringLiteral("Scan this device even when it is not mounted"),
@@ -381,7 +408,7 @@ QWidget* PreferencesDialog::createDevicesPage()
         optionsGroup
     );
 
-    optionsLayout->addWidget(selectedDeviceLabel_);
+    optionsLayout->addWidget(selectedDeviceDetailsText_);
     optionsLayout->addWidget(scanWhenUnmountedCheckBox_);
     optionsLayout->addWidget(showOfflineResultsCheckBox_);
 
@@ -416,6 +443,42 @@ QWidget* PreferencesDialog::createDevicesPage()
             return;
         }
 
+        auto updateDetailsAreaHeight = [this]() {
+            if (!selectedDeviceDetailsText_) {
+                return;
+            }
+
+            static constexpr int MaxDetailsHeight = 190;
+
+            QTextDocument* document = selectedDeviceDetailsText_->document();
+            if (!document) {
+                return;
+            }
+
+            document->setDocumentMargin(0);
+
+            QTextOption textOption = document->defaultTextOption();
+            textOption.setWrapMode(QTextOption::WordWrap);
+            document->setDefaultTextOption(textOption);
+
+            const int viewportWidth = selectedDeviceDetailsText_->viewport()
+                ? selectedDeviceDetailsText_->viewport()->width()
+                : selectedDeviceDetailsText_->width();
+
+            if (viewportWidth > 0) {
+                document->setTextWidth(viewportWidth);
+            }
+
+            const int contentHeight =
+                std::max(1, static_cast<int>(std::ceil(document->size().height())));
+
+            const int detailsHeight = std::min(contentHeight, MaxDetailsHeight);
+
+            selectedDeviceDetailsText_->setMinimumHeight(detailsHeight);
+            selectedDeviceDetailsText_->setMaximumHeight(detailsHeight);
+            selectedDeviceDetailsText_->verticalScrollBar()->setValue(0);
+        };
+
         const int row = deviceTable_->currentRow();
         const bool validRow = row >= 0 && row < deviceTable_->rowCount();
         auto* enabledItem = validRow ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
@@ -426,7 +489,8 @@ QWidget* PreferencesDialog::createDevicesPage()
         const QSignalBlocker liveUpdatesBlocker(liveUpdatesEnabledCheckBox_);
 
         if (deviceId.isEmpty()) {
-            selectedDeviceLabel_->setText(QStringLiteral("No device selected."));
+            selectedDeviceDetailsText_->setHtml(QStringLiteral("No device selected."));
+            updateDetailsAreaHeight();
             scanWhenUnmountedCheckBox_->setEnabled(false);
             showOfflineResultsCheckBox_->setEnabled(false);
             liveUpdatesEnabledCheckBox_->setEnabled(false);
@@ -436,29 +500,25 @@ QWidget* PreferencesDialog::createDevicesPage()
             return;
         }
 
-        QString deviceName = deviceTable_->item(row, DeviceNameColumn)->text().toHtmlEscaped();
-        QString deviceMountPoint = deviceTable_->item(row, DeviceMountPointColumn)->text().toHtmlEscaped();
+        const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
 
-        if (deviceMountPoint != QStringLiteral("—")) {
-            selectedDeviceLabel_->setText(QStringLiteral(
-                "Options for <b>%1</b><br>"
-                "Currently mounted at <b>%3</b>.<br>"
-                "Device ID: %2"
-            ).arg(
-                deviceName,
-                deviceId.toHtmlEscaped(),
-                deviceMountPoint
-            ));
+        if (knownDeviceIt != knownDeviceById_.constEnd()) {
+            selectedDeviceDetailsText_->setHtml(
+                BlockDeviceDisplayUtils::selectedDeviceDetailsHtml(knownDeviceIt.value())
+            );
+            updateDetailsAreaHeight();
         }
         else {
-            selectedDeviceLabel_->setText(QStringLiteral(
+            QString deviceName = deviceTable_->item(row, DeviceNameColumn)->text().toHtmlEscaped();
+
+            selectedDeviceDetailsText_->setHtml(QStringLiteral(
                 "Options for <b>%1</b><br>"
-                "This device is not currently mounted.<br>"
                 "Device ID: %2"
             ).arg(
                 deviceName,
                 deviceId.toHtmlEscaped()
             ));
+            updateDetailsAreaHeight();
         }
 
         scanWhenUnmountedCheckBox_->setEnabled(true);
@@ -466,7 +526,6 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         const bool unmountedScanningSupported = unmountedScanningSupportedForDevice(deviceId);
         const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
-        const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
         const bool mountedAsFuseblk =
             knownDeviceIt != knownDeviceById_.constEnd() &&
             knownDeviceIt->mounted &&
@@ -525,13 +584,26 @@ QWidget* PreferencesDialog::createDevicesPage()
             }
         }
         else if (liveUpdatesSupported) {
-            liveUpdatesEnabledCheckBox_->setToolTip(
-                QStringLiteral(
-                    "Kerything will try to keep this filesystem up to date using fanotify whenever it is mounted.\n"
-                    "If the mounted filesystem or kernel driver does not support the required file-handle features,\n"
-                    "Kerything will report that live updates are unavailable or that a rescan is needed."
-                )
-            );
+            if (knownDeviceIt != knownDeviceById_.constEnd() &&
+                BlockDeviceDisplayUtils::isBtrfsDevice(knownDeviceIt.value())) {
+                liveUpdatesEnabledCheckBox_->setToolTip(
+                    QStringLiteral(
+                        "Kerything will watch each discovered mounted Btrfs subvolume for this filesystem.\n"
+                        "Live updates use the Btrfs subvolume id and inode together so files in different\n"
+                        "subvolumes can be tracked correctly.\n\n"
+                        "%1"
+                    ).arg(BlockDeviceDisplayUtils::mountPointToolTipForBlockDevice(knownDeviceIt.value()))
+                );
+                }
+            else {
+                liveUpdatesEnabledCheckBox_->setToolTip(
+                    QStringLiteral(
+                        "Kerything will try to keep this filesystem up to date using fanotify whenever it is mounted.\n"
+                        "If the mounted filesystem or kernel driver does not support the required file-handle features,\n"
+                        "Kerything will report that live updates are unavailable or that a rescan is needed."
+                    )
+                );
+            }
 
             if (liveUpdatesWarningIconLabel_) {
                 liveUpdatesWarningIconLabel_->setToolTip(QString());
@@ -589,7 +661,8 @@ QWidget* PreferencesDialog::createDevicesPage()
         deviceTable_->setCurrentCell(0, DeviceNameColumn);
     }
 
-    updateSelectedDeviceOptions();
+    // Do first update using a timer, as this will ensure that the device table has been populated
+    QTimer::singleShot(0, this, updateSelectedDeviceOptions);
 
     return page;
 }
@@ -1187,26 +1260,20 @@ void PreferencesDialog::populateDeviceTable()
 
         deviceTable_->setItem(row, DeviceStatusColumn, statusItem);
 
-        auto* fsTypeItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayOrDash(blockDevice.fsType));
-        if (blockDevice.mounted && !blockDevice.mountedFsType.trimmed().isEmpty()) {
-            fsTypeItem->setToolTip(
-                blockDevice.mountedFsType == blockDevice.fsType
-                    ? QStringLiteral("Filesystem type: %1").arg(blockDevice.fsType)
-                    : QStringLiteral("Detected filesystem: %1\nMounted as: %2")
-                        .arg(blockDevice.fsType, blockDevice.mountedFsType)
-            );
-        }
+        auto* fsTypeItem = new QTableWidgetItem(
+            BlockDeviceDisplayUtils::filesystemDisplayTextForBlockDevice(blockDevice)
+        );
+        fsTypeItem->setToolTip(
+            BlockDeviceDisplayUtils::filesystemToolTipForBlockDevice(blockDevice)
+        );
         deviceTable_->setItem(row, DeviceFsTypeColumn, fsTypeItem);
 
-        const QString mountPointText = blockDevice.primaryMountPoint.trimmed().isEmpty()
-            ? QStringLiteral("—")
-            : blockDevice.primaryMountPoint.trimmed();
+        const QString mountPointText =
+            BlockDeviceDisplayUtils::mountPointSummaryForBlockDevice(blockDevice);
 
         auto* mountPointItem = new QTableWidgetItem(mountPointText);
         mountPointItem->setToolTip(
-            blockDevice.mountPoints.isEmpty()
-                ? QStringLiteral("This device is not currently mounted.")
-                : blockDevice.mountPoints.join(QStringLiteral("\n"))
+            BlockDeviceDisplayUtils::mountPointToolTipForBlockDevice(blockDevice)
         );
         deviceTable_->setItem(row, DeviceMountPointColumn, mountPointItem);
 

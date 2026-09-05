@@ -5198,51 +5198,6 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         queryKeywords.push_back(std::move(queryKeyword));
     }
 
-    auto collectExtensionCandidates = [](
-        const DeviceIndex& index,
-        const ExtensionSet& extensions
-    ) {
-        std::vector<uint32_t> candidates;
-
-        if (extensions.empty()) {
-            return candidates;
-        }
-
-        std::size_t estimatedSize = 0;
-
-        for (const std::string& extension : extensions) {
-            if (const std::vector<uint32_t>* records =
-                    index.recordIndicesForExtension(extension)) {
-                estimatedSize += records->size();
-                    }
-        }
-
-        candidates.reserve(estimatedSize);
-
-        for (const std::string& extension : extensions) {
-            const std::vector<uint32_t>* records =
-                index.recordIndicesForExtension(extension);
-
-            if (!records) {
-                continue;
-            }
-
-            candidates.insert(
-                candidates.end(),
-                records->begin(),
-                records->end()
-            );
-        }
-
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(
-            std::unique(candidates.begin(), candidates.end()),
-            candidates.end()
-        );
-
-        return candidates;
-    };
-
     // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {
         std::size_t totalSize = 0;

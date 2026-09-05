@@ -23,6 +23,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QSizePolicy>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -46,6 +47,24 @@ namespace {
     constexpr int LiveUpdatesEnabledRole = Qt::UserRole + 5;
 
     constexpr int FilterIdRole = Qt::UserRole + 20;
+
+    QIcon themedIcon(const QString& iconName, const QString& fallbackIconName)
+    {
+        return QIcon::fromTheme(
+            iconName,
+            QIcon::fromTheme(fallbackIconName)
+        );
+    }
+
+    void setButtonIcon(QPushButton* button, const QString& iconName, const QString& fallbackIconName)
+    {
+        if (!button) {
+            return;
+        }
+
+        button->setIcon(themedIcon(iconName, fallbackIconName));
+        button->setIconSize(QSize(16, 16));
+    }
 
     bool moveTableSelectionToEdge(QTableWidget* table, QKeyEvent* keyEvent)
     {
@@ -720,6 +739,13 @@ QWidget* PreferencesDialog::createFiltersPage()
     moveFilterDownButton_ = new QPushButton(QStringLiteral("Move Down"), page);
     restoreDefaultFiltersButton_ = new QPushButton(QStringLiteral("Restore Defaults"), page);
 
+    setButtonIcon(addFilterButton_, QStringLiteral("list-add"), QStringLiteral("document-new"));
+    setButtonIcon(duplicateFilterButton_, QStringLiteral("edit-copy"), QStringLiteral("document-duplicate"));
+    setButtonIcon(removeFilterButton_, QStringLiteral("list-remove"), QStringLiteral("edit-delete"));
+    setButtonIcon(moveFilterUpButton_, QStringLiteral("go-up"), QStringLiteral("arrow-up"));
+    setButtonIcon(moveFilterDownButton_, QStringLiteral("go-down"), QStringLiteral("arrow-down"));
+    setButtonIcon(restoreDefaultFiltersButton_, QStringLiteral("document-revert"), QStringLiteral("edit-undo"));
+
     duplicateFilterButton_->setEnabled(false);
     removeFilterButton_->setEnabled(false);
     moveFilterUpButton_->setEnabled(false);
@@ -806,9 +832,13 @@ QWidget* PreferencesDialog::createFiltersPage()
             ? QStringLiteral("Remove the selected filter?")
             : QStringLiteral("Remove %1 selected filters?").arg(selectedRows.size());
 
+        const QString title = selectedRows.size() == 1
+            ? QStringLiteral("Remove Filter?")
+            : QStringLiteral("Remove Filters?");
+
         QMessageBox confirmBox(this);
         confirmBox.setIcon(QMessageBox::Question);
-        confirmBox.setWindowTitle(QStringLiteral("Remove Filters?"));
+        confirmBox.setWindowTitle(title);
         confirmBox.setText(message);
         confirmBox.setStandardButtons(QMessageBox::Discard | QMessageBox::Cancel);
         confirmBox.setDefaultButton(QMessageBox::Cancel);

@@ -81,16 +81,11 @@ namespace {
         );
     }
 
-    bool isBtrfsNamespaceRootRecord(
+    bool isMountedBtrfsNamespaceRootRecord(
         const IndexController::DeviceIndex& deviceIndex,
-        const IndexController::RecordHandle& handle,
-        const FileRecord& record
+        const IndexController::RecordHandle& handle
     ) {
-        if (!deviceIndex.usesNamespaceAwareMountExpansion()) {
-            return false;
-        }
-
-        if (record.fsIndex != FilesystemConstants::BtrfsFirstFreeObjectId) {
+        if (!deviceIndex.isBtrfsNamespaceRootRecord(handle.recordIdx)) {
             return false;
         }
 
@@ -126,7 +121,11 @@ namespace {
             return {};
         }
 
-        if (isBtrfsNamespaceRootRecord(deviceIndex, handle, record)) {
+        if (deviceIndex.isFilesystemRootRecord(handle.recordIdx)) {
+            return QDir::cleanPath(deviceIndex.mountPoints.at(handle.mountPointIdx));
+        }
+
+        if (isMountedBtrfsNamespaceRootRecord(deviceIndex, handle)) {
             return QDir::cleanPath(deviceIndex.mountPoints.at(handle.mountPointIdx));
         }
 
@@ -263,7 +262,14 @@ namespace {
         rows += tooltipRow(QStringLiteral("Modified"), modifiedTimeText(rec));
 
         if (mounted) {
-            rows += tooltipRow(QStringLiteral("Parent path"), displayParentPath);
+            rows += tooltipRow(
+                deviceIndex.isFilesystemRootRecord(handle.recordIdx)
+                    ? QStringLiteral("Path")
+                    : QStringLiteral("Parent path"),
+                deviceIndex.isFilesystemRootRecord(handle.recordIdx)
+                    ? mountedFullPathForHandle(deviceIndex, handle, rec)
+                    : displayParentPath
+            );
         } else {
             rows += tooltipRow(QStringLiteral("Indexed parent path"), indexedParentPath);
             rows += tooltipRow(QStringLiteral("Display parent path"), displayParentPath);

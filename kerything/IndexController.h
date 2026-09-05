@@ -20,6 +20,7 @@
 
 #include "BlockDevice.h"
 #include "FileRecord.h"
+#include "FilesystemConstants.h"
 #include "LiveUpdateEvent.h"
 
 #include <chrono>
@@ -652,6 +653,52 @@ public:
             }
 
             return std::string_view(&stringPool[record.nameOffset], record.nameLen);
+        }
+
+        [[nodiscard]] bool isFilesystemRootRecord(uint32_t recordIdx) const noexcept
+        {
+            if (recordIdx >= fileRecords.size()) {
+                return false;
+            }
+
+            if (isDeletedRecord(recordIdx)) {
+                return false;
+            }
+
+            const FileRecord& record = fileRecords[recordIdx];
+
+            if ((record.flags & FileRecord_IsDir) == 0) {
+                return false;
+            }
+
+            if (record.nameLen != 0) {
+                return false;
+            }
+
+            if (!hasFileRecordNamespaces()) {
+                return record.fsIndex == record.parentFsIndex ||
+                       record.parentRecordIdx == 0xFFFFFFFF;
+            }
+
+            if (recordIdx >= fileRecordNamespaces.size()) {
+                return false;
+            }
+
+            const FileRecordNamespace namespaceEntry = fileRecordNamespaces[recordIdx];
+
+            return namespaceEntry.fsNamespace != 0 &&
+                   namespaceEntry.fsNamespace == namespaceEntry.parentFsNamespace &&
+                   record.fsIndex == FilesystemConstants::BtrfsFirstFreeObjectId &&
+                   record.parentFsIndex == FilesystemConstants::BtrfsFirstFreeObjectId;
+        }
+
+        [[nodiscard]] bool isBtrfsNamespaceRootRecord(uint32_t recordIdx) const noexcept
+        {
+            if (!usesNamespaceAwareMountExpansion()) {
+                return false;
+            }
+
+            return isFilesystemRootRecord(recordIdx);
         }
 
         [[nodiscard]] std::string_view lowercaseRecordName(uint32_t recordIdx) const

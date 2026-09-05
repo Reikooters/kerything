@@ -15,6 +15,7 @@ Kerything currently supports indexing:
 
 - EXT4
 - NTFS
+- Btrfs (mounted subvolumes only)
 - Other mounted Linux filesystems through the generic mounted filesystem scanner
 
 Low-level offline (unmounted) scanning is currently available for:
@@ -111,6 +112,23 @@ Kerything can be built with KDE Frameworks 6 for better integration on KDE Plasm
   - Group files by mime type when opening multiple files. This means when you select 4 music files and 3 images and press Open, you get a playlist containing the selected 4 songs open in your music player, and the selected 3 images open in your image viewer.
   - Better "Open Terminal Here" integration.
   - About box uses KDE Plasma's standard about box style.
+
+### Btrfs support
+
+Kerything includes initial support for Btrfs filesystems. It indexes mounted Btrfs subvolumes, but currently treats subvolume boundaries as scan boundaries.
+
+In practice, this means that if a mounted Btrfs filesystem contains a child subvolume which is not mounted, Kerything will not descend into that child subvolume through the parent mount.
+
+For example, if `/mnt/my-btrfs-device/my-child-subvolume` is a child subvolume, scanning `/mnt/my-btrfs-device` will not include files inside `my-child-subvolume`. However, if that child subvolume were also mounted at `/mnt/my-btrfs-device-child`, Kerything will index it through `/mnt/my-btrfs-device-child`.
+
+Known limitations:
+
+- Only mounted Btrfs subvolumes are indexed.
+- Subvolume boundaries are not crossed during scanning.
+- If the same subvolume is reachable through multiple paths, not every path may appear in search results for the reason mentioned above.
+- Multi-device Btrfs filesystems are not currently supported.
+
+Btrfs support will continue to improve in future releases.
 
 ## Searching and filters
 

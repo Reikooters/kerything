@@ -2043,12 +2043,12 @@ public:
         -> std::invoke_result_t<Fn, const DeviceIndex*> {
         std::shared_lock lock(indexMutex_);
 
-        const auto it = indexByIndexId_.find(indexId);
-        if (it == indexByIndexId_.end()) {
+        const DeviceIndex* deviceIndex = deviceIndexUnlocked(indexId);
+        if (!deviceIndex) {
             return std::invoke_result_t<Fn, const DeviceIndex*>{};
         }
 
-        return std::forward<Fn>(fn)(it->second.get());
+        return std::forward<Fn>(fn)(deviceIndex);
     }
 
     /**
@@ -2087,6 +2087,8 @@ private:
     };
 
     bool removeDeviceByIndexIdUnlocked(quint64 indexId);
+    [[nodiscard]] const DeviceIndex* deviceIndexUnlocked(quint64 indexId) const noexcept;
+    [[nodiscard]] DeviceIndex* deviceIndexUnlocked(quint64 indexId) noexcept;
     static quint8 fileRecordFlagsFromLiveUpdateOperation(const LiveUpdateOperation& operation);
     static void updateFileRecordMetadataFromLiveUpdateOperation(
         FileRecord& record,
@@ -2140,6 +2142,9 @@ private:
 
     // indexId -> in-memory index
     std::unordered_map<quint64, std::unique_ptr<DeviceIndex>> indexByIndexId_;
+
+    // Fast non-owning lookup table for hot paths. Entries are nullptr after removal.
+    std::vector<DeviceIndex*> indexLookupByIndexId_;
 
     // devNode -> in-memory index
     std::unordered_map<QString, quint64> indexIdByDevNode_;

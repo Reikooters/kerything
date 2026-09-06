@@ -1740,12 +1740,25 @@ IndexController::IndexController(QObject* parent)
 const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 indexId) const {
     std::shared_lock lock(indexMutex_);
 
-    const auto it = indexByIndexId_.find(indexId);
-    if (it == indexByIndexId_.end()) {
+    return deviceIndexUnlocked(indexId);
+}
+
+const IndexController::DeviceIndex* IndexController::deviceIndexUnlocked(quint64 indexId) const noexcept
+{
+    if (indexId >= indexLookupByIndexId_.size()) {
         return nullptr;
     }
 
-    return it->second.get();
+    return indexLookupByIndexId_[static_cast<std::size_t>(indexId)];
+}
+
+IndexController::DeviceIndex* IndexController::deviceIndexUnlocked(quint64 indexId) noexcept
+{
+    if (indexId >= indexLookupByIndexId_.size()) {
+        return nullptr;
+    }
+
+    return indexLookupByIndexId_[static_cast<std::size_t>(indexId)];
 }
 
 quint64 IndexController::addDevice(
@@ -1773,11 +1786,10 @@ quint64 IndexController::addDevice(
     if (existingDevNodeIt != indexIdByDevNode_.end()) {
         const quint64 existingIndexId = existingDevNodeIt->second;
 
-        const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
-        if (existingDeviceIndexIt != indexByIndexId_.end()) {
+        if (DeviceIndex* existingDeviceIndex = deviceIndexUnlocked(existingIndexId)) {
             indexIdByRequestId_[requestId] = existingIndexId;
 
-            DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+            DeviceIndex& deviceIndex = *existingDeviceIndex;
             deviceIndex.fsType = fsType;
             deviceIndex.label = label;
             deviceIndex.deviceId = deviceId;
@@ -1841,7 +1853,16 @@ quint64 IndexController::addDevice(
     deviceIndex->mounts = mounts;
     deviceIndex->mounted = !mountPoints.isEmpty();
 
+    DeviceIndex* deviceIndexRaw = deviceIndex.get();
+
     indexByIndexId_.emplace(indexId, std::move(deviceIndex));
+
+    if (indexId >= indexLookupByIndexId_.size()) {
+        indexLookupByIndexId_.resize(static_cast<std::size_t>(indexId) + 1, nullptr);
+    }
+
+    indexLookupByIndexId_[static_cast<std::size_t>(indexId)] = deviceIndexRaw;
+
     indexIdByDevNode_[devNode] = indexId;
     indexIdByRequestId_[requestId] = indexId;
 
@@ -1931,6 +1952,10 @@ bool IndexController::removeDeviceByIndexIdUnlocked(quint64 indexId) {
     }
 
     // Finally remove the owned DeviceIndex itself.
+    if (indexId < indexLookupByIndexId_.size()) {
+        indexLookupByIndexId_[static_cast<std::size_t>(indexId)] = nullptr;
+    }
+
     indexByIndexId_.erase(deviceIt);
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -6133,12 +6158,7 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 const auto& handle = results[i];
                 auto& key = keys[i];
 
-                const auto it = indexByIndexId_.find(handle.indexId);
-                if (it == indexByIndexId_.end()) {
-                    continue;
-                }
-
-                const auto* device = it->second.get();
+                const auto* device = deviceIndexUnlocked(handle.indexId);
                 if (!device ||
                     !device->isReady ||
                     static_cast<uint8_t>(device->generation) != handle.generation ||
@@ -6199,12 +6219,7 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 const auto& handle = results[i];
                 auto& key = keys[i];
 
-                const auto it = indexByIndexId_.find(handle.indexId);
-                if (it == indexByIndexId_.end()) {
-                    continue;
-                }
-
-                const auto* device = it->second.get();
+                const auto* device = deviceIndexUnlocked(handle.indexId);
                 if (!device ||
                     !device->isReady ||
                     static_cast<uint8_t>(device->generation) != handle.generation ||
@@ -6266,12 +6281,7 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto& handle = results[i];
 
-                const auto it = indexByIndexId_.find(handle.indexId);
-                if (it == indexByIndexId_.end()) {
-                    continue;
-                }
-
-                const auto* device = it->second.get();
+                const auto* device = deviceIndexUnlocked(handle.indexId);
                 if (!device ||
                     !device->isReady ||
                     static_cast<uint8_t>(device->generation) != handle.generation ||

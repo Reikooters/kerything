@@ -6,13 +6,14 @@
 #include <iterator>
 #include <string>
 #include <QBuffer>
+#include <QColor>
+#include <QDir>
+#include <QHash>
 #include <QIcon>
 #include <QMimeData>
 #include <QMimeDatabase>
 #include <QMimeType>
 #include <QUrl>
-#include <QDir>
-#include <QColor>
 #include "FileModel.h"
 
 #include "AppController.h"
@@ -140,6 +141,58 @@ namespace {
         return QDir::cleanPath(mountedParentPath + QStringLiteral("/") + fileName);
     }
 
+    const QLocale& displayLocale()
+    {
+        static const QLocale locale;
+        return locale;
+    }
+
+    const QIcon& warningIcon()
+    {
+        static const QIcon icon = QIcon::fromTheme(
+            QStringLiteral("dialog-warning"),
+            QIcon::fromTheme(QStringLiteral("emblem-warning"))
+        );
+
+        return icon;
+    }
+
+    const QIcon& directoryIcon()
+    {
+        static const QIcon icon = QIcon::fromTheme(
+            QStringLiteral("inode-directory"),
+            QIcon::fromTheme(QStringLiteral("folder"))
+        );
+
+        return icon;
+    }
+
+    const QIcon& directorySymlinkIcon()
+    {
+        static const QIcon icon = QIcon::fromTheme(
+            QStringLiteral("inode-directory-symlink"),
+            QIcon::fromTheme(QStringLiteral("folder-remote"))
+        );
+
+        return icon;
+    }
+
+    const QIcon& symlinkIcon()
+    {
+        static const QIcon icon = QIcon::fromTheme(QStringLiteral("emblem-symbolic-link"));
+        return icon;
+    }
+
+    const QIcon& fallbackFileIcon()
+    {
+        static const QIcon icon = QIcon::fromTheme(
+            QStringLiteral("text-x-generic"),
+            QIcon::fromTheme(QStringLiteral("document-new"))
+        );
+
+        return icon;
+    }
+
     QString fileTypeText(const FileRecord& rec)
     {
         const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
@@ -166,7 +219,7 @@ namespace {
             return QStringLiteral("—");
         }
 
-        const QLocale locale;
+        const QLocale& locale = displayLocale();
         QString readableSize = locale.formattedDataSize(
             static_cast<qint64>(rec.size),
             1,
@@ -207,10 +260,7 @@ namespace {
     QString warningIconDataUri()
     {
         static const QString dataUri = []() {
-            const QIcon icon = QIcon::fromTheme(
-                QStringLiteral("dialog-warning"),
-                QIcon::fromTheme(QStringLiteral("emblem-warning"))
-            );
+            const QIcon& icon = warningIcon();
 
             if (icon.isNull()) {
                 return QString();
@@ -317,31 +367,39 @@ namespace {
     {
         static QMimeDatabase mimeDatabase;
 
+        auto cachedThemeIcon = [](const QString& iconName) -> QIcon {
+            if (iconName.isEmpty()) {
+                return {};
+            }
+
+            static QHash<QString, QIcon> cache;
+
+            const auto it = cache.constFind(iconName);
+            if (it != cache.constEnd()) {
+                return it.value();
+            }
+
+            const QIcon icon = QIcon::fromTheme(iconName);
+            cache.insert(iconName, icon);
+            return icon;
+        };
+
         const QMimeType mimeType = mimeDatabase.mimeTypeForFile(
             fileName,
             QMimeDatabase::MatchExtension
         );
 
-        const QString iconName = mimeType.iconName();
-        if (!iconName.isEmpty()) {
-            const QIcon icon = QIcon::fromTheme(iconName);
-            if (!icon.isNull()) {
-                return icon;
-            }
+        const QIcon icon = cachedThemeIcon(mimeType.iconName());
+        if (!icon.isNull()) {
+            return icon;
         }
 
-        const QString genericIconName = mimeType.genericIconName();
-        if (!genericIconName.isEmpty()) {
-            const QIcon icon = QIcon::fromTheme(genericIconName);
-            if (!icon.isNull()) {
-                return icon;
-            }
+        const QIcon genericIcon = cachedThemeIcon(mimeType.genericIconName());
+        if (!genericIcon.isNull()) {
+            return genericIcon;
         }
 
-        return QIcon::fromTheme(
-            QStringLiteral("text-x-generic"),
-            QIcon::fromTheme(QStringLiteral("document-new"))
-        );
+        return fallbackFileIcon();
     }
 
     QString formatModelBytes(quint64 bytes)
@@ -865,10 +923,7 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
             // This is used to differentiate Files vs Folders and mark unmounted results.
             if (role == Qt::DecorationRole) {
                 if (index.column() == SearchResultColumn::Path && !mounted) {
-                    return QIcon::fromTheme(
-                        QStringLiteral("dialog-warning"),
-                        QIcon::fromTheme(QStringLiteral("emblem-warning"))
-                    );
+                    return warningIcon();
                 }
 
                 if (index.column() != SearchResultColumn::Name) {
@@ -883,12 +938,12 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
                 // Using standard KDE/Freedesktop theme names for icons
                 if ((rec.flags & FileRecord_IsDir) != 0) {
                     return (rec.flags & FileRecord_IsSymlink) != 0
-                        ? QIcon::fromTheme("inode-directory-symlink", QIcon::fromTheme("folder-remote"))
-                        : QIcon::fromTheme("inode-directory", QIcon::fromTheme("folder"));
+                        ? directorySymlinkIcon()
+                        : directoryIcon();
                 }
 
                 if ((rec.flags & FileRecord_IsSymlink) != 0) {
-                    const QIcon icon = QIcon::fromTheme(QStringLiteral("emblem-symbolic-link"));
+                    const QIcon& icon = symlinkIcon();
                     if (!icon.isNull()) {
                         return icon;
                     }
@@ -908,14 +963,14 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
 
                 case SearchResultColumn::Size: // Size: Formatted according to the user's locale
                     if ((rec.flags & FileRecord_IsDir) != 0) {
-                        return QString("<DIR>");
+                        return QStringLiteral("<DIR>");
                     }
 
                     // Format as bytes/KB/MB etc, with 2 decimal places
                     //return QLocale().formattedDataSize(rec.size, 2, QLocale::DataSizeTraditionalFormat);
 
                     // Formats the raw byte count with appropriate thousands separators
-                    return QLocale().toString(static_cast<qlonglong>(rec.size));
+                    return displayLocale().toString(static_cast<qlonglong>(rec.size));
 
                 case SearchResultColumn::DateModified: // Date: Formatted from unix seconds to local time
                     return QString::fromStdString(GuiUtils::uint64ToFormattedTime(rec.modificationTime));

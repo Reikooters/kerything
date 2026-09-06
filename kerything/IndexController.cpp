@@ -929,6 +929,8 @@ namespace {
             return false;
         }
 
+        const bool hasLiveDelta = !index.liveDeltaFlatIndex.empty();
+
         if (firstTrigram) {
             candidates.reserve(postingCount);
 
@@ -941,19 +943,21 @@ namespace {
                 }
             );
 
-            forEachRecordIdxForTrigram(
-                index.liveDeltaFlatIndex,
-                trigram,
-                [&](uint32_t recordIdx) {
-                    candidates.push_back(recordIdx);
-                }
-            );
+            if (hasLiveDelta) {
+                forEachRecordIdxForTrigram(
+                    index.liveDeltaFlatIndex,
+                    trigram,
+                    [&](uint32_t recordIdx) {
+                        candidates.push_back(recordIdx);
+                    }
+                );
 
-            std::sort(candidates.begin(), candidates.end());
-            candidates.erase(
-                std::unique(candidates.begin(), candidates.end()),
-                candidates.end()
-            );
+                std::sort(candidates.begin(), candidates.end());
+                candidates.erase(
+                    std::unique(candidates.begin(), candidates.end()),
+                    candidates.end()
+                );
+            }
 
             firstTrigram = false;
             return !candidates.empty();
@@ -971,19 +975,21 @@ namespace {
             }
         );
 
-        forEachRecordIdxForTrigram(
-            index.liveDeltaFlatIndex,
-            trigram,
-            [&](uint32_t recordIdx) {
-                trigramRecordIndices.push_back(recordIdx);
-            }
-        );
+        if (hasLiveDelta) {
+            forEachRecordIdxForTrigram(
+                index.liveDeltaFlatIndex,
+                trigram,
+                [&](uint32_t recordIdx) {
+                    trigramRecordIndices.push_back(recordIdx);
+                }
+            );
 
-        std::sort(trigramRecordIndices.begin(), trigramRecordIndices.end());
-        trigramRecordIndices.erase(
-            std::unique(trigramRecordIndices.begin(), trigramRecordIndices.end()),
-            trigramRecordIndices.end()
-        );
+            std::sort(trigramRecordIndices.begin(), trigramRecordIndices.end());
+            trigramRecordIndices.erase(
+                std::unique(trigramRecordIndices.begin(), trigramRecordIndices.end()),
+                trigramRecordIndices.end()
+            );
+        }
 
         intersectSortedUniqueCandidates(candidates, trigramRecordIndices);
         return !candidates.empty();
@@ -5245,6 +5251,24 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             return;
         }
 
+        if (!index.usesNamespaceAwareMountExpansion()) {
+            const int mountPointCount = std::min<int>(
+                index.mountPoints.size(),
+                RecordHandle::MaxMountPointIdx + 1
+            );
+
+            for (int mountPointIdx = 0; mountPointIdx < mountPointCount; ++mountPointIdx) {
+                results.push_back({
+                    recordIdx,
+                    indexId,
+                    generation,
+                    static_cast<uint8_t>(mountPointIdx)
+                });
+            }
+
+            return;
+        }
+
         index.forEachVisibleMountPointForRecord(
             recordIdx,
             [&](int mountPointIdx) {
@@ -5606,6 +5630,24 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
                 generation,
                 RecordHandle::NoMountPoint
             });
+            return;
+        }
+
+        if (!index.usesNamespaceAwareMountExpansion()) {
+            const int mountPointCount = std::min<int>(
+                index.mountPoints.size(),
+                RecordHandle::MaxMountPointIdx + 1
+            );
+
+            for (int mountPointIdx = 0; mountPointIdx < mountPointCount; ++mountPointIdx) {
+                results.push_back({
+                    recordIdx,
+                    indexId,
+                    generation,
+                    static_cast<uint8_t>(mountPointIdx)
+                });
+            }
+
             return;
         }
 

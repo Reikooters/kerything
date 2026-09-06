@@ -449,6 +449,20 @@ void FileModel::trimSearchResultsOverCapacity()
     const std::size_t minExcessHandlesToTrim =
         MinExcessResultCapacityBytesToTrim / sizeof(IndexController::RecordHandle);
 
+    if (resultSize == 0 && resultCapacity == 0) {
+        return;
+    }
+
+    /*
+     * Common interactive-search fast path:
+     * if capacity is only slightly above the current result size, there is no
+     * chance we will trim, so avoid asking IndexController for the broad-search
+     * capacity floor on every keystroke.
+     */
+    if (resultCapacity <= resultSize + retainedSlackHandles + minExcessHandlesToTrim) {
+        return;
+    }
+
     std::size_t indexResultCapacityFloor = 0;
 
     if (controller_ && controller_->indexController()) {

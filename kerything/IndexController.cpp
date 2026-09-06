@@ -4144,6 +4144,23 @@ std::size_t IndexController::maxSearchResultCount() const
             continue;
         }
 
+        if (indexPtr->mountPoints.isEmpty()) {
+            total += indexPtr->fileRecords.size();
+            continue;
+        }
+
+        const std::size_t mountPointCount = static_cast<std::size_t>(
+            std::min<int>(
+                indexPtr->mountPoints.size(),
+                std::numeric_limits<uint8_t>::max()
+            )
+        );
+
+        if (!indexPtr->usesNamespaceAwareMountExpansion()) {
+            total += indexPtr->fileRecords.size() * mountPointCount;
+            continue;
+        }
+
         for (uint32_t recordIdx = 0;
              recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
              ++recordIdx) {
@@ -5291,14 +5308,40 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 const std::vector<uint32_t> extensionCandidates =
                     collectExtensionCandidates(*indexPtr, extensionFilter);
 
-                for (const uint32_t recordIdx : extensionCandidates) {
-                    totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
+                if (indexPtr->mountPoints.isEmpty()) {
+                    totalSize += extensionCandidates.size();
+                } else if (!indexPtr->usesNamespaceAwareMountExpansion()) {
+                    const std::size_t mountPointCount = static_cast<std::size_t>(
+                        std::min<int>(
+                            indexPtr->mountPoints.size(),
+                            std::numeric_limits<uint8_t>::max()
+                        )
+                    );
+
+                    totalSize += extensionCandidates.size() * mountPointCount;
+                } else {
+                    for (const uint32_t recordIdx : extensionCandidates) {
+                        totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
+                    }
                 }
             } else {
-                for (uint32_t recordIdx = 0;
-                     recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
-                     ++recordIdx) {
-                    totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
+                if (indexPtr->mountPoints.isEmpty()) {
+                    totalSize += indexPtr->fileRecords.size();
+                } else if (!indexPtr->usesNamespaceAwareMountExpansion()) {
+                    const std::size_t mountPointCount = static_cast<std::size_t>(
+                        std::min<int>(
+                            indexPtr->mountPoints.size(),
+                            std::numeric_limits<uint8_t>::max()
+                        )
+                    );
+
+                    totalSize += indexPtr->fileRecords.size() * mountPointCount;
+                } else {
+                    for (uint32_t recordIdx = 0;
+                         recordIdx < static_cast<uint32_t>(indexPtr->fileRecords.size());
+                         ++recordIdx) {
+                        totalSize += indexPtr->mountedResultMultiplicity(recordIdx);
+                    }
                 }
             }
         }

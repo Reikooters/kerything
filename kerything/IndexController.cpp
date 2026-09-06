@@ -5220,6 +5220,20 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     const std::string& query,
     SearchOptions options
 ) {
+    const auto searchStart = Clock::now();
+
+    qint64 parseAndSetupMs = 0;
+    qint64 emptyQueryReserveMs = 0;
+    qint64 trigramCandidateMs = 0;
+    qint64 refinementMs = 0;
+    qint64 emptyQueryCollectMs = 0;
+
+    std::size_t debugKeywordCount = 0;
+    std::size_t debugResultCount = 0;
+    std::size_t debugCandidateCountBeforeRefine = 0;
+    std::size_t debugRefinementChecks = 0;
+    std::size_t debugDevicesSearched = 0;
+
     std::shared_lock lock(indexMutex_);
 
     // 1. Tokenize query: "valley dragonforce" -> ["valley", "dragonforce"]
@@ -5282,15 +5296,88 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         );
     };
 
+    auto appendAllVisibleResultsNoFilter = [&results](const DeviceIndex& index) {
+        if (index.indexId > RecordHandle::MaxIndexId) {
+            return;
+        }
+
+        const auto indexId = static_cast<uint16_t>(index.indexId);
+        const auto generation = static_cast<uint8_t>(index.generation);
+        const uint32_t recordCount = static_cast<uint32_t>(index.fileRecords.size());
+
+        if (index.mountPoints.isEmpty()) {
+            for (uint32_t recordIdx = 0; recordIdx < recordCount; ++recordIdx) {
+                if (index.isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                results.push_back({
+                    recordIdx,
+                    indexId,
+                    generation,
+                    RecordHandle::NoMountPoint
+                });
+            }
+
+            return;
+        }
+
+        if (!index.usesNamespaceAwareMountExpansion()) {
+            const int mountPointCount = std::min<int>(
+                index.mountPoints.size(),
+                RecordHandle::MaxMountPointIdx + 1
+            );
+
+            for (uint32_t recordIdx = 0; recordIdx < recordCount; ++recordIdx) {
+                if (index.isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                for (int mountPointIdx = 0; mountPointIdx < mountPointCount; ++mountPointIdx) {
+                    results.push_back({
+                        recordIdx,
+                        indexId,
+                        generation,
+                        static_cast<uint8_t>(mountPointIdx)
+                    });
+                }
+            }
+
+            return;
+        }
+
+        for (uint32_t recordIdx = 0; recordIdx < recordCount; ++recordIdx) {
+            if (index.isDeletedRecord(recordIdx)) {
+                continue;
+            }
+
+            index.forEachVisibleMountPointForRecord(
+                recordIdx,
+                [&](int mountPointIdx) {
+                    results.push_back({
+                        recordIdx,
+                        indexId,
+                        generation,
+                        static_cast<uint8_t>(mountPointIdx)
+                    });
+                }
+            );
+        }
+    };
+
     if (indexByIndexId_.empty()) {
         return results;
     }
+
+    const auto parseAndSetupStart = Clock::now();
 
     const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
     const std::vector<std::string>& keywords = parsedQuery.keywords;
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
     const bool hasExtensionFilter = !extensionFilter.empty();
     const bool foldersOnly = parsedQuery.foldersOnly;
+
+    debugKeywordCount = keywords.size();
 
     // Extension filters are file-only, so this combination can never match.
     if (foldersOnly && hasExtensionFilter) {
@@ -5317,8 +5404,12 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         queryKeywords.push_back(std::move(queryKeyword));
     }
 
+    parseAndSetupMs = elapsedMsSince(parseAndSetupStart);
+
     // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {
+        const auto emptyQueryReserveStart = Clock::now();
+
         std::size_t totalSize = 0;
 
         for (const auto& [indexId, indexPtr] : indexByIndexId_) {
@@ -5372,10 +5463,21 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
         results.reserve(totalSize);
 
+        emptyQueryReserveMs = elapsedMsSince(emptyQueryReserveStart);
+
+        const auto emptyQueryCollectStart = Clock::now();
+
         for (const auto& [indexId, indexPtr] : indexByIndexId_) {
             Q_UNUSED(indexId);
 
             if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
+                continue;
+            }
+
+            ++debugDevicesSearched;
+
+            if (!hasExtensionFilter && !foldersOnly) {
+                appendAllVisibleResultsNoFilter(*indexPtr);
                 continue;
             }
 
@@ -5387,6 +5489,25 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             );
         }
 
+        emptyQueryCollectMs = elapsedMsSince(emptyQueryCollectStart);
+        debugResultCount = results.size();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        const qint64 totalMs = elapsedMsSince(searchStart);
+        if (totalMs >= 1) {
+            std::cerr << "performTrigramSearch timing"
+                      << " query=\"" << query << "\""
+                      << " keywords=" << debugKeywordCount
+                      << " devices=" << debugDevicesSearched
+                      << " results=" << debugResultCount
+                      << " total=" << totalMs << "ms"
+                      << " parseAndSetup=" << parseAndSetupMs << "ms"
+                      << " emptyReserve=" << emptyQueryReserveMs << "ms"
+                      << " emptyCollect=" << emptyQueryCollectMs << "ms"
+                      << "\n";
+        }
+#endif
+
         return results;
     }
 
@@ -5394,6 +5515,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         if (!indexPtr || !indexPtr->isReady || !indexPtr->isSearchable()) {
             continue;
         }
+
+        ++debugDevicesSearched;
+
+        const auto trigramCandidateStart = Clock::now();
 
         // 2. Candidate filtering via trigrams.
         //
@@ -5497,13 +5622,21 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         }
 
         if (skipDevice) {
+            trigramCandidateMs += elapsedMsSince(trigramCandidateStart);
             continue;
         }
+
+        trigramCandidateMs += elapsedMsSince(trigramCandidateStart);
+        debugCandidateCountBeforeRefine += candidates.size();
+
+        const auto refinementStart = Clock::now();
 
         // 4. Refinement Phase
         // If no trigrams were used (all keywords < 3 chars), we scan everything.
         // Otherwise, we only scan the filtered candidates.
         auto resultCallback = [&](uint32_t recordIdx) {
+            ++debugRefinementChecks;
+
             if (indexPtr->isDeletedRecord(recordIdx)) {
                 return;
             }
@@ -5583,7 +5716,29 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 resultCallback(idx);
             }
         }
+
+        refinementMs += elapsedMsSince(refinementStart);
     }
+
+    debugResultCount = results.size();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    const qint64 totalMs = elapsedMsSince(searchStart);
+    if (totalMs >= 10) {
+        std::cerr << "performTrigramSearch timing"
+                  << " query=\"" << query << "\""
+                  << " keywords=" << debugKeywordCount
+                  << " devices=" << debugDevicesSearched
+                  << " candidatesBeforeRefine=" << debugCandidateCountBeforeRefine
+                  << " refinementChecks=" << debugRefinementChecks
+                  << " results=" << debugResultCount
+                  << " total=" << totalMs << "ms"
+                  << " parseAndSetup=" << parseAndSetupMs << "ms"
+                  << " trigramCandidate=" << trigramCandidateMs << "ms"
+                  << " refinement=" << refinementMs << "ms"
+                  << "\n";
+    }
+#endif
 
     return results;
 }
@@ -5901,6 +6056,9 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
 
 #ifdef KERYTHING_ENABLE_LOGGING
     const auto sortStart = Clock::now();
+    qint64 setupOrderMs = 0;
+    qint64 keyBuildMs = 0;
+    qint64 sortOnlyMs = 0;
 #endif
 
     static constexpr std::size_t ParallelSortThreshold = 500;
@@ -5918,12 +6076,24 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
         return a.mountPointIdx < b.mountPointIdx;
     };
 
+#ifdef KERYTHING_ENABLE_LOGGING
+    const auto setupOrderStart = Clock::now();
+#endif
+
     scratch.resultsOrder.resize(results.size());
     std::iota(scratch.resultsOrder.begin(), scratch.resultsOrder.end(), uint32_t{0});
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    setupOrderMs = elapsedMsSince(setupOrderStart);
+#endif
 
     auto& resultsOrder = scratch.resultsOrder;
 
     auto sortOrderIndices = [&](auto&& comparator) {
+#ifdef KERYTHING_ENABLE_LOGGING
+        const auto sortOnlyStart = Clock::now();
+#endif
+
         if (resultsOrder.size() >= ParallelSortThreshold) {
             std::sort(
                 std::execution::par,
@@ -5938,6 +6108,10 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                 std::forward<decltype(comparator)>(comparator)
             );
         }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        sortOnlyMs += elapsedMsSince(sortOnlyStart);
+#endif
     };
 
     if (column == SearchResultColumn::Name) {
@@ -5945,6 +6119,10 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
             std::string_view nameKey;
             bool valid = false;
         };
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        const auto keyBuildStart = Clock::now();
+#endif
 
         std::vector<NameKey> keys(results.size());
 
@@ -5975,10 +6153,14 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
                     continue;
                 }
 
-                key.nameKey = device->lowercaseRecordName(record);
+                key.nameKey = device->lowercaseRecordName(record, handle.recordIdx);
                 key.valid = true;
             }
         }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        keyBuildMs = elapsedMsSince(keyBuildStart);
+#endif
 
         auto lessByIndex = [&](uint32_t lhs, uint32_t rhs) {
             const auto& a = keys[lhs];
@@ -6149,6 +6331,9 @@ std::vector<IndexController::RecordHandle> IndexController::sortSearchResults(
     std::cerr << "sortSearchResults"
               << " results=" << results.size()
               << " column=" << column
+              << " setupOrderMs=" << setupOrderMs
+              << " keyBuildMs=" << keyBuildMs
+              << " sortOnlyMs=" << sortOnlyMs
               << " applyOrderMs=" << elapsedMsSince(applyStart)
               << " totalMs=" << elapsedMsSince(sortStart)
               << "\n";

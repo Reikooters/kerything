@@ -2751,134 +2751,104 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     continue;
                 }
 
-                qsizetype deletedCount = 0;
                 const QByteArray nameUtf8 = operation.name.toUtf8();
-                const std::string_view operationName(
-                    nameUtf8.constData(),
-                    static_cast<std::size_t>(nameUtf8.size())
-                );
+                if (nameUtf8.isEmpty()) {
+                    ++result.missingEntry;
+                    continue;
+                }
 
-                bool movedAny = false;
-
-                if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
-                    if (operation.parentInode == 0 || operation.name.isEmpty()) {
-                        ++result.missingEntry;
-                        continue;
-                    }
-
-                    qsizetype deletedCount = 0;
-                    const QByteArray nameUtf8 = operation.name.toUtf8();
-                    if (nameUtf8.isEmpty()) {
-                        ++result.missingEntry;
-                        continue;
-                    }
-
-                    const auto recordIt = useNamespaces
-                        ? liveEntryRecordByParentAndName.constFind(
-                            namespacedLiveEntryKey(
-                                operation.parentFsNamespace,
-                                operation.parentInode,
-                                nameUtf8
-                            )
+                const auto recordIt = useNamespaces
+                    ? liveEntryRecordByParentAndName.constFind(
+                        namespacedLiveEntryKey(
+                            operation.parentFsNamespace,
+                            operation.parentInode,
+                            nameUtf8
                         )
-                        : liveEntryRecordByParentAndName.constFind(
-                            liveEntryKey(operation.parentInode, nameUtf8)
-                        );
+                    )
+                    : liveEntryRecordByParentAndName.constFind(
+                        liveEntryKey(operation.parentInode, nameUtf8)
+                    );
 
-                    if (recordIt == liveEntryRecordByParentAndName.cend()) {
-                        ++deleteLookupsMissing;
-                        ++result.missingEntry;
-                        continue;
-                    }
+                if (recordIt == liveEntryRecordByParentAndName.cend()) {
+                    ++deleteLookupsMissing;
+                    ++result.missingEntry;
+                    continue;
+                }
 
-                    ++deleteLookupsFound;
+                ++deleteLookupsFound;
 
-                    const uint32_t recordIdx = recordIt.value();
+                const uint32_t recordIdx = recordIt.value();
 
-                    if (recordIdx >= targetIndex->fileRecords.size() ||
-                        targetIndex->isDeletedRecord(recordIdx)) {
-                        ++result.missingEntry;
-                        continue;
-                    }
+                if (recordIdx >= targetIndex->fileRecords.size() ||
+                    targetIndex->isDeletedRecord(recordIdx)) {
+                    ++result.missingEntry;
+                    continue;
+                }
 
-                    const FileRecord& record = targetIndex->fileRecords[recordIdx];
-                    const FileRecordNamespace namespaceEntry = targetIndex->namespaceForRecord(recordIdx);
+                const FileRecord& record = targetIndex->fileRecords[recordIdx];
+                const FileRecordNamespace namespaceEntry = targetIndex->namespaceForRecord(recordIdx);
 
-                    std::size_t matchingUpsertIdx = pendingUpserts.size();
+                std::size_t matchingUpsertIdx = pendingUpserts.size();
 
-                    const auto pendingUpsertIndicesIt =
-                        pendingUpsertIndicesByInode.constFind(record.fsIndex);
+                const auto pendingUpsertIndicesIt =
+                    pendingUpsertIndicesByInode.constFind(record.fsIndex);
 
-                    if (pendingUpsertIndicesIt != pendingUpsertIndicesByInode.cend()) {
-                        for (const std::size_t upsertIdx : pendingUpsertIndicesIt.value()) {
-                            if (consumedUpserts[upsertIdx] != 0) {
-                                continue;
-                            }
-
-                            const LiveUpdateOperation& pendingUpsert = pendingUpserts[upsertIdx];
-
-                            if (useNamespaces &&
-                                pendingUpsert.fsNamespace != namespaceEntry.fsNamespace) {
-                                continue;
-                            }
-
-                            matchingUpsertIdx = upsertIdx;
-                            break;
-                        }
-                    }
-
-                    if (matchingUpsertIdx != pendingUpserts.size()) {
-                        const LiveUpdateOperation& pendingUpsert = pendingUpserts[matchingUpsertIdx];
-
-                        if (updateRecordIdentityFromLiveUpdateOperation(
-                                *targetIndex,
-                                recordIdx,
-                                pendingUpsert
-                            )) {
-                            consumedUpserts[matchingUpsertIdx] = 1;
-                            trigramIndexNeedsSort = true;
-
-                            if (useNamespaces) {
-                                fsIndexMapsNeedRebuild = true;
-                            }
-
-                            ++result.upserted;
+                if (pendingUpsertIndicesIt != pendingUpsertIndicesByInode.cend()) {
+                    for (const std::size_t upsertIdx : pendingUpsertIndicesIt.value()) {
+                        if (consumedUpserts[upsertIdx] != 0) {
                             continue;
                         }
+
+                        const LiveUpdateOperation& pendingUpsert = pendingUpserts[upsertIdx];
+
+                        if (useNamespaces &&
+                            pendingUpsert.fsNamespace != namespaceEntry.fsNamespace) {
+                            continue;
+                        }
+
+                        matchingUpsertIdx = upsertIdx;
+                        break;
                     }
+                }
 
-                    ++markDeletedTreeCalls;
+                if (matchingUpsertIdx != pendingUpserts.size()) {
+                    const LiveUpdateOperation& pendingUpsert = pendingUpserts[matchingUpsertIdx];
 
-                    bool deletedDirectory = false;
-                    const qsizetype treeDeletedCount =
-                        targetIndex->markDeletedRecordTree(recordIdx, &deletedDirectory);
+                    if (updateRecordIdentityFromLiveUpdateOperation(
+                            *targetIndex,
+                            recordIdx,
+                            pendingUpsert
+                        )) {
+                        consumedUpserts[matchingUpsertIdx] = 1;
+                        trigramIndexNeedsSort = true;
 
-                    deletedCount += treeDeletedCount;
-                    markDeletedTreeTotalDeleted += treeDeletedCount;
+                        if (useNamespaces) {
+                            fsIndexMapsNeedRebuild = true;
+                        }
 
-                    if (deletedDirectory) {
-                        fsIndexMapsNeedRebuild = true;
+                        ++result.upserted;
+                        continue;
                     }
+                }
 
-                    if (deletedCount > 0) {
-                        targetIndex->extensionIndexLiveDeltaEntries +=
-                            static_cast<std::size_t>(deletedCount);
-                        result.deleted += deletedCount;
-                    }
-                    else {
-                        ++result.missingEntry;
-                    }
+                ++markDeletedTreeCalls;
 
-                    continue;
+                bool deletedDirectory = false;
+                const qsizetype deletedCount =
+                    targetIndex->markDeletedRecordTree(recordIdx, &deletedDirectory);
+
+                markDeletedTreeTotalDeleted += deletedCount;
+
+                if (deletedDirectory) {
+                    fsIndexMapsNeedRebuild = true;
                 }
 
                 if (deletedCount > 0) {
                     targetIndex->extensionIndexLiveDeltaEntries +=
                         static_cast<std::size_t>(deletedCount);
                     result.deleted += deletedCount;
-                    fsIndexMapsNeedRebuild = true;
                 }
-                else if (!movedAny) {
+                else {
                     ++result.missingEntry;
                 }
 

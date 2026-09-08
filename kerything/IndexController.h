@@ -1149,9 +1149,9 @@ public:
         }
 
         [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForNamespacedFsIndex(
-    uint64_t fsNamespace,
-    uint64_t fsIndex
-) const {
+            uint64_t fsNamespace,
+            uint64_t fsIndex
+        ) const {
             const auto searchKey = NamespacedFsIndexRecordRef{
                 fsNamespace,
                 fsIndex,

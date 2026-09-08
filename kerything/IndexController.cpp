@@ -2385,33 +2385,53 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 
     QSet<quint64> deleteParentInodes;
     QSet<QByteArray> deleteParentNamespaceKeys;
+    QSet<quint64> upsertParentInodes;
+    QSet<QByteArray> upsertParentNamespaceKeys;
     qsizetype deleteEntryOperationCount = 0;
+    qsizetype upsertOperationCount = 0;
 
     {
         PhaseTimer timer(
-            QStringLiteral("live batch #%1 collect delete parents").arg(liveBatchDebugId)
+            QStringLiteral("live batch #%1 collect delete/upsert parents").arg(liveBatchDebugId)
         );
 
         for (const LiveUpdateOperation& operation : *operationsToApply) {
-            if (operation.kind != LiveUpdateOperationKind::DeleteEntry) {
+            if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
+                if (operation.parentInode == 0 || operation.name.isEmpty()) {
+                    continue;
+                }
+
+                if (useNamespaces) {
+                    deleteParentNamespaceKeys.insert(
+                        QByteArray::number(static_cast<qulonglong>(operation.parentFsNamespace)) +
+                        QByteArrayLiteral("\0") +
+                        QByteArray::number(static_cast<qulonglong>(operation.parentInode))
+                    );
+                } else {
+                    deleteParentInodes.insert(operation.parentInode);
+                }
+
+                ++deleteEntryOperationCount;
                 continue;
             }
 
-            if (operation.parentInode == 0 || operation.name.isEmpty()) {
-                continue;
-            }
+            if (operation.kind == LiveUpdateOperationKind::Upsert) {
+                if (operation.parentInode == 0 || operation.name.isEmpty()) {
+                    continue;
+                }
 
-            if (useNamespaces) {
-                deleteParentNamespaceKeys.insert(
-                    QByteArray::number(static_cast<qulonglong>(operation.parentFsNamespace)) +
-                    QByteArrayLiteral("\0") +
-                    QByteArray::number(static_cast<qulonglong>(operation.parentInode))
-                );
-            } else {
-                deleteParentInodes.insert(operation.parentInode);
-            }
+                if (useNamespaces) {
+                    upsertParentNamespaceKeys.insert(
+                        QByteArray::number(static_cast<qulonglong>(operation.parentFsNamespace)) +
+                        QByteArrayLiteral("\0") +
+                        QByteArray::number(static_cast<qulonglong>(operation.parentInode))
+                    );
+                } else {
+                    upsertParentInodes.insert(operation.parentInode);
+                }
 
-            ++deleteEntryOperationCount;
+                ++upsertOperationCount;
+            }
         }
     }
 
@@ -2420,22 +2440,32 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
               << " delete parents=" << deleteParentInodes.size()
               << " namespacedDeleteParents=" << deleteParentNamespaceKeys.size()
               << " deleteEntryOperationCount=" << deleteEntryOperationCount
+              << " upsert parents=" << upsertParentInodes.size()
+              << " namespacedUpsertParents=" << upsertParentNamespaceKeys.size()
+              << " upsertOperationCount=" << upsertOperationCount
               << "\n";
 #endif
 
     QHash<QByteArray, uint32_t> liveEntryRecordByParentAndName;
+    QHash<QByteArray, uint32_t> liveDestinationRecordByParentAndName;
 
-    if (!deleteParentInodes.isEmpty() || !deleteParentNamespaceKeys.isEmpty()) {
+    if (!deleteParentInodes.isEmpty() ||
+        !deleteParentNamespaceKeys.isEmpty() ||
+        !upsertParentInodes.isEmpty() ||
+        !upsertParentNamespaceKeys.isEmpty()) {
         PhaseTimer timer(
-            QStringLiteral("live batch #%1 build delete lookup").arg(liveBatchDebugId),
+            QStringLiteral("live batch #%1 build entry lookups").arg(liveBatchDebugId),
             10
         );
 
         liveEntryRecordByParentAndName.reserve(deleteEntryOperationCount * 2);
+        liveDestinationRecordByParentAndName.reserve(upsertOperationCount * 2);
 
         qsizetype scannedRecords = 0;
-        qsizetype parentMatchedRecords = 0;
-        qsizetype insertedRecords = 0;
+        qsizetype deleteParentMatchedRecords = 0;
+        qsizetype deleteInsertedRecords = 0;
+        qsizetype upsertParentMatchedRecords = 0;
+        qsizetype upsertInsertedRecords = 0;
 
         for (uint32_t recordIdx = 0;
              recordIdx < static_cast<uint32_t>(targetIndex->fileRecords.size());
@@ -2449,61 +2479,87 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             const FileRecord& record = targetIndex->fileRecords[recordIdx];
 
             if (useNamespaces) {
-                const FileRecordNamespace namespaceEntry = targetIndex->namespaceForRecord(recordIdx);
+                const FileRecordNamespace namespaceEntry =
+                    targetIndex->namespaceForRecord(recordIdx);
 
                 const QByteArray parentNamespaceKey =
                     QByteArray::number(static_cast<qulonglong>(namespaceEntry.parentFsNamespace)) +
                     QByteArrayLiteral("\0") +
                     QByteArray::number(static_cast<qulonglong>(record.parentFsIndex));
 
-                if (!deleteParentNamespaceKeys.contains(parentNamespaceKey)) {
+                const bool deleteParentMatch =
+                    deleteParentNamespaceKeys.contains(parentNamespaceKey);
+                const bool upsertParentMatch =
+                    upsertParentNamespaceKeys.contains(parentNamespaceKey);
+
+                if (!deleteParentMatch && !upsertParentMatch) {
                     continue;
                 }
-
-                ++parentMatchedRecords;
 
                 const std::string_view name = targetIndex->recordName(recordIdx);
                 if (name.empty()) {
                     continue;
                 }
 
-                liveEntryRecordByParentAndName.insert(
-                    namespacedLiveEntryKey(
-                        namespaceEntry.parentFsNamespace,
-                        record.parentFsIndex,
-                        name
-                    ),
-                    recordIdx
+                const QByteArray entryKey = namespacedLiveEntryKey(
+                    namespaceEntry.parentFsNamespace,
+                    record.parentFsIndex,
+                    name
                 );
 
-                ++insertedRecords;
+                if (deleteParentMatch) {
+                    ++deleteParentMatchedRecords;
+                    liveEntryRecordByParentAndName.insert(entryKey, recordIdx);
+                    ++deleteInsertedRecords;
+                }
+
+                if (upsertParentMatch) {
+                    ++upsertParentMatchedRecords;
+                    liveDestinationRecordByParentAndName.insert(entryKey, recordIdx);
+                    ++upsertInsertedRecords;
+                }
+
                 continue;
             }
 
-            if (!deleteParentInodes.contains(record.parentFsIndex)) {
+            const bool deleteParentMatch =
+                deleteParentInodes.contains(record.parentFsIndex);
+            const bool upsertParentMatch =
+                upsertParentInodes.contains(record.parentFsIndex);
+
+            if (!deleteParentMatch && !upsertParentMatch) {
                 continue;
             }
-
-            ++parentMatchedRecords;
 
             const std::string_view name = targetIndex->recordName(recordIdx);
             if (name.empty()) {
                 continue;
             }
 
-            liveEntryRecordByParentAndName.insert(
-                liveEntryKey(record.parentFsIndex, name),
-                recordIdx
-            );
-            ++insertedRecords;
+            const QByteArray entryKey = liveEntryKey(record.parentFsIndex, name);
+
+            if (deleteParentMatch) {
+                ++deleteParentMatchedRecords;
+                liveEntryRecordByParentAndName.insert(entryKey, recordIdx);
+                ++deleteInsertedRecords;
+            }
+
+            if (upsertParentMatch) {
+                ++upsertParentMatchedRecords;
+                liveDestinationRecordByParentAndName.insert(entryKey, recordIdx);
+                ++upsertInsertedRecords;
+            }
         }
 
 #ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "live batch #" << liveBatchDebugId
-                  << " delete lookup scannedRecords=" << scannedRecords
-                  << " parentMatchedRecords=" << parentMatchedRecords
-                  << " insertedRecords=" << insertedRecords
-                  << " mapSize=" << liveEntryRecordByParentAndName.size()
+                  << " entry lookups scannedRecords=" << scannedRecords
+                  << " deleteParentMatchedRecords=" << deleteParentMatchedRecords
+                  << " deleteInsertedRecords=" << deleteInsertedRecords
+                  << " deleteMapSize=" << liveEntryRecordByParentAndName.size()
+                  << " upsertParentMatchedRecords=" << upsertParentMatchedRecords
+                  << " upsertInsertedRecords=" << upsertInsertedRecords
+                  << " upsertMapSize=" << liveDestinationRecordByParentAndName.size()
                   << "\n";
 #endif
     }
@@ -2815,11 +2871,63 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 if (matchingUpsertIdx != pendingUpserts.size()) {
                     const LiveUpdateOperation& pendingUpsert = pendingUpserts[matchingUpsertIdx];
 
+                    const QByteArray pendingNameUtf8 = pendingUpsert.name.toUtf8();
+                    if (pendingNameUtf8.isEmpty()) {
+                        ++result.missingEntry;
+                        continue;
+                    }
+
+                    std::optional<uint32_t> existingDestination;
+
+                    const auto destinationIt = useNamespaces
+                        ? liveDestinationRecordByParentAndName.constFind(
+                            namespacedLiveEntryKey(
+                                pendingUpsert.parentFsNamespace,
+                                pendingUpsert.parentInode,
+                                pendingNameUtf8
+                            )
+                        )
+                        : liveDestinationRecordByParentAndName.constFind(
+                            liveEntryKey(
+                                pendingUpsert.parentInode,
+                                pendingNameUtf8
+                            )
+                        );
+
+                    if (destinationIt != liveDestinationRecordByParentAndName.cend()) {
+                        existingDestination = destinationIt.value();
+                    }
+
+                    if (existingDestination && *existingDestination != recordIdx) {
+                        ++markDeletedTreeCalls;
+
+                        bool deletedDestinationDirectory = false;
+                        const qsizetype deletedDestinationCount =
+                            targetIndex->markDeletedRecordTree(
+                                *existingDestination,
+                                &deletedDestinationDirectory
+                            );
+
+                        markDeletedTreeTotalDeleted += deletedDestinationCount;
+
+                        if (deletedDestinationDirectory) {
+                            fsIndexMapsNeedRebuild = true;
+                        }
+
+                        if (deletedDestinationCount > 0) {
+                            targetIndex->extensionIndexLiveDeltaEntries +=
+                                static_cast<std::size_t>(deletedDestinationCount);
+                            targetIndex->childRecordIndexLiveDeltaEntries +=
+                                static_cast<std::size_t>(deletedDestinationCount);
+                            result.deleted += deletedDestinationCount;
+                        }
+                    }
+
                     if (updateRecordIdentityFromLiveUpdateOperation(
                             *targetIndex,
                             recordIdx,
                             pendingUpsert
-                        )) {
+                    )) {
                         consumedUpserts[matchingUpsertIdx] = 1;
                         trigramIndexNeedsSort = true;
 

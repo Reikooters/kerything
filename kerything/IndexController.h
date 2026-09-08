@@ -394,6 +394,20 @@ public:
             }
         };
 
+        struct ParentRecordRef {
+            uint32_t parentRecordIdx = 0;
+            uint32_t recordIdx = 0;
+
+            [[nodiscard]] bool operator<(const ParentRecordRef& other) const noexcept
+            {
+                if (parentRecordIdx != other.parentRecordIdx) {
+                    return parentRecordIdx < other.parentRecordIdx;
+                }
+
+                return recordIdx < other.recordIdx;
+            }
+        };
+
         // Full-scan fs-index refs use the narrowest key width that can safely
         // represent all live records in this device. ext4 normally uses UInt32;
         // NTFS and any filesystem with wider identifiers use UInt64.
@@ -424,6 +438,23 @@ public:
         // not add per-record memory cost for EXT4/NTFS.
         std::vector<NamespacedFsIndexRecordRef> namespacedDirectoryFsIndexRecordRefs;
         std::vector<NamespacedFsIndexRecordRef> namespacedFsIndexRecordRefs;
+
+        /*
+         * Parent-record -> child-record index used for fast recursive subtree
+         * deletion. The full-scan portion is stored in CSR form:
+         *
+         *   children(parent) =
+         *       childRecordRefs[childRecordOffsets[parent] ...
+         *                       childRecordOffsets[parent + 1])
+         *
+         * Live updates append flat refs. Stale refs are tolerated and filtered
+         * by checking tombstones and the child's current parentRecordIdx.
+         */
+        std::vector<uint32_t> childRecordOffsets;
+        std::vector<uint32_t> childRecordRefs;
+        std::vector<ParentRecordRef> liveParentRecordRefs;
+        bool childRecordIndexBuilt = false;
+        std::size_t childRecordIndexLiveDeltaEntries = 0;
 
         mutable std::vector<uint32_t> fsIndexLookupScratch;
 
@@ -623,17 +654,31 @@ public:
                     *deletedDirectory = true;
                 }
 
-                for (uint32_t childRecordIdx = 0;
-                     childRecordIdx < static_cast<uint32_t>(fileRecords.size());
-                     ++childRecordIdx) {
+                auto pushChildIfCurrent = [&](uint32_t childRecordIdx) {
+                    if (childRecordIdx >= fileRecords.size()) {
+                        return;
+                    }
+
                     if (isDeletedRecord(childRecordIdx)) {
-                        continue;
+                        return;
                     }
 
                     const FileRecord& childRecord = fileRecords[childRecordIdx];
+
                     if (childRecord.parentRecordIdx == currentRecordIdx) {
                         stack.push_back(childRecordIdx);
                     }
+                };
+
+                if (childRecordIndexBuilt) {
+                    forEachChildRecordIdx(currentRecordIdx, pushChildIfCurrent);
+                    continue;
+                }
+
+                for (uint32_t childRecordIdx = 0;
+                     childRecordIdx < static_cast<uint32_t>(fileRecords.size());
+                     ++childRecordIdx) {
+                    pushChildIfCurrent(childRecordIdx);
                 }
             }
 
@@ -818,6 +863,183 @@ public:
             namespacedFsIndexRecordRefs.clear();
 
             fsIndexLookupScratch.clear();
+        }
+
+        void clearChildRecordIndex()
+        {
+            childRecordOffsets.clear();
+            childRecordRefs.clear();
+            liveParentRecordRefs.clear();
+            childRecordIndexBuilt = false;
+            childRecordIndexLiveDeltaEntries = 0;
+        }
+
+        void rebuildChildRecordIndex()
+        {
+            childRecordOffsets.clear();
+            childRecordRefs.clear();
+            liveParentRecordRefs.clear();
+            childRecordIndexLiveDeltaEntries = 0;
+
+            if (fileRecords.empty()) {
+                childRecordIndexBuilt = true;
+                return;
+            }
+
+            childRecordOffsets.assign(fileRecords.size() + 1, 0);
+
+            std::size_t childEdgeCount = 0;
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+
+                if (record.parentRecordIdx == 0xFFFFFFFF ||
+                    record.parentRecordIdx >= fileRecords.size() ||
+                    record.parentRecordIdx == recordIdx) {
+                    continue;
+                }
+
+                ++childRecordOffsets[record.parentRecordIdx + 1];
+                ++childEdgeCount;
+            }
+
+            for (std::size_t i = 1; i < childRecordOffsets.size(); ++i) {
+                childRecordOffsets[i] += childRecordOffsets[i - 1];
+            }
+
+            childRecordRefs.resize(childEdgeCount);
+
+            std::vector<uint32_t> writeOffsets = childRecordOffsets;
+
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(fileRecords.size());
+                 ++recordIdx) {
+                if (isDeletedRecord(recordIdx)) {
+                    continue;
+                }
+
+                const FileRecord& record = fileRecords[recordIdx];
+
+                if (record.parentRecordIdx == 0xFFFFFFFF ||
+                    record.parentRecordIdx >= fileRecords.size() ||
+                    record.parentRecordIdx == recordIdx) {
+                    continue;
+                }
+
+                childRecordRefs[writeOffsets[record.parentRecordIdx]++] = recordIdx;
+            }
+
+            childRecordOffsets.shrink_to_fit();
+            childRecordRefs.shrink_to_fit();
+            liveParentRecordRefs.shrink_to_fit();
+            childRecordIndexBuilt = true;
+        }
+
+        void addLiveParentRecordRef(uint32_t parentRecordIdx, uint32_t recordIdx)
+        {
+            if (parentRecordIdx == 0xFFFFFFFF ||
+                parentRecordIdx >= fileRecords.size() ||
+                recordIdx >= fileRecords.size() ||
+                parentRecordIdx == recordIdx) {
+                return;
+            }
+
+            liveParentRecordRefs.push_back({
+                parentRecordIdx,
+                recordIdx
+            });
+
+            ++childRecordIndexLiveDeltaEntries;
+        }
+
+        void sortAndDeduplicateLiveParentRecordRefs()
+        {
+            if (liveParentRecordRefs.size() < 2) {
+                return;
+            }
+
+            std::sort(liveParentRecordRefs.begin(), liveParentRecordRefs.end());
+
+            liveParentRecordRefs.erase(
+                std::unique(
+                    liveParentRecordRefs.begin(),
+                    liveParentRecordRefs.end(),
+                    [](const ParentRecordRef& lhs, const ParentRecordRef& rhs) {
+                        return lhs.parentRecordIdx == rhs.parentRecordIdx &&
+                               lhs.recordIdx == rhs.recordIdx;
+                    }
+                ),
+                liveParentRecordRefs.end()
+            );
+        }
+
+        template <typename Fn>
+        void forEachChildRecordIdx(uint32_t parentRecordIdx, Fn&& fn) const
+        {
+            if (parentRecordIdx >= fileRecords.size()) {
+                return;
+            }
+
+            if (childRecordIndexBuilt &&
+                childRecordOffsets.size() == fileRecords.size() + 1) {
+                const uint32_t begin = childRecordOffsets[parentRecordIdx];
+                const uint32_t end = childRecordOffsets[parentRecordIdx + 1];
+
+                if (begin <= end && end <= childRecordRefs.size()) {
+                    for (uint32_t offset = begin; offset < end; ++offset) {
+                        fn(childRecordRefs[offset]);
+                    }
+                }
+            }
+
+            if (liveParentRecordRefs.empty()) {
+                return;
+            }
+
+            const auto searchKey = ParentRecordRef{
+                parentRecordIdx,
+                0
+            };
+
+            const auto range = std::equal_range(
+                liveParentRecordRefs.begin(),
+                liveParentRecordRefs.end(),
+                searchKey,
+                [](const ParentRecordRef& lhs, const ParentRecordRef& rhs) {
+                    return lhs.parentRecordIdx < rhs.parentRecordIdx;
+                }
+            );
+
+            for (auto it = range.first; it != range.second; ++it) {
+                fn(it->recordIdx);
+            }
+        }
+
+        [[nodiscard]] bool shouldRebuildChildRecordIndexAfterLiveUpdates() const noexcept
+        {
+            if (childRecordIndexLiveDeltaEntries == 0) {
+                return false;
+            }
+
+            static constexpr std::size_t LiveParentRebuildMinEntries = 25'000;
+            static constexpr std::size_t LiveParentRebuildRatioDivisor = 10;
+
+            if (childRecordIndexLiveDeltaEntries < LiveParentRebuildMinEntries) {
+                return false;
+            }
+
+            if (childRecordRefs.empty()) {
+                return true;
+            }
+
+            return childRecordIndexLiveDeltaEntries >=
+                   childRecordRefs.size() / LiveParentRebuildRatioDivisor;
         }
 
         void upgradeFsIndexRefStorageToUInt64()
@@ -1429,6 +1651,8 @@ public:
                     rec.parentRecordIdx = 0xFFFFFFFF;
                 }
             }
+
+            rebuildChildRecordIndex();
         }
 
         void buildLowercaseStringPool() {

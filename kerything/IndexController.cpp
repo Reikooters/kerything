@@ -1823,6 +1823,7 @@ quint64 IndexController::addDevice(
             deviceIndex.liveFsIndexRecordRefs64.clear();
             deviceIndex.namespacedDirectoryFsIndexRecordRefs.clear();
             deviceIndex.namespacedFsIndexRecordRefs.clear();
+            deviceIndex.clearChildRecordIndex();
             deviceIndex.fsIndexLookupScratch.clear();
             deviceIndex.generation++;
             deviceIndex.lastIndexedTime = 0;
@@ -2846,6 +2847,8 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                 if (deletedCount > 0) {
                     targetIndex->extensionIndexLiveDeltaEntries +=
                         static_cast<std::size_t>(deletedCount);
+                    targetIndex->childRecordIndexLiveDeltaEntries +=
+                        static_cast<std::size_t>(deletedCount);
                     result.deleted += deletedCount;
                 }
                 else {
@@ -3000,6 +3003,24 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         sortLiveDirectoryFsIndexRecordRefs(*targetIndex);
     }
 
+    if (!targetIndex->liveParentRecordRefs.empty()) {
+        PhaseTimer timer(
+            QStringLiteral("live batch #%1 sort live parent-child refs").arg(liveBatchDebugId),
+            10
+        );
+
+        targetIndex->sortAndDeduplicateLiveParentRecordRefs();
+    }
+
+    if (targetIndex->shouldRebuildChildRecordIndexAfterLiveUpdates()) {
+        PhaseTimer timer(
+            QStringLiteral("live batch #%1 rebuild parent-child index").arg(liveBatchDebugId),
+            10
+        );
+
+        targetIndex->rebuildChildRecordIndex();
+    }
+
     if (shouldRebuildFsIndexAfterLiveUpdates(*targetIndex)) {
         PhaseTimer timer(
             QStringLiteral("live batch #%1 rebuild fs-index refs").arg(liveBatchDebugId),
@@ -3148,6 +3169,9 @@ QString IndexController::memoryStatsText() const
     out << "  sizeof(NamespacedFsIndexRecordRef): "
         << sizeof(DeviceIndex::NamespacedFsIndexRecordRef)
         << " bytes\n";
+    out << "  sizeof(ParentRecordRef): "
+        << sizeof(DeviceIndex::ParentRecordRef)
+        << " bytes\n";
     out << "  sizeof(recordsByExtension::value_type): "
         << sizeof(typename decltype(std::declval<DeviceIndex>().recordsByExtension)::value_type)
         << " bytes\n";
@@ -3253,6 +3277,12 @@ QString IndexController::memoryStatsText() const
             vectorCapacityBytes(device.namespacedDirectoryFsIndexRecordRefs);
         const quint64 namespacedFsIndexRecordRefsBytes =
             vectorCapacityBytes(device.namespacedFsIndexRecordRefs);
+        const quint64 childRecordOffsetsBytes =
+            vectorCapacityBytes(device.childRecordOffsets);
+        const quint64 childRecordRefsBytes =
+            vectorCapacityBytes(device.childRecordRefs);
+        const quint64 liveParentRecordRefsBytes =
+            vectorCapacityBytes(device.liveParentRecordRefs);
 
         const quint64 directoryFsIndexRecordRefsBytes =
             directoryFsIndexRecordRefs32Bytes +
@@ -3359,6 +3389,9 @@ QString IndexController::memoryStatsText() const
             liveFsIndexRecordRefsBytes +
             namespacedDirectoryFsIndexRecordRefsBytes +
             namespacedFsIndexRecordRefsBytes +
+            childRecordOffsetsBytes +
+            childRecordRefsBytes +
+            liveParentRecordRefsBytes +
             vectorCapacityBytes(device.fsIndexLookupScratch) +
             extensionVectorStorageBytes;
 
@@ -3701,6 +3734,33 @@ QString IndexController::memoryStatsText() const
             << device.namespacedFsIndexRecordRefs.capacity()
             << " => "
             << formatBytes(namespacedFsIndexRecordRefsBytes)
+            << '\n';
+        out << "    childRecordOffsets size/capacity: "
+            << device.childRecordOffsets.size()
+            << '/'
+            << device.childRecordOffsets.capacity()
+            << " => "
+            << formatBytes(childRecordOffsetsBytes)
+            << '\n';
+        out << "    childRecordRefs size/capacity: "
+            << device.childRecordRefs.size()
+            << '/'
+            << device.childRecordRefs.capacity()
+            << " => "
+            << formatBytes(childRecordRefsBytes)
+            << '\n';
+        out << "    liveParentRecordRefs size/capacity: "
+            << device.liveParentRecordRefs.size()
+            << '/'
+            << device.liveParentRecordRefs.capacity()
+            << " => "
+            << formatBytes(liveParentRecordRefsBytes)
+            << '\n';
+        out << "      child index built: "
+            << (device.childRecordIndexBuilt ? "true" : "false")
+            << '\n';
+        out << "      child index live/stale delta entries: "
+            << device.childRecordIndexLiveDeltaEntries
             << '\n';
         out << "      full refs: "
             << device.fsIndexFullRefCount()
@@ -4679,6 +4739,8 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     deviceIndex.lowercaseNameOffsetByRecord.push_back(lowercaseNameOffset);
     deviceIndex.resizeDeletedRecordBitsForRecordCount(deviceIndex.fileRecords.size());
 
+    deviceIndex.addLiveParentRecordRef(record.parentRecordIdx, recordIdx);
+
     if (deviceIndex.fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32) {
         deviceIndex.liveFsIndexRecordRefs32.push_back({
             static_cast<uint32_t>(record.fsIndex),
@@ -4949,6 +5011,7 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     }
 
     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
+    deviceIndex.addLiveParentRecordRef(record.parentRecordIdx, recordIdx);
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
     addRecordToExtensionIndexIfApplicable(deviceIndex, recordIdx);
 
@@ -5055,6 +5118,8 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
 
         if (deletedCount > 0) {
             deviceIndex.extensionIndexLiveDeltaEntries +=
+                static_cast<std::size_t>(deletedCount);
+            deviceIndex.childRecordIndexLiveDeltaEntries +=
                 static_cast<std::size_t>(deletedCount);
         }
 

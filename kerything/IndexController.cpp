@@ -4092,7 +4092,7 @@ std::string IndexController::normalizeExtensionToken(std::string_view extension)
     out.reserve(extension.size());
 
     for (const unsigned char c : extension) {
-        if (std::isspace(c) || c == ';') {
+        if (std::isspace(c) || c == ';' || c == ',') {
             continue;
         }
 
@@ -5395,7 +5395,13 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
     auto consumeExtensionList = [&parsed](std::string_view extensionList) {
         const std::size_t estimatedTokenCount =
             1 + static_cast<std::size_t>(
-                std::count(extensionList.begin(), extensionList.end(), ';')
+                std::count_if(
+                    extensionList.begin(),
+                    extensionList.end(),
+                    [](char c) {
+                        return c == ';' || c == ',';
+                    }
+                )
             );
 
         parsed.extensions.reserve(parsed.extensions.size() + estimatedTokenCount);
@@ -5403,7 +5409,7 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
         std::size_t start = 0;
 
         while (start <= extensionList.size()) {
-            const std::size_t end = extensionList.find(';', start);
+            const std::size_t end = extensionList.find_first_of(";,", start);
             const std::string_view token = end == std::string_view::npos
                 ? extensionList.substr(start)
                 : extensionList.substr(start, end - start);

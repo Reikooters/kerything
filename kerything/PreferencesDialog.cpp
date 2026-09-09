@@ -224,6 +224,17 @@ void PreferencesDialog::setAutoRefreshResultsForLiveUpdates(bool enabled)
     updateApplyButtonEnabled();
 }
 
+void PreferencesDialog::setShowFiltersDropdown(bool enabled)
+{
+    if (!showFiltersDropdownCheckBox_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(showFiltersDropdownCheckBox_);
+    showFiltersDropdownCheckBox_->setChecked(enabled);
+    updateApplyButtonEnabled();
+}
+
 void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDevices)
 {
     QString selectedDeviceId;
@@ -990,6 +1001,33 @@ QWidget* PreferencesDialog::createUiPage()
 
     layout->addWidget(windowsGroup);
 
+    auto* filtersGroup = new QGroupBox(QStringLiteral("Filters"), content);
+    auto* filtersLayout = new QVBoxLayout(filtersGroup);
+
+    showFiltersDropdownCheckBox_ = new QCheckBox(
+        QStringLiteral("Show filters dropdown next to the search box"),
+        filtersGroup
+    );
+    showFiltersDropdownCheckBox_->setChecked(preferences_.showFiltersDropdown());
+    showFiltersDropdownCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, each search window shows a filters dropdown on the right side of the search box."
+        )
+    );
+
+    auto* filtersDescription = new QLabel(
+        QStringLiteral(
+            "The dropdown contains the same filter choices as the Filter menu and lets you switch filters without opening the menu."
+        ),
+        filtersGroup
+    );
+    filtersDescription->setWordWrap(true);
+
+    filtersLayout->addWidget(showFiltersDropdownCheckBox_);
+    filtersLayout->addWidget(filtersDescription);
+
+    layout->addWidget(filtersGroup);
+
     auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), content);
     auto* sortingLayout = new QVBoxLayout(sortingGroup);
 
@@ -1090,6 +1128,10 @@ QWidget* PreferencesDialog::createUiPage()
     pageLayout->addWidget(scrollArea, 1);
 
     connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(showFiltersDropdownCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -1846,6 +1888,12 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.showHighlightedSearchTerms();
     }
 
+    if (showFiltersDropdownCheckBox_) {
+        changed = changed ||
+            showFiltersDropdownCheckBox_->isChecked() !=
+            preferences_.showFiltersDropdown();
+    }
+
     return changed;
 }
 
@@ -1898,7 +1946,25 @@ void PreferencesDialog::applyChanges()
             ? showHighlightedSearchTermsCheckBox_->isChecked()
             : preferences_.showHighlightedSearchTerms();
 
+    const bool showFiltersDropdownChanged =
+        showFiltersDropdownCheckBox_ &&
+        showFiltersDropdownCheckBox_->isChecked() !=
+        preferences_.showFiltersDropdown();
+
+    const bool showFiltersDropdownEnabled =
+        showFiltersDropdownCheckBox_
+            ? showFiltersDropdownCheckBox_->isChecked()
+            : preferences_.showFiltersDropdown();
+
     if (uiChanged) {
+        /*
+         * NOTE: The following preferences are only written to in AppController, NOT from here:
+         * - autoRefreshResultsForLiveUpdates
+         * - showFiltersDropdown
+         *
+         * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog.
+         */
+
         if (createNewWindowOnLaunchCheckBox_) {
             preferences_.setCreateNewWindowOnLaunch(
                 createNewWindowOnLaunchCheckBox_->isChecked()
@@ -1941,6 +2007,10 @@ void PreferencesDialog::applyChanges()
 
         if (searchResultHighlightingChanged) {
             Q_EMIT searchResultHighlightingApplied(searchResultHighlightingEnabled);
+        }
+
+        if (showFiltersDropdownChanged) {
+            Q_EMIT showFiltersDropdownApplied(showFiltersDropdownEnabled);
         }
 
         updateApplyButtonEnabled();
@@ -2045,5 +2115,9 @@ void PreferencesDialog::applyChanges()
 
     if (searchResultHighlightingChanged) {
         Q_EMIT searchResultHighlightingApplied(searchResultHighlightingEnabled);
+    }
+
+    if (showFiltersDropdownChanged) {
+        Q_EMIT showFiltersDropdownApplied(showFiltersDropdownEnabled);
     }
 }

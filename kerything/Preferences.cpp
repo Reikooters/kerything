@@ -95,6 +95,20 @@ void Preferences::setShowHighlightedSearchTerms(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showFiltersDropdown() const
+{
+    return settings_.value(
+        QStringLiteral("ui/showFiltersDropdown"),
+        false
+    ).toBool();
+}
+
+void Preferences::setShowFiltersDropdown(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/showFiltersDropdown"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::hasAnyIndexedDevicePreferences() const
 {
     return !deviceIds().isEmpty();

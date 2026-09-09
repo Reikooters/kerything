@@ -798,6 +798,9 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
     connect(dialog, &PreferencesDialog::autoRefreshResultsForLiveUpdatesApplied,
             this, &AppController::setAutoRefreshResultsForLiveUpdates);
 
+    connect(dialog, &PreferencesDialog::showFiltersDropdownApplied,
+        this, &AppController::setShowFiltersDropdown);
+
     connect(dialog, &PreferencesDialog::searchResultHighlightingApplied,
             this, [this](bool enabled) {
                 requestSearchHighlightRepaintAllWindows();
@@ -1052,6 +1055,34 @@ bool AppController::showInFileManagerOnPathDoubleClick() const
 bool AppController::showHighlightedSearchTerms() const
 {
     return preferences_.showHighlightedSearchTerms();
+}
+
+bool AppController::showFiltersDropdown() const
+{
+    return preferences_.showFiltersDropdown();
+}
+
+void AppController::setShowFiltersDropdown(bool enabled)
+{
+    const bool wasEnabled = preferences_.showFiltersDropdown();
+
+    if (wasEnabled == enabled) {
+        return;
+    }
+
+    preferences_.setShowFiltersDropdown(enabled);
+    Q_EMIT showFiltersDropdownChanged(enabled);
+
+    if (preferencesDialog_) {
+        preferencesDialog_->setShowFiltersDropdown(enabled);
+    }
+
+    requestWindowStatusMessage(
+        enabled
+            ? QStringLiteral("Filters dropdown shown")
+            : QStringLiteral("Filters dropdown hidden"),
+        3000
+    );
 }
 
 IndexController* AppController::indexController() const noexcept {

@@ -37,6 +37,7 @@ public:
     void setKnownDevices(const std::vector<BlockDevice>& knownDevices);
     void setCurrentPage(PreferencesDialogPage page);
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
+    void setShowFiltersDropdown(bool enabled);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -46,6 +47,7 @@ Q_SIGNALS:
     void searchFiltersApplied();
     void autoRefreshResultsForLiveUpdatesApplied(bool enabled);
     void searchResultHighlightingApplied(bool enabled);
+    void showFiltersDropdownApplied(bool enabled);
 
 private:
     enum DeviceColumn {
@@ -131,6 +133,7 @@ private:
     QCheckBox* sortSizeDescendingFirstCheckBox_ = nullptr;
     QCheckBox* showInFileManagerOnPathDoubleClickCheckBox_ = nullptr;
     QCheckBox* showHighlightedSearchTermsCheckBox_ = nullptr;
+    QCheckBox* showFiltersDropdownCheckBox_ = nullptr;
 
     QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 };

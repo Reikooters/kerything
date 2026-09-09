@@ -15,6 +15,7 @@
 #include "FileModel.h"
 
 class AppController;
+class QComboBox;;
 class QToolButton;
 
 /**
@@ -165,6 +166,9 @@ private:
         const std::optional<IndexController::RecordHandle>& currentHandle
     );
     void rebuildFilterMenu();
+    void rebuildFilterDropdown();
+    void setFiltersDropdownVisible(bool visible);
+    void syncFilterDropdownSelection();
     void applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment);
     void updateSearchLineFilterHint();
     void updateFilterChip();
@@ -181,6 +185,7 @@ private:
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
+    QComboBox* filterDropdown_ = nullptr;
     QToolButton* filterChip_ = nullptr;
     QToolButton* matchCaseChip_ = nullptr;
     QToolButton* matchWholeWordChip_ = nullptr;
@@ -193,6 +198,7 @@ private:
     QMenu* filterMenu_ = nullptr;
     QMenu* searchMenu_ = nullptr;
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
+    QAction* showFiltersDropdownAct_ = nullptr;
     QAction* matchCaseAct_ = nullptr;
     QAction* matchWholeWordAct_ = nullptr;
     QAction* regexAct_ = nullptr;

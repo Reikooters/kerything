@@ -58,6 +58,8 @@ public:
     void setShowInFileManagerOnPathDoubleClick(bool enabled);
     [[nodiscard]] bool showHighlightedSearchTerms() const;
     void setShowHighlightedSearchTerms(bool enabled);
+    [[nodiscard]] bool showFiltersDropdown() const;
+    void setShowFiltersDropdown(bool enabled);
 
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;

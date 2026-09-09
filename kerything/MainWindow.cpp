@@ -8,6 +8,7 @@
 #include <iostream>
 #include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDesktopServices>
 #include <QDir>
@@ -69,6 +70,9 @@
 
 namespace {
     constexpr qsizetype OpenManyFilesConfirmationThreshold = 10;
+    constexpr int FilterDropdownIdRole = Qt::UserRole + 1;
+    constexpr int FilterDropdownNameRole = Qt::UserRole + 2;
+    constexpr int FilterDropdownQueryRole = Qt::UserRole + 3;
 
     QString menuTextFromUserText(QString text)
     {
@@ -120,7 +124,20 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Add magnifying glass icon to the search bar
     searchLine_->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
 
-    layout->addWidget(searchLine_);
+    filterDropdown_ = new QComboBox(centralWidget);
+    filterDropdown_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    filterDropdown_->setMinimumContentsLength(12);
+    filterDropdown_->setVisible(controller_ && controller_->showFiltersDropdown());
+    filterDropdown_->setStatusTip(QStringLiteral("Select the active search filter"));
+    filterDropdown_->setToolTip(QStringLiteral("Select the active search filter"));
+
+    auto* searchRowLayout = new QHBoxLayout();
+    searchRowLayout->setContentsMargins(0, 0, 0, 0);
+    searchRowLayout->setSpacing(6);
+    searchRowLayout->addWidget(searchLine_, 1);
+    searchRowLayout->addWidget(filterDropdown_);
+
+    layout->addLayout(searchRowLayout);
 
     tableView_ = new SearchResultTableView(centralWidget);
     model_ = new FileModel(controller_, this);
@@ -335,6 +352,22 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Connect search bar to our search logic
     connect(searchLine_, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
 
+    connect(filterDropdown_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (!filterDropdown_ || index < 0) {
+            return;
+        }
+
+        const QString filterId = filterDropdown_->itemData(index, FilterDropdownIdRole).toString();
+        const QString filterName = filterDropdown_->itemData(index, FilterDropdownNameRole).toString();
+        const QString queryFragment = filterDropdown_->itemData(index, FilterDropdownQueryRole).toString();
+
+        if (filterId == activeSearchFilterId_) {
+            return;
+        }
+
+        applySearchFilter(filterId, filterName, queryFragment);
+    });
+
     // --- Keyboard Navigation (Search Bar focus logic) ---
     // Arrow Up/Down in search line moves focus to table
     // We set the context to Qt::WidgetShortcut so it only triggers when the searchLine has focus
@@ -443,6 +476,17 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         }
     });
     addAction(autoRefreshLiveUpdatesAct_);
+
+    showFiltersDropdownAct_ = new QAction(QStringLiteral("Filters"), this);
+    showFiltersDropdownAct_->setCheckable(true);
+    showFiltersDropdownAct_->setChecked(controller_ && controller_->showFiltersDropdown());
+    showFiltersDropdownAct_->setStatusTip(QStringLiteral("Show the filters dropdown next to the search box"));
+    connect(showFiltersDropdownAct_, &QAction::toggled, this, [this](bool checked) {
+        if (controller_) {
+            controller_->setShowFiltersDropdown(checked);
+        }
+    });
+    addAction(showFiltersDropdownAct_);
 
     // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
@@ -573,6 +617,10 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     editMenu->addAction(copyPathsAct);
     editMenu->addAction(copyParentPathsAct);
 
+    // View Menu
+    auto* viewMenu = menuBar()->addMenu(QStringLiteral("View"));
+    viewMenu->addAction(showFiltersDropdownAct_);
+
     // Search Menu
     searchMenu_ = menuBar()->addMenu(QStringLiteral("Search"));
     searchMenu_->addAction(matchCaseAct_);
@@ -606,6 +654,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     if (controller_) {
         connect(controller_, &AppController::searchFiltersChanged, this, [this]() {
             rebuildFilterMenu();
+            rebuildFilterDropdown();
             updateSearch(searchLine_->text());
         });
 
@@ -618,6 +667,11 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
                     const QSignalBlocker blocker(autoRefreshLiveUpdatesAct_);
                     autoRefreshLiveUpdatesAct_->setChecked(enabled);
                 });
+
+        connect(controller_, &AppController::showFiltersDropdownChanged,
+                this, [this](bool enabled) {
+                    setFiltersDropdownVisible(enabled);
+                });
     }
 
     updateActionStates();
@@ -626,6 +680,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     connect(tableView_, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
 
     // Initialize initial search chip/menu state
+    rebuildFilterDropdown();
     updateSearchOptionChips();
     updateSearchMenuTitle();
 
@@ -949,6 +1004,7 @@ void MainWindow::resetSearchStateAndFocus()
     }
 
     rebuildFilterMenu();
+    syncFilterDropdownSelection();
     updateSearchOptionChips();
     updateSearchMenuTitle();
     updateSearchLineFilterHint();
@@ -1082,6 +1138,72 @@ void MainWindow::rebuildFilterMenu()
     filterMenu_->addAction(manageFiltersAction);
 
     updateSearchLineFilterHint();
+    rebuildFilterDropdown();
+}
+
+void MainWindow::rebuildFilterDropdown()
+{
+    if (!filterDropdown_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(filterDropdown_);
+
+    filterDropdown_->clear();
+
+    filterDropdown_->addItem(QStringLiteral("All Files"));
+    filterDropdown_->setItemData(0, QString(), FilterDropdownIdRole);
+    filterDropdown_->setItemData(0, QString(), FilterDropdownNameRole);
+    filterDropdown_->setItemData(0, QString(), FilterDropdownQueryRole);
+
+    filterDropdown_->addItem(QStringLiteral("Folders"));
+    filterDropdown_->setItemData(1, QStringLiteral("builtin-folders"), FilterDropdownIdRole);
+    filterDropdown_->setItemData(1, QStringLiteral("Folders"), FilterDropdownNameRole);
+    filterDropdown_->setItemData(1, QStringLiteral("folder:"), FilterDropdownQueryRole);
+    filterDropdown_->setItemData(1, QStringLiteral("folder:"), Qt::ToolTipRole);
+
+    const std::vector<SearchFilterPreference> filters =
+        controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
+
+    for (const SearchFilterPreference& filter : filters) {
+        filterDropdown_->addItem(filter.name);
+
+        const int index = filterDropdown_->count() - 1;
+        filterDropdown_->setItemData(index, filter.id, FilterDropdownIdRole);
+        filterDropdown_->setItemData(index, filter.name, FilterDropdownNameRole);
+        filterDropdown_->setItemData(index, filter.query, FilterDropdownQueryRole);
+        filterDropdown_->setItemData(index, filter.query, Qt::ToolTipRole);
+    }
+
+    syncFilterDropdownSelection();
+}
+
+void MainWindow::setFiltersDropdownVisible(bool visible)
+{
+    if (showFiltersDropdownAct_ && showFiltersDropdownAct_->isChecked() != visible) {
+        const QSignalBlocker blocker(showFiltersDropdownAct_);
+        showFiltersDropdownAct_->setChecked(visible);
+    }
+
+    if (filterDropdown_) {
+        filterDropdown_->setVisible(visible);
+    }
+}
+
+void MainWindow::syncFilterDropdownSelection()
+{
+    if (!filterDropdown_) {
+        return;
+    }
+
+    for (int index = 0; index < filterDropdown_->count(); ++index) {
+        if (filterDropdown_->itemData(index, FilterDropdownIdRole).toString() == activeSearchFilterId_) {
+            filterDropdown_->setCurrentIndex(index);
+            return;
+        }
+    }
+
+    filterDropdown_->setCurrentIndex(0);
 }
 
 void MainWindow::applySearchFilter(const QString& filterId, const QString& filterName, const QString& queryFragment)
@@ -1090,6 +1212,7 @@ void MainWindow::applySearchFilter(const QString& filterId, const QString& filte
     activeSearchFilterName_ = filterName;
     activeSearchFilter_ = queryFragment;
     rebuildFilterMenu();
+    syncFilterDropdownSelection();
     updateSearch(searchLine_->text());
 
     if (queryFragment.isEmpty()) {

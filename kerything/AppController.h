@@ -46,11 +46,14 @@ public:
     [[nodiscard]] bool sortSizeDescendingFirst() const;
     [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;
     [[nodiscard]] bool showHighlightedSearchTerms() const;
+    [[nodiscard]] bool showFiltersDropdown() const;
+    void setShowFiltersDropdown(bool enabled);
     IndexController* indexController() const noexcept;
 
 Q_SIGNALS:
     void searchFiltersChanged();
     void autoRefreshResultsForLiveUpdatesChanged(bool enabled);
+    void showFiltersDropdownChanged(bool enabled);
 
 private Q_SLOTS:
     void onPrimaryRequestedOpenWindow();

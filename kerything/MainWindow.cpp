@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
+#include <QFont>
 #include <QHeaderView>
 #include <QItemSelection>
 #include <QLabel>
@@ -73,6 +74,12 @@ namespace {
     constexpr int FilterDropdownIdRole = Qt::UserRole + 1;
     constexpr int FilterDropdownNameRole = Qt::UserRole + 2;
     constexpr int FilterDropdownQueryRole = Qt::UserRole + 3;
+    constexpr int FilterDropdownKindRole = Qt::UserRole + 4;
+
+    enum FilterDropdownKind {
+        FilterDropdownKindFilter = 0,
+        FilterDropdownKindManageFilters = 1,
+    };
 
     QString menuTextFromUserText(QString text)
     {
@@ -352,8 +359,21 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // Connect search bar to our search logic
     connect(searchLine_, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
 
-    connect(filterDropdown_, &QComboBox::currentIndexChanged, this, [this](int index) {
+    // Connect filter dropdown to filter logic
+    connect(filterDropdown_, &QComboBox::activated, this, [this](int index) {
         if (!filterDropdown_ || index < 0) {
+            return;
+        }
+
+        const int kind = filterDropdown_->itemData(index, FilterDropdownKindRole).toInt();
+
+        if (kind == FilterDropdownKindManageFilters) {
+            syncFilterDropdownSelection();
+
+            if (controller_) {
+                controller_->showPreferencesDialog(PreferencesDialogPage::Filters);
+            }
+
             return;
         }
 
@@ -1155,12 +1175,14 @@ void MainWindow::rebuildFilterDropdown()
     filterDropdown_->setItemData(0, QString(), FilterDropdownIdRole);
     filterDropdown_->setItemData(0, QString(), FilterDropdownNameRole);
     filterDropdown_->setItemData(0, QString(), FilterDropdownQueryRole);
+    filterDropdown_->setItemData(0, FilterDropdownKindFilter, FilterDropdownKindRole);
 
     filterDropdown_->addItem(QStringLiteral("Folders"));
     filterDropdown_->setItemData(1, QStringLiteral("builtin-folders"), FilterDropdownIdRole);
     filterDropdown_->setItemData(1, QStringLiteral("Folders"), FilterDropdownNameRole);
     filterDropdown_->setItemData(1, QStringLiteral("folder:"), FilterDropdownQueryRole);
     filterDropdown_->setItemData(1, QStringLiteral("folder:"), Qt::ToolTipRole);
+    filterDropdown_->setItemData(1, FilterDropdownKindFilter, FilterDropdownKindRole);
 
     const std::vector<SearchFilterPreference> filters =
         controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
@@ -1173,7 +1195,27 @@ void MainWindow::rebuildFilterDropdown()
         filterDropdown_->setItemData(index, filter.name, FilterDropdownNameRole);
         filterDropdown_->setItemData(index, filter.query, FilterDropdownQueryRole);
         filterDropdown_->setItemData(index, filter.query, Qt::ToolTipRole);
+        filterDropdown_->setItemData(index, FilterDropdownKindFilter, FilterDropdownKindRole);
     }
+
+    filterDropdown_->addItem(QStringLiteral("  Manage Filters..."));
+
+    const int manageIndex = filterDropdown_->count() - 1;
+    filterDropdown_->setItemData(manageIndex, FilterDropdownKindManageFilters, FilterDropdownKindRole);
+    filterDropdown_->setItemData(
+        manageIndex,
+        QStringLiteral("Open the Filters page in Preferences"),
+        Qt::ToolTipRole
+    );
+
+    QFont manageFont = filterDropdown_->font();
+    manageFont.setItalic(true);
+    filterDropdown_->setItemData(manageIndex, manageFont, Qt::FontRole);
+    filterDropdown_->setItemData(
+        manageIndex,
+        filterDropdown_->palette().brush(QPalette::PlaceholderText),
+        Qt::ForegroundRole
+    );
 
     syncFilterDropdownSelection();
 }

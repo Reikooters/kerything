@@ -986,7 +986,7 @@ QWidget* PreferencesDialog::createUiPage()
         )
     );
 
-    auto* description = new QLabel(
+    auto* createNewWindowOnLaunchDescription = new QLabel(
         QStringLiteral(
             "When enabled, launching Kerything while it is already running opens another search window. "
             "When disabled, Kerything tries to present the last active window instead.\n"
@@ -994,10 +994,60 @@ QWidget* PreferencesDialog::createUiPage()
         ),
         windowsGroup
     );
-    description->setWordWrap(true);
+    createNewWindowOnLaunchDescription->setWordWrap(true);
 
     windowsLayout->addWidget(createNewWindowOnLaunchCheckBox_);
-    windowsLayout->addWidget(description);
+    windowsLayout->addWidget(createNewWindowOnLaunchDescription);
+
+    carryFilterToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over the active filter to new windows"),
+        windowsGroup
+    );
+    carryFilterToNewWindowsCheckBox_->setChecked(preferences_.carryFilterToNewWindows());
+    carryFilterToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current window’s active filter\n"
+            "into the new search window."
+        )
+    );
+
+    carrySearchOptionsToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over search options to new windows"),
+        windowsGroup
+    );
+    carrySearchOptionsToNewWindowsCheckBox_->setChecked(preferences_.carrySearchOptionsToNewWindows());
+    carrySearchOptionsToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current window's Match Case,\n"
+            "Match Whole Word, and Regex into the new search window."
+        )
+    );
+
+    carrySearchTextToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over the search text to new windows"),
+        windowsGroup
+    );
+    carrySearchTextToNewWindowsCheckBox_->setChecked(preferences_.carrySearchTextToNewWindows());
+    carrySearchTextToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current search text\n"
+            "into the new search window."
+        )
+    );
+
+    auto* newWindowStateDescription = new QLabel(
+        QStringLiteral(
+            "These options control what is copied from the current window when you open another window "
+            "using File > New Window or Ctrl+N."
+        ),
+        windowsGroup
+    );
+    newWindowStateDescription->setWordWrap(true);
+
+    windowsLayout->addWidget(carryFilterToNewWindowsCheckBox_);
+    windowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
+    windowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
+    windowsLayout->addWidget(newWindowStateDescription);
 
     layout->addWidget(windowsGroup);
 
@@ -1128,6 +1178,18 @@ QWidget* PreferencesDialog::createUiPage()
     pageLayout->addWidget(scrollArea, 1);
 
     connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carryFilterToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carrySearchOptionsToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carrySearchTextToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -1864,6 +1926,24 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.createNewWindowOnLaunch();
     }
 
+    if (carryFilterToNewWindowsCheckBox_) {
+        changed = changed ||
+            carryFilterToNewWindowsCheckBox_->isChecked() !=
+            preferences_.carryFilterToNewWindows();
+    }
+
+    if (carrySearchOptionsToNewWindowsCheckBox_) {
+        changed = changed ||
+            carrySearchOptionsToNewWindowsCheckBox_->isChecked() !=
+            preferences_.carrySearchOptionsToNewWindows();
+    }
+
+    if (carrySearchTextToNewWindowsCheckBox_) {
+        changed = changed ||
+            carrySearchTextToNewWindowsCheckBox_->isChecked() !=
+            preferences_.carrySearchTextToNewWindows();
+    }
+
     if (sortDateDescendingFirstCheckBox_) {
         changed = changed ||
             sortDateDescendingFirstCheckBox_->isChecked() !=
@@ -1962,12 +2042,32 @@ void PreferencesDialog::applyChanges()
          * - autoRefreshResultsForLiveUpdates
          * - showFiltersDropdown
          *
-         * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog.
+         * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog,
+         * so the AppController is used as a central location to save them. Therefore, we don't want to
+         * overwrite them here.
          */
 
         if (createNewWindowOnLaunchCheckBox_) {
             preferences_.setCreateNewWindowOnLaunch(
                 createNewWindowOnLaunchCheckBox_->isChecked()
+            );
+        }
+
+        if (carryFilterToNewWindowsCheckBox_) {
+            preferences_.setCarryFilterToNewWindows(
+                carryFilterToNewWindowsCheckBox_->isChecked()
+            );
+        }
+
+        if (carrySearchOptionsToNewWindowsCheckBox_) {
+            preferences_.setCarrySearchOptionsToNewWindows(
+                carrySearchOptionsToNewWindowsCheckBox_->isChecked()
+            );
+        }
+
+        if (carrySearchTextToNewWindowsCheckBox_) {
+            preferences_.setCarrySearchTextToNewWindows(
+                carrySearchTextToNewWindowsCheckBox_->isChecked()
             );
         }
 

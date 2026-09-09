@@ -50,6 +50,12 @@ public:
     // UI
     [[nodiscard]] bool createNewWindowOnLaunch() const;
     void setCreateNewWindowOnLaunch(bool enabled);
+    [[nodiscard]] bool carryFilterToNewWindows() const;
+    void setCarryFilterToNewWindows(bool enabled);
+    [[nodiscard]] bool carrySearchOptionsToNewWindows() const;
+    void setCarrySearchOptionsToNewWindows(bool enabled);
+    [[nodiscard]] bool carrySearchTextToNewWindows() const;
+    void setCarrySearchTextToNewWindows(bool enabled);
     [[nodiscard]] bool sortDateDescendingFirst() const;
     void setSortDateDescendingFirst(bool enabled);
     [[nodiscard]] bool sortSizeDescendingFirst() const;

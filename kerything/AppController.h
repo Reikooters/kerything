@@ -29,7 +29,7 @@ public:
     explicit AppController(QApplication& app, QObject* parent = nullptr);
 
     bool start();
-    void openNewWindow();
+    void openNewWindow(MainWindow* sourceWindow = nullptr);
     void openWindowForLaunchRequest();
     void presentExistingWindow();
     void showPreferencesDialog(PreferencesDialogPage initialPage = PreferencesDialogPage::Devices);
@@ -47,6 +47,9 @@ public:
     [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;
     [[nodiscard]] bool showHighlightedSearchTerms() const;
     [[nodiscard]] bool showFiltersDropdown() const;
+    [[nodiscard]] bool carryFilterToNewWindows() const;
+    [[nodiscard]] bool carrySearchOptionsToNewWindows() const;
+    [[nodiscard]] bool carrySearchTextToNewWindows() const;
     void setShowFiltersDropdown(bool enabled);
     IndexController* indexController() const noexcept;
 

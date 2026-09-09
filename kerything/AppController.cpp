@@ -701,14 +701,45 @@ bool AppController::start() {
     return true;
 }
 
-void AppController::openNewWindow() {
+void AppController::openNewWindow(MainWindow* sourceWindow) {
     // Clean up any stale pointers before adding a new one.
     cleanupWindows();
+
+    std::optional<MainWindow::NewWindowState> stateToCarry;
+
+    if (sourceWindow &&
+        (preferences_.carryFilterToNewWindows() ||
+         preferences_.carrySearchOptionsToNewWindows() ||
+         preferences_.carrySearchTextToNewWindows())) {
+        MainWindow::NewWindowState state = sourceWindow->newWindowState();
+
+        if (!preferences_.carryFilterToNewWindows()) {
+            state.activeSearchFilterId.clear();
+            state.activeSearchFilterName.clear();
+            state.activeSearchFilter.clear();
+        }
+
+        if (!preferences_.carrySearchOptionsToNewWindows()) {
+            state.matchCaseEnabled = false;
+            state.matchWholeWordEnabled = false;
+            state.regexEnabled = false;
+        }
+
+        if (!preferences_.carrySearchTextToNewWindows()) {
+            state.searchText.clear();
+        }
+
+        stateToCarry = std::move(state);
+    }
 
     // Create a top-level window. The controller is passed in so the window can
     // request app-level actions, but the Qt parent remains null by design.
     auto* window = new MainWindow(this);
     windows_.append(window);
+
+    if (stateToCarry) {
+        window->applyNewWindowState(*stateToCarry);
+    }
 
     // When the window is destroyed, remove its pointer from the controller list.
     connect(window, &QObject::destroyed, this, [this, window]() {
@@ -1060,6 +1091,21 @@ bool AppController::showHighlightedSearchTerms() const
 bool AppController::showFiltersDropdown() const
 {
     return preferences_.showFiltersDropdown();
+}
+
+bool AppController::carryFilterToNewWindows() const
+{
+    return preferences_.carryFilterToNewWindows();
+}
+
+bool AppController::carrySearchOptionsToNewWindows() const
+{
+    return preferences_.carrySearchOptionsToNewWindows();
+}
+
+bool AppController::carrySearchTextToNewWindows() const
+{
+    return preferences_.carrySearchTextToNewWindows();
 }
 
 void AppController::setShowFiltersDropdown(bool enabled)

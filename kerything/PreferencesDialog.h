@@ -129,6 +129,9 @@ private:
     QPushButton* restoreDefaultFiltersButton_ = nullptr;
 
     QCheckBox* createNewWindowOnLaunchCheckBox_ = nullptr;
+    QCheckBox* carryFilterToNewWindowsCheckBox_ = nullptr;
+    QCheckBox* carrySearchOptionsToNewWindowsCheckBox_ = nullptr;
+    QCheckBox* carrySearchTextToNewWindowsCheckBox_ = nullptr;
     QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;
     QCheckBox* sortSizeDescendingFirstCheckBox_ = nullptr;
     QCheckBox* showInFileManagerOnPathDoubleClickCheckBox_ = nullptr;

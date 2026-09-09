@@ -39,6 +39,48 @@ void Preferences::setCreateNewWindowOnLaunch(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::carryFilterToNewWindows() const
+{
+    return settings_.value(
+        QStringLiteral("ui/carryFilterToNewWindows"),
+        false
+    ).toBool();
+}
+
+void Preferences::setCarryFilterToNewWindows(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/carryFilterToNewWindows"), enabled);
+    settings_.sync();
+}
+
+bool Preferences::carrySearchOptionsToNewWindows() const
+{
+    return settings_.value(
+        QStringLiteral("ui/carrySearchOptionsToNewWindows"),
+        false
+    ).toBool();
+}
+
+void Preferences::setCarrySearchOptionsToNewWindows(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/carrySearchOptionsToNewWindows"), enabled);
+    settings_.sync();
+}
+
+bool Preferences::carrySearchTextToNewWindows() const
+{
+    return settings_.value(
+        QStringLiteral("ui/carrySearchTextToNewWindows"),
+        false
+    ).toBool();
+}
+
+void Preferences::setCarrySearchTextToNewWindows(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/carrySearchTextToNewWindows"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::sortDateDescendingFirst() const
 {
     return settings_.value(

@@ -444,11 +444,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     // New Window
     auto *newWindowAct = new QAction(QIcon::fromTheme("window-new"), "New Window", this);
     newWindowAct->setShortcut(QKeySequence::New);
-    connect(newWindowAct, &QAction::triggered, this, [this]() {
-        if (controller_) {
-            controller_->openNewWindow();
-        }
-    });
+    connect(newWindowAct, &QAction::triggered, this, &MainWindow::openNewWindowFromThisWindow);
     addAction(newWindowAct);
 
     // Close Window
@@ -850,6 +846,68 @@ int MainWindow::resultCount() const
     return model_ ? model_->rowCount() : 0;
 }
 
+MainWindow::NewWindowState MainWindow::newWindowState() const
+{
+    return NewWindowState{
+        .activeSearchFilterId = activeSearchFilterId_,
+        .activeSearchFilterName = activeSearchFilterName_,
+        .activeSearchFilter = activeSearchFilter_,
+        .searchText = searchLine_ ? searchLine_->text() : QString(),
+        .matchCaseEnabled = matchCaseEnabled_,
+        .matchWholeWordEnabled = matchWholeWordEnabled_,
+        .regexEnabled = regexEnabled_,
+    };
+}
+
+void MainWindow::applyNewWindowState(const NewWindowState& state)
+{
+    activeSearchFilterId_ = state.activeSearchFilterId;
+    activeSearchFilterName_ = state.activeSearchFilterName;
+    activeSearchFilter_ = state.activeSearchFilter;
+
+    matchCaseEnabled_ = state.matchCaseEnabled;
+    matchWholeWordEnabled_ = state.matchWholeWordEnabled;
+    regexEnabled_ = state.regexEnabled;
+
+    if (matchCaseAct_) {
+        const QSignalBlocker blocker(matchCaseAct_);
+        matchCaseAct_->setChecked(matchCaseEnabled_);
+    }
+
+    if (matchWholeWordAct_) {
+        const QSignalBlocker blocker(matchWholeWordAct_);
+        matchWholeWordAct_->setChecked(matchWholeWordEnabled_);
+        matchWholeWordAct_->setEnabled(!regexEnabled_);
+        matchWholeWordAct_->setStatusTip(
+            regexEnabled_
+                ? QStringLiteral("Match Whole Word is unavailable while Regex is enabled")
+                : QStringLiteral("Match complete words in file names")
+        );
+    }
+
+    if (regexAct_) {
+        const QSignalBlocker blocker(regexAct_);
+        regexAct_->setChecked(regexEnabled_);
+    }
+
+    rebuildFilterMenu();
+    syncFilterDropdownSelection();
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
+    updateSearchLineFilterHint();
+
+    if (!searchLine_) {
+        updateSearch(QString());
+        return;
+    }
+
+    if (searchLine_->text() == state.searchText) {
+        updateSearch(state.searchText);
+    } else {
+        searchLine_->setText(state.searchText);
+    }
+}
+
 int MainWindow::preferredLiveRefreshIntervalMs() const
 {
     const int rows = resultCount();
@@ -1047,6 +1105,13 @@ void MainWindow::resetSearchStateAndFocus()
 
     searchLine_->setFocus();
     showTemporaryStatus(QStringLiteral("Search reset"), 2500);
+}
+
+void MainWindow::openNewWindowFromThisWindow()
+{
+    if (controller_) {
+        controller_->openNewWindow(this);
+    }
 }
 
 bool MainWindow::event(QEvent* event)

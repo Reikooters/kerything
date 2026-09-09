@@ -25,6 +25,16 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
+    struct NewWindowState {
+        QString activeSearchFilterId;
+        QString activeSearchFilterName;
+        QString activeSearchFilter;
+        QString searchText;
+        bool matchCaseEnabled = false;
+        bool matchWholeWordEnabled = false;
+        bool regexEnabled = false;
+    };
+
     /**
      * @brief Constructs the MainWindow.
      */
@@ -39,6 +49,8 @@ public:
     [[nodiscard]] int resultCount() const;
     [[nodiscard]] int preferredLiveRefreshIntervalMs() const;
     [[nodiscard]] bool shouldDeferLiveRefresh() const;
+    [[nodiscard]] NewWindowState newWindowState() const;
+    void applyNewWindowState(const NewWindowState& state);
 
     void refresh();
     void refreshLiveMetadata();
@@ -182,6 +194,7 @@ private:
     void setMatchWholeWordEnabled(bool enabled);
     void setRegexEnabled(bool enabled);
     void resetSearchStateAndFocus();
+    void openNewWindowFromThisWindow();
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;

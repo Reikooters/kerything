@@ -8,6 +8,7 @@
 
 #include <QAbstractItemView>
 #include <QCheckBox>
+#include <QColor>
 #include <QDateTime>
 #include <QDialogButtonBox>
 #include <QFrame>
@@ -20,6 +21,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -141,8 +143,9 @@ PreferencesDialog::PreferencesDialog(
     applyButton_->setEnabled(false);
 
     connect(buttonBox_, &QDialogButtonBox::accepted, this, [this]() {
-        applyChanges();
-        accept();
+        if (applyChanges()) {
+            accept();
+        }
     });
 
     connect(buttonBox_, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -776,7 +779,30 @@ QWidget* PreferencesDialog::createFiltersPage()
 
     layout->addLayout(buttonLayout);
 
-    connect(filterTable_, &QTableWidget::itemChanged, this, [this]() {
+    connect(filterTable_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {
+        const bool hadValidationState = hasFilterValidationState();
+
+        if (item) {
+            clearFilterValidationState();
+
+            const QSignalBlocker blocker(filterTable_);
+
+            if (item->column() == FilterMacroColumn) {
+                const QString macro = normalizedFilterMacro(item->text());
+                item->setToolTip(
+                    macro.isEmpty()
+                        ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
+                        : QStringLiteral("%1:").arg(macro)
+                );
+            } else if (item->column() == FilterQueryColumn) {
+                item->setToolTip(item->text().trimmed());
+            }
+        }
+
+        if (hadValidationState) {
+            validateFilters(nullptr, false);
+        }
+
         updateApplyButtonEnabled();
     });
 
@@ -1647,7 +1673,7 @@ std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
 
         filter.name = nameItem->text().trimmed();
         filter.macro = normalizedFilterMacro(macroItem ? macroItem->text() : QString());
-        filter.query = queryItem->text().trimmed();
+        filter.query = normalizedFilterQuery(queryItem->text());
 
         filters.push_back(std::move(filter));
     }
@@ -1701,6 +1727,53 @@ QString PreferencesDialog::normalizedFilterMacro(QString macro)
     }
 
     return macro;
+}
+
+QString PreferencesDialog::normalizedExtensionFilterToken(QString token)
+{
+    const qsizetype colon = token.indexOf(QLatin1Char(':'));
+
+    if (colon <= 0) {
+        return token;
+    }
+
+    const QString prefix = token.left(colon + 1);
+    QString extensionList = token.mid(colon + 1);
+
+    if (extensionList.isEmpty() || !extensionList.contains(QLatin1Char(','))) {
+        return token;
+    }
+
+    extensionList.replace(QLatin1Char(','), QLatin1Char(';'));
+    return prefix + extensionList;
+}
+
+QString PreferencesDialog::normalizedFilterQuery(QString query)
+{
+    query = query.trimmed();
+
+    if (query.isEmpty()) {
+        return query;
+    }
+
+    QStringList normalizedTokens;
+    const QStringList tokens = query.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+    normalizedTokens.reserve(tokens.size());
+
+    for (const QString& token : tokens) {
+        const QString trimmedToken = token.trimmed();
+        const QString foldedToken = trimmedToken.toCaseFolded();
+
+        if (foldedToken.startsWith(QStringLiteral("ext:")) ||
+            foldedToken.startsWith(QStringLiteral("extension:"))) {
+            normalizedTokens << normalizedExtensionFilterToken(trimmedToken);
+            continue;
+        }
+
+        normalizedTokens << trimmedToken;
+    }
+
+    return normalizedTokens.join(QLatin1Char(' '));
 }
 
 bool PreferencesDialog::isValidFilterMacro(const QString& macro)
@@ -1844,93 +1917,262 @@ void PreferencesDialog::moveSelectedFilters(int direction)
     updateApplyButtonEnabled();
 }
 
-bool PreferencesDialog::validateFilters(QString* errorText) const
+void PreferencesDialog::clearFilterValidationState() const
+{
+    if (!filterTable_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(filterTable_);
+
+    for (int row = 0; row < filterTable_->rowCount(); ++row) {
+        for (int column = 0; column < FilterColumnCount; ++column) {
+            auto* item = filterTable_->item(row, column);
+
+            if (!item) {
+                continue;
+            }
+
+            item->setData(Qt::BackgroundRole, QVariant());
+            item->setData(Qt::ForegroundRole, QVariant());
+            item->setIcon(QIcon());
+
+            if (column == FilterMacroColumn) {
+                const QString macro = normalizedFilterMacro(item->text());
+                item->setToolTip(
+                    macro.isEmpty()
+                        ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
+                        : QStringLiteral("%1:").arg(macro)
+                );
+            } else if (column == FilterQueryColumn) {
+                item->setToolTip(item->text().trimmed());
+            }
+        }
+    }
+}
+
+void PreferencesDialog::markFilterCellInvalid(int row, int column, const QString& message) const
+{
+    if (!filterTable_ ||
+        row < 0 ||
+        row >= filterTable_->rowCount() ||
+        column < 0 ||
+        column >= FilterColumnCount) {
+        return;
+    }
+
+    const QSignalBlocker blocker(filterTable_);
+
+    auto* item = filterTable_->item(row, column);
+
+    if (!item) {
+        item = new QTableWidgetItem();
+        filterTable_->setItem(row, column, item);
+    }
+
+    const QIcon warningIcon = QIcon::fromTheme(
+        QStringLiteral("dialog-warning"),
+        QIcon::fromTheme(QStringLiteral("emblem-warning"))
+    );
+
+    const QPalette palette = filterTable_->palette();
+    const QColor baseColor = palette.color(QPalette::Base);
+    const bool darkMode = baseColor.lightness() < 128;
+
+    QColor errorBackground = darkMode
+        ? QColor(170, 35, 35)
+        : QColor(255, 210, 210);
+
+    QColor errorForeground = darkMode
+        ? QColor(255, 235, 235)
+        : QColor(110, 0, 0);
+
+    errorBackground.setAlpha(darkMode ? 115 : 190);
+
+    item->setIcon(warningIcon);
+    item->setBackground(errorBackground);
+    item->setForeground(errorForeground);
+    item->setToolTip(message);
+}
+
+void PreferencesDialog::focusFilterCell(int row, int column) const
+{
+    if (!filterTable_ ||
+        row < 0 ||
+        row >= filterTable_->rowCount() ||
+        column < 0 ||
+        column >= FilterColumnCount) {
+        return;
+    }
+
+    filterTable_->setCurrentCell(row, column);
+    filterTable_->scrollToItem(
+        filterTable_->item(row, column),
+        QAbstractItemView::PositionAtCenter
+    );
+    filterTable_->setFocus();
+}
+
+bool PreferencesDialog::hasFilterValidationState() const
+{
+    if (!filterTable_) {
+        return false;
+    }
+
+    for (int row = 0; row < filterTable_->rowCount(); ++row) {
+        for (int column = 0; column < FilterColumnCount; ++column) {
+            const auto* item = filterTable_->item(row, column);
+
+            if (item && !item->icon().isNull()) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInvalid) const
 {
     if (!filterTable_) {
         return true;
     }
 
-    QSet<QString> names;
-    QSet<QString> macros;
-    bool normalizedAnyMacro = false;
+    clearFilterValidationState();
+
+    QHash<QString, QList<int>> rowsByName;
+    QHash<QString, QList<int>> rowsByMacro;
+
+    bool valid = true;
+    int firstInvalidRow = -1;
+    int firstInvalidColumn = -1;
+    QString firstError;
+
+    auto rememberFirstInvalid = [&](int row, int column, const QString& message) {
+        if (firstInvalidRow >= 0) {
+            return;
+        }
+
+        firstInvalidRow = row;
+        firstInvalidColumn = column;
+        firstError = message;
+    };
 
     for (int row = 0; row < filterTable_->rowCount(); ++row) {
         const auto* nameItem = filterTable_->item(row, FilterNameColumn);
         auto* macroItem = filterTable_->item(row, FilterMacroColumn);
-        const auto* queryItem = filterTable_->item(row, FilterQueryColumn);
+        auto* queryItem = filterTable_->item(row, FilterQueryColumn);
 
         const QString name = nameItem ? nameItem->text().trimmed() : QString();
-        const QString query = queryItem ? queryItem->text().trimmed() : QString();
+        const QString rawQuery = queryItem ? queryItem->text() : QString();
+        const QString query = normalizedFilterQuery(rawQuery);
         const QString rawMacro = macroItem ? macroItem->text() : QString();
         const QString macro = normalizedFilterMacro(rawMacro);
 
         if (macroItem && macroItem->text() != macro) {
+            const QSignalBlocker blocker(filterTable_);
+
             macroItem->setText(macro);
             macroItem->setToolTip(
                 macro.isEmpty()
                     ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
                     : QStringLiteral("%1:").arg(macro)
             );
-            normalizedAnyMacro = true;
+        }
+
+        if (queryItem && queryItem->text() != query) {
+            const QSignalBlocker blocker(filterTable_);
+
+            queryItem->setText(query);
+            queryItem->setToolTip(query);
         }
 
         if (name.isEmpty()) {
-            if (errorText) {
-                *errorText = QStringLiteral("Filter names cannot be empty.");
-            }
+            const QString message = QStringLiteral("Filter names cannot be empty.");
 
-            return false;
+            markFilterCellInvalid(row, FilterNameColumn, message);
+            rememberFirstInvalid(row, FilterNameColumn, message);
+            valid = false;
+        } else {
+            rowsByName[name.toCaseFolded()].append(row);
         }
 
         if (query.isEmpty()) {
-            if (errorText) {
-                *errorText = QStringLiteral("Filter queries cannot be empty.");
-            }
+            const QString message = QStringLiteral("Filter queries cannot be empty.");
 
-            return false;
+            markFilterCellInvalid(row, FilterQueryColumn, message);
+            rememberFirstInvalid(row, FilterQueryColumn, message);
+            valid = false;
         }
-
-        const QString foldedName = name.toCaseFolded();
-        if (names.contains(foldedName)) {
-            if (errorText) {
-                *errorText = QStringLiteral("Filter names must be unique.");
-            }
-
-            return false;
-        }
-
-        names.insert(foldedName);
 
         if (!isValidFilterMacro(macro)) {
-            if (errorText) {
-                *errorText = QStringLiteral(
-                    "Filter macros can only contain letters, numbers, and underscores."
-                );
-            }
+            const QString message = QStringLiteral(
+                "Filter macros can only contain letters, numbers, and underscores."
+            );
 
-            return false;
-        }
-
-        if (!macro.isEmpty()) {
-            const QString foldedMacro = macro.toCaseFolded();
-
-            if (macros.contains(foldedMacro)) {
-                if (errorText) {
-                    *errorText = QStringLiteral("Filter macros must be unique.");
-                }
-
-                return false;
-            }
-
-            macros.insert(foldedMacro);
+            markFilterCellInvalid(row, FilterMacroColumn, message);
+            rememberFirstInvalid(row, FilterMacroColumn, message);
+            valid = false;
+        } else if (!macro.isEmpty()) {
+            rowsByMacro[macro.toCaseFolded()].append(row);
         }
     }
 
-    if (normalizedAnyMacro) {
-        const_cast<PreferencesDialog*>(this)->updateApplyButtonEnabled();
+    const QString duplicateNameMessage = QStringLiteral("Filter names must be unique.");
+
+    for (auto it = rowsByName.constBegin(); it != rowsByName.constEnd(); ++it) {
+        const QList<int>& rows = it.value();
+
+        if (rows.size() < 2) {
+            continue;
+        }
+
+        for (const int row : rows) {
+            markFilterCellInvalid(row, FilterNameColumn, duplicateNameMessage);
+        }
+
+        rememberFirstInvalid(rows.first(), FilterNameColumn, duplicateNameMessage);
+        valid = false;
     }
 
-    return true;
+    const QString duplicateMacroMessage = QStringLiteral("Filter macros must be unique.");
+
+    for (auto it = rowsByMacro.constBegin(); it != rowsByMacro.constEnd(); ++it) {
+        const QList<int>& rows = it.value();
+
+        if (rows.size() < 2) {
+            continue;
+        }
+
+        for (const int row : rows) {
+            markFilterCellInvalid(row, FilterMacroColumn, duplicateMacroMessage);
+        }
+
+        rememberFirstInvalid(rows.first(), FilterMacroColumn, duplicateMacroMessage);
+        valid = false;
+    }
+
+    if (valid) {
+        return true;
+    }
+
+    if (focusFirstInvalid) {
+        if (pages_) {
+            pages_->setCurrentIndex(1);
+        }
+
+        if (navigation_ && navigation_->count() > 1) {
+            navigation_->setCurrentRow(1);
+        }
+
+        focusFilterCell(firstInvalidRow, firstInvalidColumn);
+    }
+
+    if (errorText) {
+        *errorText = firstError;
+    }
+
+    return false;
 }
 
 bool PreferencesDialog::hasChanges() const
@@ -2086,7 +2328,7 @@ void PreferencesDialog::updateApplyButtonEnabled()
     }
 }
 
-void PreferencesDialog::applyChanges()
+bool PreferencesDialog::applyChanges()
 {
     QString filterError;
     if (!validateFilters(&filterError)) {
@@ -2095,8 +2337,10 @@ void PreferencesDialog::applyChanges()
             QStringLiteral("Invalid Filters"),
             filterError
         );
-        return;
+        return false;
     }
+
+    updateApplyButtonEnabled();
 
     const bool autoRefreshChanged =
         autoRefreshLiveUpdatesCheckBox_ &&
@@ -2216,7 +2460,7 @@ void PreferencesDialog::applyChanges()
         }
 
         updateApplyButtonEnabled();
-        return;
+        return true;
     }
 
     QList<DevicePreferenceChange> changes;
@@ -2322,4 +2566,6 @@ void PreferencesDialog::applyChanges()
     if (showFiltersDropdownChanged) {
         Q_EMIT showFiltersDropdownApplied(showFiltersDropdownEnabled);
     }
+
+    return true;
 }

@@ -79,14 +79,16 @@ private:
     void populateFilterTable();
     void populateFilterTable(const std::vector<SearchFilterPreference>& filters);
     void updateApplyButtonEnabled();
-    void applyChanges();
+    bool applyChanges();
     bool hasChanges() const;
     bool hasDeviceChanges() const;
     bool hasFilterChanges() const;
     bool hasUIChanges() const;
     bool hasGeneralChanges() const;
-    bool validateFilters(QString* errorText = nullptr) const;
+    bool validateFilters(QString* errorText = nullptr, bool focusFirstInvalid = true) const;
     static QString normalizedFilterMacro(QString macro);
+    static QString normalizedFilterQuery(QString query);
+    static QString normalizedExtensionFilterToken(QString token);
     static bool isValidFilterMacro(const QString& macro);
 
     QStringList enabledDeviceIdsFromTable() const;
@@ -103,6 +105,10 @@ private:
     QList<int> selectedFilterRows() const;
     void updateFilterButtonStates();
     void moveSelectedFilters(int direction);
+    void clearFilterValidationState() const;
+    void markFilterCellInvalid(int row, int column, const QString& message) const;
+    void focusFilterCell(int row, int column) const;
+    bool hasFilterValidationState() const;
 
     Preferences& preferences_;
     std::vector<BlockDevice> knownDevices_;

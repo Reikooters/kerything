@@ -986,8 +986,15 @@ public:
                 return;
             }
 
+            /*
+             * childRecordOffsets is the full-index CSR snapshot from the last
+             * rebuild. Live updates can append fileRecords afterwards, so the
+             * offsets vector may be smaller than fileRecords.size() + 1. The CSR
+             * slice is still valid for parent records that existed when it was
+             * built; live-appended child edges are covered by liveParentRecordRefs.
+             */
             if (childRecordIndexBuilt &&
-                childRecordOffsets.size() == fileRecords.size() + 1) {
+                parentRecordIdx + 1 < childRecordOffsets.size()) {
                 const uint32_t begin = childRecordOffsets[parentRecordIdx];
                 const uint32_t end = childRecordOffsets[parentRecordIdx + 1];
 
@@ -1019,6 +1026,98 @@ public:
             for (auto it = range.first; it != range.second; ++it) {
                 fn(it->recordIdx);
             }
+        }
+
+        [[nodiscard]] std::optional<uint32_t> childRecordIdxForParentAndName(
+            uint32_t parentRecordIdx,
+            std::string_view name,
+            uint64_t fsNamespace = 0,
+            uint64_t fsIndex = 0
+        ) const {
+            if (parentRecordIdx >= fileRecords.size() || name.empty()) {
+                return std::nullopt;
+            }
+
+            std::optional<uint32_t> result;
+
+            forEachChildRecordIdx(
+                parentRecordIdx,
+                [&](uint32_t childRecordIdx) {
+                    if (result) {
+                        return;
+                    }
+
+                    if (childRecordIdx >= fileRecords.size()) {
+                        return;
+                    }
+
+                    if (isDeletedRecord(childRecordIdx)) {
+                        return;
+                    }
+
+                    const FileRecord& childRecord = fileRecords[childRecordIdx];
+
+                    if (childRecord.parentRecordIdx != parentRecordIdx) {
+                        return;
+                    }
+
+                    if (fsIndex != 0 && childRecord.fsIndex != fsIndex) {
+                        return;
+                    }
+
+                    if (fsNamespace != 0) {
+                        if (childRecordIdx >= fileRecordNamespaces.size()) {
+                            return;
+                        }
+
+                        const FileRecordNamespace namespaceEntry =
+                            fileRecordNamespaces[childRecordIdx];
+
+                        if (namespaceEntry.fsNamespace != fsNamespace) {
+                            return;
+                        }
+                    }
+
+                    if (recordName(childRecordIdx) == name) {
+                        result = childRecordIdx;
+                    }
+                }
+            );
+
+            return result;
+        }
+
+        [[nodiscard]] std::optional<uint32_t> childRecordIdxForParentFsIndexAndName(
+            uint64_t parentFsNamespace,
+            uint64_t parentFsIndex,
+            std::string_view name,
+            uint64_t fsNamespace = 0,
+            uint64_t fsIndex = 0
+        ) const {
+            if (name.empty()) {
+                return std::nullopt;
+            }
+
+            const bool useNamespaces = hasFileRecordNamespaces();
+
+            const std::optional<uint32_t> parentRecordIdx =
+                useNamespaces
+                    ? directoryRecordIdxForNamespacedFsIndex(
+                        parentFsNamespace,
+                        parentFsIndex
+                    )
+                    : directoryRecordIdxForFsIndex(parentFsIndex);
+
+            if (!parentRecordIdx) {
+                return std::nullopt;
+            }
+
+            return childRecordIdxForParentAndName(
+                *parentRecordIdx,
+                name,
+                fsNamespace,
+                fsIndex
+            );
         }
 
         [[nodiscard]] bool shouldRebuildChildRecordIndexAfterLiveUpdates() const noexcept
@@ -1136,7 +1235,7 @@ public:
                 0
             };
 
-            const auto it = std::lower_bound(
+            const auto range = std::equal_range(
                 refs.begin(),
                 refs.end(),
                 searchKey,
@@ -1145,9 +1244,11 @@ public:
                 }
             );
 
-            if (it != refs.end() &&
-                static_cast<uint64_t>(it->fsIndex) == fsIndex) {
-                return validDirectoryRecord(it->recordIdx);
+            for (auto it = range.first; it != range.second; ++it) {
+                if (const std::optional<uint32_t> recordIdx =
+                        validDirectoryRecord(it->recordIdx)) {
+                    return recordIdx;
+                }
             }
 
             return std::nullopt;
@@ -1341,33 +1442,13 @@ public:
                 return std::nullopt;
             }
 
-            for (uint32_t recordIdx = 0;
-                 recordIdx < static_cast<uint32_t>(fileRecords.size());
-                 ++recordIdx) {
-                if (isDeletedRecord(recordIdx)) {
-                    continue;
-                }
-
-                const FileRecord& record = fileRecords[recordIdx];
-                const FileRecordNamespace namespaceEntry = fileRecordNamespaces[recordIdx];
-
-                if (namespaceEntry.parentFsNamespace != parentFsNamespace ||
-                    record.parentFsIndex != parentFsIndex) {
-                    continue;
-                }
-
-                if (fsIndex != 0 &&
-                    (namespaceEntry.fsNamespace != fsNamespace ||
-                     record.fsIndex != fsIndex)) {
-                    continue;
-                }
-
-                if (recordName(recordIdx) == name) {
-                    return recordIdx;
-                }
-            }
-
-            return std::nullopt;
+            return childRecordIdxForParentFsIndexAndName(
+                parentFsNamespace,
+                parentFsIndex,
+                name,
+                fsNamespace,
+                fsIndex
+            );
         }
 
         [[nodiscard]] std::optional<uint32_t> directoryRecordIdxForNamespacedFsIndex(
@@ -2349,6 +2430,21 @@ private:
         quint64 parentInode,
         const QByteArray& nameUtf8,
         quint64 inode = 0
+    );
+    static std::optional<uint32_t> findLiveEntryRecordByParentFsIndexAndNameFallback(
+        const DeviceIndex& deviceIndex,
+        quint64 parentFsNamespace,
+        quint64 parentInode,
+        std::string_view name,
+        quint64 fsNamespace = 0,
+        quint64 fsIndex = 0
+    );
+    static void logChildLookupMissDiagnostic(
+        const DeviceIndex& deviceIndex,
+        quint64 parentFsNamespace,
+        quint64 parentInode,
+        std::string_view name,
+        uint32_t fallbackRecordIdx
     );
     static bool updateRecordIdentityFromLiveUpdateOperation(
         DeviceIndex& deviceIndex,

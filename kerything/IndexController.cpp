@@ -2383,186 +2383,16 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
-    QSet<quint64> deleteParentInodes;
-    QSet<QByteArray> deleteParentNamespaceKeys;
-    QSet<quint64> upsertParentInodes;
-    QSet<QByteArray> upsertParentNamespaceKeys;
-    qsizetype deleteEntryOperationCount = 0;
-    qsizetype upsertOperationCount = 0;
-
-    {
-        PhaseTimer timer(
-            QStringLiteral("live batch #%1 collect delete/upsert parents").arg(liveBatchDebugId)
-        );
-
-        for (const LiveUpdateOperation& operation : *operationsToApply) {
-            if (operation.kind == LiveUpdateOperationKind::DeleteEntry) {
-                if (operation.parentInode == 0 || operation.name.isEmpty()) {
-                    continue;
-                }
-
-                if (useNamespaces) {
-                    deleteParentNamespaceKeys.insert(
-                        QByteArray::number(static_cast<qulonglong>(operation.parentFsNamespace)) +
-                        QByteArrayLiteral("\0") +
-                        QByteArray::number(static_cast<qulonglong>(operation.parentInode))
-                    );
-                } else {
-                    deleteParentInodes.insert(operation.parentInode);
-                }
-
-                ++deleteEntryOperationCount;
-                continue;
-            }
-
-            if (operation.kind == LiveUpdateOperationKind::Upsert) {
-                if (operation.parentInode == 0 || operation.name.isEmpty()) {
-                    continue;
-                }
-
-                if (useNamespaces) {
-                    upsertParentNamespaceKeys.insert(
-                        QByteArray::number(static_cast<qulonglong>(operation.parentFsNamespace)) +
-                        QByteArrayLiteral("\0") +
-                        QByteArray::number(static_cast<qulonglong>(operation.parentInode))
-                    );
-                } else {
-                    upsertParentInodes.insert(operation.parentInode);
-                }
-
-                ++upsertOperationCount;
-            }
-        }
-    }
-
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "live batch #" << liveBatchDebugId
-              << " delete parents=" << deleteParentInodes.size()
-              << " namespacedDeleteParents=" << deleteParentNamespaceKeys.size()
-              << " deleteEntryOperationCount=" << deleteEntryOperationCount
-              << " upsert parents=" << upsertParentInodes.size()
-              << " namespacedUpsertParents=" << upsertParentNamespaceKeys.size()
-              << " upsertOperationCount=" << upsertOperationCount
+              << " using parent-child index for live delete/destination lookups"
+              << " childRecordIndexBuilt="
+              << (targetIndex->childRecordIndexBuilt ? "true" : "false")
+              << " liveParentRecordRefs=" << targetIndex->liveParentRecordRefs.size()
+              << " childRecordIndexLiveDeltaEntries="
+              << targetIndex->childRecordIndexLiveDeltaEntries
               << "\n";
 #endif
-
-    QHash<QByteArray, uint32_t> liveEntryRecordByParentAndName;
-    QHash<QByteArray, uint32_t> liveDestinationRecordByParentAndName;
-
-    if (!deleteParentInodes.isEmpty() ||
-        !deleteParentNamespaceKeys.isEmpty() ||
-        !upsertParentInodes.isEmpty() ||
-        !upsertParentNamespaceKeys.isEmpty()) {
-        PhaseTimer timer(
-            QStringLiteral("live batch #%1 build entry lookups").arg(liveBatchDebugId),
-            10
-        );
-
-        liveEntryRecordByParentAndName.reserve(deleteEntryOperationCount * 2);
-        liveDestinationRecordByParentAndName.reserve(upsertOperationCount * 2);
-
-        qsizetype scannedRecords = 0;
-        qsizetype deleteParentMatchedRecords = 0;
-        qsizetype deleteInsertedRecords = 0;
-        qsizetype upsertParentMatchedRecords = 0;
-        qsizetype upsertInsertedRecords = 0;
-
-        for (uint32_t recordIdx = 0;
-             recordIdx < static_cast<uint32_t>(targetIndex->fileRecords.size());
-             ++recordIdx) {
-            ++scannedRecords;
-
-            if (targetIndex->isDeletedRecord(recordIdx)) {
-                continue;
-            }
-
-            const FileRecord& record = targetIndex->fileRecords[recordIdx];
-
-            if (useNamespaces) {
-                const FileRecordNamespace namespaceEntry =
-                    targetIndex->namespaceForRecord(recordIdx);
-
-                const QByteArray parentNamespaceKey =
-                    QByteArray::number(static_cast<qulonglong>(namespaceEntry.parentFsNamespace)) +
-                    QByteArrayLiteral("\0") +
-                    QByteArray::number(static_cast<qulonglong>(record.parentFsIndex));
-
-                const bool deleteParentMatch =
-                    deleteParentNamespaceKeys.contains(parentNamespaceKey);
-                const bool upsertParentMatch =
-                    upsertParentNamespaceKeys.contains(parentNamespaceKey);
-
-                if (!deleteParentMatch && !upsertParentMatch) {
-                    continue;
-                }
-
-                const std::string_view name = targetIndex->recordName(recordIdx);
-                if (name.empty()) {
-                    continue;
-                }
-
-                const QByteArray entryKey = namespacedLiveEntryKey(
-                    namespaceEntry.parentFsNamespace,
-                    record.parentFsIndex,
-                    name
-                );
-
-                if (deleteParentMatch) {
-                    ++deleteParentMatchedRecords;
-                    liveEntryRecordByParentAndName.insert(entryKey, recordIdx);
-                    ++deleteInsertedRecords;
-                }
-
-                if (upsertParentMatch) {
-                    ++upsertParentMatchedRecords;
-                    liveDestinationRecordByParentAndName.insert(entryKey, recordIdx);
-                    ++upsertInsertedRecords;
-                }
-
-                continue;
-            }
-
-            const bool deleteParentMatch =
-                deleteParentInodes.contains(record.parentFsIndex);
-            const bool upsertParentMatch =
-                upsertParentInodes.contains(record.parentFsIndex);
-
-            if (!deleteParentMatch && !upsertParentMatch) {
-                continue;
-            }
-
-            const std::string_view name = targetIndex->recordName(recordIdx);
-            if (name.empty()) {
-                continue;
-            }
-
-            const QByteArray entryKey = liveEntryKey(record.parentFsIndex, name);
-
-            if (deleteParentMatch) {
-                ++deleteParentMatchedRecords;
-                liveEntryRecordByParentAndName.insert(entryKey, recordIdx);
-                ++deleteInsertedRecords;
-            }
-
-            if (upsertParentMatch) {
-                ++upsertParentMatchedRecords;
-                liveDestinationRecordByParentAndName.insert(entryKey, recordIdx);
-                ++upsertInsertedRecords;
-            }
-        }
-
-#ifdef KERYTHING_ENABLE_LOGGING
-        std::cerr << "live batch #" << liveBatchDebugId
-                  << " entry lookups scannedRecords=" << scannedRecords
-                  << " deleteParentMatchedRecords=" << deleteParentMatchedRecords
-                  << " deleteInsertedRecords=" << deleteInsertedRecords
-                  << " deleteMapSize=" << liveEntryRecordByParentAndName.size()
-                  << " upsertParentMatchedRecords=" << upsertParentMatchedRecords
-                  << " upsertInsertedRecords=" << upsertInsertedRecords
-                  << " upsertMapSize=" << liveDestinationRecordByParentAndName.size()
-                  << "\n";
-#endif
-    }
 
     std::vector<LiveUpdateOperation> pendingUpserts;
     pendingUpserts.reserve(operations.size());
@@ -2704,13 +2534,6 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         }
     }
 
-#ifdef KERYTHING_ENABLE_LOGGING
-    std::cerr << "live batch #" << liveBatchDebugId
-              << " pendingUpserts=" << pendingUpserts.size()
-              << " pendingUpsertInodes=" << pendingUpsertIndicesByInode.size()
-              << "\n";
-#endif
-
     bool fsIndexMapsNeedRebuild = false;
 
     qsizetype deleteLookupsFound = 0;
@@ -2814,19 +2637,34 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                     continue;
                 }
 
-                const auto recordIt = useNamespaces
-                    ? liveEntryRecordByParentAndName.constFind(
-                        namespacedLiveEntryKey(
+                const std::string_view nameView(
+                    nameUtf8.constData(),
+                    static_cast<std::size_t>(nameUtf8.size())
+                );
+
+                std::optional<uint32_t> deleteRecordIdx =
+                    useNamespaces
+                        ? targetIndex->childRecordIdxForParentFsIndexAndName(
                             operation.parentFsNamespace,
                             operation.parentInode,
-                            nameUtf8
+                            nameView
                         )
-                    )
-                    : liveEntryRecordByParentAndName.constFind(
-                        liveEntryKey(operation.parentInode, nameUtf8)
-                    );
+                        : targetIndex->childRecordIdxForParentFsIndexAndName(
+                            0,
+                            operation.parentInode,
+                            nameView
+                        );
 
-                if (recordIt == liveEntryRecordByParentAndName.cend()) {
+                if (!deleteRecordIdx) {
+                    deleteRecordIdx = findLiveEntryRecordByParentFsIndexAndNameFallback(
+                        *targetIndex,
+                        useNamespaces ? operation.parentFsNamespace : 0,
+                        operation.parentInode,
+                        nameView
+                    );
+                }
+
+                if (!deleteRecordIdx) {
                     ++deleteLookupsMissing;
                     ++result.missingEntry;
                     continue;
@@ -2834,7 +2672,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 
                 ++deleteLookupsFound;
 
-                const uint32_t recordIdx = recordIt.value();
+                const uint32_t recordIdx = *deleteRecordIdx;
 
                 if (recordIdx >= targetIndex->fileRecords.size() ||
                     targetIndex->isDeletedRecord(recordIdx)) {
@@ -2877,25 +2715,41 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                         continue;
                     }
 
-                    std::optional<uint32_t> existingDestination;
+                    const std::string_view pendingNameView(
+                        pendingNameUtf8.constData(),
+                        static_cast<std::size_t>(pendingNameUtf8.size())
+                    );
 
-                    const auto destinationIt = useNamespaces
-                        ? liveDestinationRecordByParentAndName.constFind(
-                            namespacedLiveEntryKey(
+                    std::optional<uint32_t> existingDestination =
+                        useNamespaces
+                            ? targetIndex->childRecordIdxForParentFsIndexAndName(
                                 pendingUpsert.parentFsNamespace,
                                 pendingUpsert.parentInode,
-                                pendingNameUtf8
+                                pendingNameView
                             )
-                        )
-                        : liveDestinationRecordByParentAndName.constFind(
-                            liveEntryKey(
+                            : targetIndex->childRecordIdxForParentFsIndexAndName(
+                                0,
                                 pendingUpsert.parentInode,
-                                pendingNameUtf8
-                            )
+                                pendingNameView
+                            );
+
+                    if (!existingDestination) {
+                        existingDestination = findLiveEntryRecordByParentFsIndexAndNameFallback(
+                            *targetIndex,
+                            useNamespaces ? pendingUpsert.parentFsNamespace : 0,
+                            pendingUpsert.parentInode,
+                            pendingNameView
                         );
 
-                    if (destinationIt != liveDestinationRecordByParentAndName.cend()) {
-                        existingDestination = destinationIt.value();
+                        if (existingDestination) {
+                            logChildLookupMissDiagnostic(
+                                *targetIndex,
+                                useNamespaces ? pendingUpsert.parentFsNamespace : 0,
+                                pendingUpsert.parentInode,
+                                pendingNameView,
+                                *existingDestination
+                            );
+                        }
                     }
 
                     if (existingDestination && *existingDestination != recordIdx) {
@@ -4963,6 +4817,24 @@ std::optional<uint32_t> IndexController::findLiveEntryRecord(
         static_cast<std::size_t>(nameUtf8.size())
     );
 
+    if (inode == 0) {
+        if (const std::optional<uint32_t> recordIdx =
+                deviceIndex.childRecordIdxForParentFsIndexAndName(
+                    0,
+                    parentInode,
+                    name
+                )) {
+            return recordIdx;
+        }
+
+        return findLiveEntryRecordByParentFsIndexAndNameFallback(
+            deviceIndex,
+            0,
+            parentInode,
+            name
+        );
+    }
+
     auto matches = [&](uint32_t recordIdx) -> bool {
         if (recordIdx >= deviceIndex.fileRecords.size()) {
             return false;
@@ -5011,6 +4883,210 @@ std::optional<uint32_t> IndexController::findLiveEntryRecord(
     }
 
     return std::nullopt;
+}
+
+std::optional<uint32_t> IndexController::findLiveEntryRecordByParentFsIndexAndNameFallback(
+    const DeviceIndex& deviceIndex,
+    quint64 parentFsNamespace,
+    quint64 parentInode,
+    std::string_view name,
+    quint64 fsNamespace,
+    quint64 fsIndex
+) {
+    if (parentInode == 0 || name.empty()) {
+        return std::nullopt;
+    }
+
+    const bool useNamespaces = deviceIndex.hasFileRecordNamespaces();
+
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        const FileRecord& record = deviceIndex.fileRecords[recordIdx];
+
+        if (record.parentFsIndex != parentInode) {
+            continue;
+        }
+
+        if (fsIndex != 0 && record.fsIndex != fsIndex) {
+            continue;
+        }
+
+        if (useNamespaces) {
+            const FileRecordNamespace namespaceEntry =
+                deviceIndex.namespaceForRecord(recordIdx);
+
+            if (parentFsNamespace != 0 &&
+                namespaceEntry.parentFsNamespace != parentFsNamespace) {
+                continue;
+            }
+
+            if (fsNamespace != 0 &&
+                namespaceEntry.fsNamespace != fsNamespace) {
+                continue;
+            }
+        }
+
+        if (deviceIndex.recordName(recordIdx) == name) {
+            return recordIdx;
+        }
+    }
+
+    return std::nullopt;
+}
+
+void IndexController::logChildLookupMissDiagnostic(
+    const DeviceIndex& deviceIndex,
+    quint64 parentFsNamespace,
+    quint64 parentInode,
+    std::string_view name,
+    uint32_t fallbackRecordIdx
+) {
+#ifndef KERYTHING_ENABLE_LOGGING
+    Q_UNUSED(deviceIndex);
+    Q_UNUSED(parentFsNamespace);
+    Q_UNUSED(parentInode);
+    Q_UNUSED(name);
+    Q_UNUSED(fallbackRecordIdx);
+#else
+    const bool useNamespaces = deviceIndex.hasFileRecordNamespaces();
+
+    const std::optional<uint32_t> resolvedParent =
+        useNamespaces
+            ? deviceIndex.directoryRecordIdxForNamespacedFsIndex(
+                parentFsNamespace,
+                parentInode
+            )
+            : deviceIndex.directoryRecordIdxForFsIndex(parentInode);
+
+    std::cerr << "child lookup miss diagnostic"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " parentFsNamespace=" << parentFsNamespace
+              << " parentInode=" << parentInode
+              << " name=" << std::string(name)
+              << " fallbackRecordIdx=" << fallbackRecordIdx
+              << " childRecordIndexBuilt="
+              << (deviceIndex.childRecordIndexBuilt ? "true" : "false")
+              << " childRecordOffsets=" << deviceIndex.childRecordOffsets.size()
+              << " childRecordRefs=" << deviceIndex.childRecordRefs.size()
+              << " liveParentRecordRefs=" << deviceIndex.liveParentRecordRefs.size()
+              << " resolvedParent="
+              << (resolvedParent ? std::to_string(*resolvedParent) : std::string("none"))
+              << "\n";
+
+    if (fallbackRecordIdx >= deviceIndex.fileRecords.size()) {
+        std::cerr << "child lookup miss diagnostic fallback record out of range\n";
+        return;
+    }
+
+    const FileRecord& fallbackRecord = deviceIndex.fileRecords[fallbackRecordIdx];
+
+    std::cerr << "child lookup miss diagnostic fallback record"
+              << " recordIdx=" << fallbackRecordIdx
+              << " fsIndex=" << fallbackRecord.fsIndex
+              << " parentFsIndex=" << fallbackRecord.parentFsIndex
+              << " parentRecordIdx=" << fallbackRecord.parentRecordIdx
+              << " flags=" << static_cast<unsigned>(fallbackRecord.flags)
+              << " deleted="
+              << (deviceIndex.isDeletedRecord(fallbackRecordIdx) ? "true" : "false")
+              << "\n";
+
+    if (useNamespaces) {
+        const FileRecordNamespace namespaceEntry =
+            deviceIndex.namespaceForRecord(fallbackRecordIdx);
+
+        std::cerr << "child lookup miss diagnostic fallback namespace"
+                  << " fsNamespace=" << namespaceEntry.fsNamespace
+                  << " parentFsNamespace=" << namespaceEntry.parentFsNamespace
+                  << "\n";
+    }
+
+    if (fallbackRecord.parentRecordIdx < deviceIndex.fileRecords.size()) {
+        const FileRecord& actualParent =
+            deviceIndex.fileRecords[fallbackRecord.parentRecordIdx];
+
+        std::cerr << "child lookup miss diagnostic fallback actual parent"
+                  << " parentRecordIdx=" << fallbackRecord.parentRecordIdx
+                  << " parentFsIndex=" << actualParent.fsIndex
+                  << " name=" << std::string(deviceIndex.recordName(fallbackRecord.parentRecordIdx))
+                  << " deleted="
+                  << (deviceIndex.isDeletedRecord(fallbackRecord.parentRecordIdx) ? "true" : "false")
+                  << "\n";
+    }
+
+    if (resolvedParent) {
+        const FileRecord& resolvedParentRecord =
+            deviceIndex.fileRecords[*resolvedParent];
+
+        std::cerr << "child lookup miss diagnostic resolved parent record"
+                  << " recordIdx=" << *resolvedParent
+                  << " fsIndex=" << resolvedParentRecord.fsIndex
+                  << " parentFsIndex=" << resolvedParentRecord.parentFsIndex
+                  << " name=" << std::string(deviceIndex.recordName(*resolvedParent))
+                  << " deleted="
+                  << (deviceIndex.isDeletedRecord(*resolvedParent) ? "true" : "false")
+                  << "\n";
+
+        qsizetype childCount = 0;
+        bool foundFallbackInChildren = false;
+
+        deviceIndex.forEachChildRecordIdx(
+            *resolvedParent,
+            [&](uint32_t childRecordIdx) {
+                ++childCount;
+
+                if (childRecordIdx == fallbackRecordIdx) {
+                    foundFallbackInChildren = true;
+                }
+            }
+        );
+
+        std::cerr << "child lookup miss diagnostic resolved parent children"
+                  << " childCount=" << childCount
+                  << " foundFallbackInChildren="
+                  << (foundFallbackInChildren ? "true" : "false")
+                  << "\n";
+    }
+
+    qsizetype sameParentFsIndexSameNameRecords = 0;
+
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        const FileRecord& record = deviceIndex.fileRecords[recordIdx];
+
+        if (record.parentFsIndex != parentInode) {
+            continue;
+        }
+
+        if (deviceIndex.recordName(recordIdx) != name) {
+            continue;
+        }
+
+        ++sameParentFsIndexSameNameRecords;
+
+        std::cerr << "child lookup miss diagnostic path-match record"
+                  << " recordIdx=" << recordIdx
+                  << " fsIndex=" << record.fsIndex
+                  << " parentFsIndex=" << record.parentFsIndex
+                  << " parentRecordIdx=" << record.parentRecordIdx
+                  << " deleted="
+                  << (deviceIndex.isDeletedRecord(recordIdx) ? "true" : "false")
+                  << "\n";
+    }
+
+    std::cerr << "child lookup miss diagnostic path-match count="
+              << sameParentFsIndexSameNameRecords
+              << "\n";
+#endif
 }
 
 bool IndexController::updateRecordIdentityFromLiveUpdateOperation(

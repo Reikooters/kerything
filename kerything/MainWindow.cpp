@@ -428,8 +428,13 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     clearSearchFromTable->setContext(Qt::WidgetShortcut);
     connect(clearSearchFromTable, &QShortcut::activated, this, clearSearchAndFocus);
 
-    // Ctrl+Escape resets the search text, active filter, search options, and focuses the search line.
-    auto* resetSearchShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Escape), this);
+    // Ctrl+Escape OR Shift+Alt+Backspace resets the search text, active filter, search options,
+    // and focuses the search line.
+    auto* resetSearchShortcut = new QShortcut(this);
+    resetSearchShortcut->setKeys({
+        QKeySequence(Qt::CTRL | Qt::Key_Escape),
+        QKeySequence(Qt::ShiftModifier | Qt::AltModifier | Qt::Key_Backspace),
+    });
     resetSearchShortcut->setContext(Qt::WindowShortcut);
     connect(resetSearchShortcut, &QShortcut::activated, this, resetSearchAndFocus);
     // ---------------------

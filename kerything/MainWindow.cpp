@@ -110,6 +110,57 @@ namespace {
         terms.removeDuplicates();
         return terms;
     }
+
+    QString effectiveSearchQueryWithFilterMacros(
+            const QString& text,
+            const std::vector<SearchFilterPreference>& filters
+        ) {
+        if (filters.empty()) {
+            return text;
+        }
+
+        QHash<QString, QString> queryByMacro;
+
+        for (const SearchFilterPreference& filter : filters) {
+            QString macro = filter.macro.trimmed();
+
+            while (macro.endsWith(QLatin1Char(':'))) {
+                macro.chop(1);
+                macro = macro.trimmed();
+            }
+
+            if (macro.isEmpty() || filter.query.trimmed().isEmpty()) {
+                continue;
+            }
+
+            queryByMacro.insert(macro.toCaseFolded(), filter.query.trimmed());
+        }
+
+        if (queryByMacro.isEmpty()) {
+            return text;
+        }
+
+        QStringList expandedTokens;
+        const QStringList parts = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        expandedTokens.reserve(parts.size());
+
+        for (const QString& part : parts) {
+            const QString token = part.trimmed();
+
+            if (token.size() > 1 && token.endsWith(QLatin1Char(':'))) {
+                const QString macro = token.left(token.size() - 1).trimmed().toCaseFolded();
+
+                if (const auto it = queryByMacro.constFind(macro); it != queryByMacro.constEnd()) {
+                    expandedTokens << it.value();
+                    continue;
+                }
+            }
+
+            expandedTokens << token;
+        }
+
+        return expandedTokens.join(QLatin1Char(' '));
+    }
 }
 
 MainWindow::MainWindow(AppController* controller, QWidget* parent)
@@ -742,7 +793,10 @@ void MainWindow::updateSearch(const QString &text) {
     const std::optional<IndexController::RecordHandle> currentHandle =
         captureCurrentRecordHandle();
 
-    QString effectiveQuery = text;
+    QString effectiveQuery = effectiveSearchQueryWithFilterMacros(
+        text,
+        controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{}
+    );
 
     if (!activeSearchFilter_.isEmpty()) {
         if (!effectiveQuery.trimmed().isEmpty()) {
@@ -1192,8 +1246,13 @@ void MainWindow::rebuildFilterMenu()
     for (const SearchFilterPreference& filter : filters) {
         auto* filterAction = new QAction(menuTextFromUserText(filter.name), filterMenu_);
         filterAction->setCheckable(true);
-        filterAction->setStatusTip(filter.query);
-        filterAction->setToolTip(filter.query);
+
+        const QString macroTip = filter.macro.trimmed().isEmpty()
+            ? QString()
+            : QStringLiteral("\nMacro: %1:").arg(filter.macro.trimmed());
+
+        filterAction->setStatusTip(filter.query + macroTip);
+        filterAction->setToolTip(filter.query + macroTip);
 
         if (filter.id == activeSearchFilterId_) {
             filterAction->setChecked(true);
@@ -1260,11 +1319,15 @@ void MainWindow::rebuildFilterDropdown()
     for (const SearchFilterPreference& filter : filters) {
         filterDropdown_->addItem(filter.name);
 
+        const QString macroTip = filter.macro.trimmed().isEmpty()
+            ? filter.query
+            : QStringLiteral("%1\nMacro: %2:").arg(filter.query, filter.macro.trimmed());
+
         const int index = filterDropdown_->count() - 1;
         filterDropdown_->setItemData(index, filter.id, FilterDropdownIdRole);
         filterDropdown_->setItemData(index, filter.name, FilterDropdownNameRole);
         filterDropdown_->setItemData(index, filter.query, FilterDropdownQueryRole);
-        filterDropdown_->setItemData(index, filter.query, Qt::ToolTipRole);
+        filterDropdown_->setItemData(index, macroTip, Qt::ToolTipRole);
         filterDropdown_->setItemData(index, FilterDropdownKindFilter, FilterDropdownKindRole);
     }
 
@@ -1356,10 +1419,10 @@ void MainWindow::updateSearchLineFilterHint()
                     "  screenshot[0-9]{4}      screenshot followed by four digits\n"
                     "  holiday\\.(png|jpg)$     holiday image files\n"
                     "  .*(draft|final)\\.pdf$   draft or final PDFs\n\n"
-                    "Filters such as ext:mp4, ext:wav;mp3, or folder: can still be used."
+                    "Filters such as ext:mp4, ext:wav;mp3, folder:, or a custom filter macro such as audio: can still be used."
                 )
                 : QStringLiteral(
-                    "Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, or folder:."
+                    "Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, folder:, or a custom filter macro such as audio:."
                 )
         );
         updateFilterChip();

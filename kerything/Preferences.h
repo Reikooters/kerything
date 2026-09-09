@@ -36,6 +36,7 @@ struct IndexedDevicePreference {
 struct SearchFilterPreference {
     QString id;
     QString name;
+    QString macro;
     QString query;
 };
 
@@ -107,6 +108,7 @@ private:
     static QString searchFilterKey(const QString& filterId, const QString& key);
 
     void ensureDefaultSearchFilters();
+    void migrateDefaultSearchFilters();
 
     QSettings settings_;
 };

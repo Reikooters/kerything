@@ -9,6 +9,7 @@ Preferences::Preferences()
     : settings_(QStringLiteral("Reikooters"), QStringLiteral("Kerything"))
 {
     ensureDefaultSearchFilters();
+    migrateDefaultSearchFilters();
 }
 
 bool Preferences::autoRefreshResultsForLiveUpdates() const
@@ -433,31 +434,37 @@ std::vector<SearchFilterPreference> Preferences::defaultSearchFilters()
         SearchFilterPreference{
             .id = QStringLiteral("audio"),
             .name = QStringLiteral("Audio"),
+            .macro = QStringLiteral("audio"),
             .query = QStringLiteral("ext:aac;aif;aifc;aiff;au;flac;m3u;m3u8;m4a;m4b;mid;midi;mka;mp2;mp3;mpa;pls;ogg;opus;ra;rmi;voc;wav;wma;xspf"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("images"),
             .name = QStringLiteral("Images"),
+            .macro = QStringLiteral("image"),
             .query = QStringLiteral("ext:ani;apng;avif;bmp;cur;gif;heic;heif;ico;jpe;jpeg;jpg;jxl;pcx;png;psd;svg;tga;tif;tiff;webp;wmf;xcf"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("videos"),
             .name = QStringLiteral("Videos"),
+            .macro = QStringLiteral("video"),
             .query = QStringLiteral("ext:3g2;3gp;asf;avi;divx;f4v;flv;m2t;m2ts;m2v;m4v;mkv;mov;mp2v;mp4;mpe;mpeg;mpg;mpv;mts;ogm;ogv;qt;rm;rmvb;ts;vob;webm;wmv"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("documents"),
             .name = QStringLiteral("Documents"),
+            .macro = QStringLiteral("doc"),
             .query = QStringLiteral("ext:chm;csv;djvu;doc;docm;docx;dot;dotm;dotx;epub;fb2;htm;html;log;md;mht;mhtml;odg;odp;ods;odt;ott;pages;pdf;pot;potm;potx;pps;ppsm;ppsx;ppt;pptm;pptx;rst;rtf;tex;txt;wpd;wps;xls;xlsb;xlsm;xlsx;xlt;xltm;xltx;xml"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("archives"),
             .name = QStringLiteral("Archives"),
+            .macro = QStringLiteral("archive"),
             .query = QStringLiteral("ext:7z;appimage;bz2;cab;deb;gz;iso;jar;lz;lz4;lzma;pkg;rar;rpm;squashfs;tar;tbz2;tgz;tlz;txz;war;xar;xz;zip;zst"),
         },
         SearchFilterPreference{
             .id = QStringLiteral("code"),
             .name = QStringLiteral("Code"),
+            .macro = QStringLiteral("code"),
             .query = QStringLiteral("ext:asm;bash;c;cc;cpp;cs;css;cxx;dart;el;fish;go;gradle;groovy;h;hh;hpp;hxx;ini;ipynb;java;js;jsx;kt;kts;lua;m;mm;make;mk;php;pl;pm;py;rb;rs;scala;scss;sh;sql;svelte;swift;ts;tsx;vim;vue;xml;yaml;yml;zig"),
         },
     };
@@ -479,6 +486,73 @@ void Preferences::ensureDefaultSearchFilters()
     saveSearchFilters(defaultSearchFilters());
 }
 
+void Preferences::migrateDefaultSearchFilters()
+{
+    static constexpr int CurrentDefaultFilterMigrationVersion = 2;
+
+    const int migrationVersion = settings_.value(
+        QStringLiteral("searchFilters/defaultsMigrationVersion"),
+        0
+    ).toInt();
+
+    if (migrationVersion >= CurrentDefaultFilterMigrationVersion) {
+        return;
+    }
+
+    std::vector<SearchFilterPreference> filters = searchFilters();
+    const std::vector<SearchFilterPreference> defaults = defaultSearchFilters();
+
+    if (migrationVersion < 2) {
+        QStringList existingMacros;
+
+        for (const SearchFilterPreference& filter : filters) {
+            const QString macro = filter.macro.trimmed();
+
+            if (!macro.isEmpty()) {
+                existingMacros << macro.toCaseFolded();
+            }
+        }
+
+        for (const SearchFilterPreference& defaultFilter : defaults) {
+            const QString defaultMacro = defaultFilter.macro.trimmed();
+
+            if (defaultMacro.isEmpty()) {
+                continue;
+            }
+
+            auto existing = std::ranges::find_if(
+                filters,
+                [&](const SearchFilterPreference& filter) {
+                    return filter.id == defaultFilter.id;
+                }
+            );
+
+            if (existing == filters.end()) {
+                if (!existingMacros.contains(defaultMacro.toCaseFolded())) {
+                    filters.push_back(defaultFilter);
+                    existingMacros << defaultMacro.toCaseFolded();
+                }
+
+                continue;
+            }
+
+            if (existing->macro.trimmed().isEmpty() &&
+                !existingMacros.contains(defaultMacro.toCaseFolded())) {
+                existing->macro = defaultMacro;
+                existingMacros << defaultMacro.toCaseFolded();
+            }
+        }
+    }
+
+    saveSearchFilters(filters);
+
+    settings_.setValue(
+        QStringLiteral("searchFilters/defaultsMigrationVersion"),
+        CurrentDefaultFilterMigrationVersion
+    );
+    settings_.sync();
+}
+
 std::vector<SearchFilterPreference> Preferences::searchFilters() const
 {
     const QStringList ids = settings_.value(QStringLiteral("searchFilters/filterIds")).toStringList();
@@ -494,6 +568,7 @@ std::vector<SearchFilterPreference> Preferences::searchFilters() const
         SearchFilterPreference filter;
         filter.id = id;
         filter.name = settings_.value(searchFilterKey(id, QStringLiteral("name"))).toString();
+        filter.macro = settings_.value(searchFilterKey(id, QStringLiteral("macro"))).toString();
         filter.query = settings_.value(searchFilterKey(id, QStringLiteral("query"))).toString();
 
         if (!filter.name.trimmed().isEmpty() && !filter.query.trimmed().isEmpty()) {
@@ -513,10 +588,12 @@ void Preferences::saveSearchFilters(const std::vector<SearchFilterPreference>& f
     }
 
     QStringList ids;
+    QStringList macros;
 
     for (const SearchFilterPreference& filter : filters) {
         const QString id = filter.id.trimmed();
         const QString name = filter.name.trimmed();
+        const QString macro = filter.macro.trimmed();
         const QString query = filter.query.trimmed();
 
         if (id.isEmpty() || name.isEmpty() || query.isEmpty()) {
@@ -527,8 +604,18 @@ void Preferences::saveSearchFilters(const std::vector<SearchFilterPreference>& f
             continue;
         }
 
+        if (!macro.isEmpty()) {
+            const QString foldedMacro = macro.toCaseFolded();
+            if (macros.contains(foldedMacro)) {
+                continue;
+            }
+
+            macros << foldedMacro;
+        }
+
         ids << id;
         settings_.setValue(searchFilterKey(id, QStringLiteral("name")), name);
+        settings_.setValue(searchFilterKey(id, QStringLiteral("macro")), macro);
         settings_.setValue(searchFilterKey(id, QStringLiteral("query")), query);
     }
 

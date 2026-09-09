@@ -63,6 +63,7 @@ private:
 
     enum FilterColumn {
         FilterNameColumn = 0,
+        FilterMacroColumn,
         FilterQueryColumn,
         FilterColumnCount
     };
@@ -85,6 +86,8 @@ private:
     bool hasUIChanges() const;
     bool hasGeneralChanges() const;
     bool validateFilters(QString* errorText = nullptr) const;
+    static QString normalizedFilterMacro(QString macro);
+    static bool isValidFilterMacro(const QString& macro);
 
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;

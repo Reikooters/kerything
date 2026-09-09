@@ -707,7 +707,9 @@ QWidget* PreferencesDialog::createFiltersPage()
             "<h2>Filters</h2>"
             "<p>Create and manage the filter presets shown in the Filter menu. "
             "Filters are saved search shortcuts that are added to your current search text. "
-            "To edit a filter, double-click a name or query cell, or select a cell and press F2.</p>"
+            "Optional macros let you type a keyword followed by a colon, such as <tt>audio:</tt>, "
+            "directly in the search box to apply that filter to the search query. "
+            "To edit a filter, double-click a name, macro, or query cell, or select a cell and press F2.</p>"
         ),
         page
     );
@@ -718,6 +720,7 @@ QWidget* PreferencesDialog::createFiltersPage()
     filterTable_->setColumnCount(FilterColumnCount);
     filterTable_->setHorizontalHeaderLabels({
         QStringLiteral("Name"),
+        QStringLiteral("Macro"),
         QStringLiteral("Query"),
     });
 
@@ -733,6 +736,7 @@ QWidget* PreferencesDialog::createFiltersPage()
     filterTable_->setWordWrap(false);
     filterTable_->verticalHeader()->setVisible(false);
     filterTable_->horizontalHeader()->setSectionResizeMode(FilterNameColumn, QHeaderView::ResizeToContents);
+    filterTable_->horizontalHeader()->setSectionResizeMode(FilterMacroColumn, QHeaderView::ResizeToContents);
     filterTable_->horizontalHeader()->setSectionResizeMode(FilterQueryColumn, QHeaderView::Stretch);
     installHoverRowHighlight(filterTable_);
     filterTable_->installEventFilter(this);
@@ -787,9 +791,13 @@ QWidget* PreferencesDialog::createFiltersPage()
         auto* nameItem = new QTableWidgetItem(uniqueFilterName(QStringLiteral("New Filter")));
         nameItem->setData(FilterIdRole, newCustomFilterId());
 
+        auto* macroItem = new QTableWidgetItem();
+        macroItem->setToolTip(QStringLiteral("Optional macro, such as audio. Type audio: in search to use this filter."));
+
         auto* queryItem = new QTableWidgetItem(QStringLiteral("ext:"));
 
         filterTable_->setItem(row, FilterNameColumn, nameItem);
+        filterTable_->setItem(row, FilterMacroColumn, macroItem);
         filterTable_->setItem(row, FilterQueryColumn, queryItem);
         filterTable_->setCurrentCell(row, FilterNameColumn);
         filterTable_->editItem(nameItem);
@@ -806,6 +814,7 @@ QWidget* PreferencesDialog::createFiltersPage()
 
         const int sourceRow = selectedRows.first().row();
         const auto* sourceNameItem = filterTable_->item(sourceRow, FilterNameColumn);
+        const auto* sourceMacroItem = filterTable_->item(sourceRow, FilterMacroColumn);
         const auto* sourceQueryItem = filterTable_->item(sourceRow, FilterQueryColumn);
 
         if (!sourceNameItem || !sourceQueryItem) {
@@ -818,9 +827,13 @@ QWidget* PreferencesDialog::createFiltersPage()
         auto* nameItem = new QTableWidgetItem(uniqueFilterName(sourceNameItem->text() + QStringLiteral(" Copy")));
         nameItem->setData(FilterIdRole, newCustomFilterId());
 
+        auto* macroItem = new QTableWidgetItem();
+        macroItem->setToolTip(QStringLiteral("Optional macro, such as audio. Type audio: in search to use this filter."));
+
         auto* queryItem = new QTableWidgetItem(sourceQueryItem->text());
 
         filterTable_->setItem(row, FilterNameColumn, nameItem);
+        filterTable_->setItem(row, FilterMacroColumn, macroItem);
         filterTable_->setItem(row, FilterQueryColumn, queryItem);
         filterTable_->setCurrentCell(row, FilterNameColumn);
         filterTable_->editItem(nameItem);
@@ -1451,10 +1464,18 @@ void PreferencesDialog::populateFilterTable(const std::vector<SearchFilterPrefer
         auto* nameItem = new QTableWidgetItem(filter.name);
         nameItem->setData(FilterIdRole, filter.id);
 
+        auto* macroItem = new QTableWidgetItem(filter.macro);
+        macroItem->setToolTip(
+            filter.macro.trimmed().isEmpty()
+                ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
+                : QStringLiteral("%1:").arg(filter.macro.trimmed())
+        );
+
         auto* queryItem = new QTableWidgetItem(filter.query);
         queryItem->setToolTip(filter.query);
 
         filterTable_->setItem(row, FilterNameColumn, nameItem);
+        filterTable_->setItem(row, FilterMacroColumn, macroItem);
         filterTable_->setItem(row, FilterQueryColumn, queryItem);
 
         ++row;
@@ -1610,6 +1631,7 @@ std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
 
     for (int row = 0; row < filterTable_->rowCount(); ++row) {
         const auto* nameItem = filterTable_->item(row, FilterNameColumn);
+        const auto* macroItem = filterTable_->item(row, FilterMacroColumn);
         const auto* queryItem = filterTable_->item(row, FilterQueryColumn);
 
         if (!nameItem || !queryItem) {
@@ -1624,6 +1646,7 @@ std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
         }
 
         filter.name = nameItem->text().trimmed();
+        filter.macro = normalizedFilterMacro(macroItem ? macroItem->text() : QString());
         filter.query = queryItem->text().trimmed();
 
         filters.push_back(std::move(filter));
@@ -1666,6 +1689,41 @@ QString PreferencesDialog::uniqueFilterName(const QString& baseName) const
 QString PreferencesDialog::newCustomFilterId() const
 {
     return QStringLiteral("custom-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+QString PreferencesDialog::normalizedFilterMacro(QString macro)
+{
+    macro = macro.trimmed();
+
+    while (macro.endsWith(QLatin1Char(':'))) {
+        macro.chop(1);
+        macro = macro.trimmed();
+    }
+
+    return macro;
+}
+
+bool PreferencesDialog::isValidFilterMacro(const QString& macro)
+{
+    if (macro.isEmpty()) {
+        return true;
+    }
+
+    for (const QChar c : macro) {
+        const ushort value = c.unicode();
+
+        const bool valid =
+            (value >= 'A' && value <= 'Z') ||
+            (value >= 'a' && value <= 'z') ||
+            (value >= '0' && value <= '9') ||
+            value == '_';
+
+        if (!valid) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 QList<int> PreferencesDialog::selectedFilterRows() const
@@ -1793,13 +1851,28 @@ bool PreferencesDialog::validateFilters(QString* errorText) const
     }
 
     QSet<QString> names;
+    QSet<QString> macros;
+    bool normalizedAnyMacro = false;
 
     for (int row = 0; row < filterTable_->rowCount(); ++row) {
         const auto* nameItem = filterTable_->item(row, FilterNameColumn);
+        auto* macroItem = filterTable_->item(row, FilterMacroColumn);
         const auto* queryItem = filterTable_->item(row, FilterQueryColumn);
 
         const QString name = nameItem ? nameItem->text().trimmed() : QString();
         const QString query = queryItem ? queryItem->text().trimmed() : QString();
+        const QString rawMacro = macroItem ? macroItem->text() : QString();
+        const QString macro = normalizedFilterMacro(rawMacro);
+
+        if (macroItem && macroItem->text() != macro) {
+            macroItem->setText(macro);
+            macroItem->setToolTip(
+                macro.isEmpty()
+                    ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
+                    : QStringLiteral("%1:").arg(macro)
+            );
+            normalizedAnyMacro = true;
+        }
 
         if (name.isEmpty()) {
             if (errorText) {
@@ -1827,6 +1900,34 @@ bool PreferencesDialog::validateFilters(QString* errorText) const
         }
 
         names.insert(foldedName);
+
+        if (!isValidFilterMacro(macro)) {
+            if (errorText) {
+                *errorText = QStringLiteral(
+                    "Filter macros can only contain letters, numbers, and underscores."
+                );
+            }
+
+            return false;
+        }
+
+        if (!macro.isEmpty()) {
+            const QString foldedMacro = macro.toCaseFolded();
+
+            if (macros.contains(foldedMacro)) {
+                if (errorText) {
+                    *errorText = QStringLiteral("Filter macros must be unique.");
+                }
+
+                return false;
+            }
+
+            macros.insert(foldedMacro);
+        }
+    }
+
+    if (normalizedAnyMacro) {
+        const_cast<PreferencesDialog*>(this)->updateApplyButtonEnabled();
     }
 
     return true;
@@ -1908,6 +2009,7 @@ bool PreferencesDialog::hasFilterChanges() const
     for (std::size_t i = 0; i < current.size(); ++i) {
         if (current[i].id != originalSearchFilters_[i].id ||
             current[i].name != originalSearchFilters_[i].name ||
+            current[i].macro != originalSearchFilters_[i].macro ||
             current[i].query != originalSearchFilters_[i].query) {
             return true;
         }

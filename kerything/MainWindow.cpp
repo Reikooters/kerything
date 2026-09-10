@@ -88,6 +88,22 @@ namespace {
         return text;
     }
 
+    bool isBuiltInSearchFilterToken(const QString& token)
+    {
+        const QString foldedToken = token.trimmed().toCaseFolded();
+
+        return foldedToken.startsWith(QStringLiteral("ext:")) ||
+               foldedToken.startsWith(QStringLiteral("extension:")) ||
+               foldedToken == QStringLiteral("file:") ||
+               foldedToken == QStringLiteral("files:") ||
+               foldedToken == QStringLiteral("folder:") ||
+               foldedToken == QStringLiteral("folders:") ||
+               foldedToken == QStringLiteral("type:file") ||
+               foldedToken == QStringLiteral("type:files") ||
+               foldedToken == QStringLiteral("type:folder") ||
+               foldedToken == QStringLiteral("type:folders");
+    }
+
     QStringList highlightTermsForSearchText(const QString& text)
     {
         QStringList terms;
@@ -191,6 +207,33 @@ namespace {
 
         QSet<QString> expandingMacros;
         return expandText(text, expandingMacros, 0, expandText);
+    }
+
+    QString regexHighlightPatternForSearchText(
+        const QString& text,
+        const std::vector<SearchFilterPreference>& filters
+    ) {
+        const QString expandedText = effectiveSearchQueryWithFilterMacros(text, filters);
+
+        QStringList regexTokens;
+        const QStringList parts = expandedText.split(
+            QRegularExpression(QStringLiteral("\\s+")),
+            Qt::SkipEmptyParts
+        );
+
+        regexTokens.reserve(parts.size());
+
+        for (const QString& part : parts) {
+            const QString token = part.trimmed();
+
+            if (token.isEmpty() || isBuiltInSearchFilterToken(token)) {
+                continue;
+            }
+
+            regexTokens << token;
+        }
+
+        return regexTokens.join(QLatin1Char(' ')).trimmed();
     }
 }
 
@@ -840,13 +883,18 @@ void MainWindow::updateSearch(const QString &text) {
     }
 
     if (model_) {
-        const QString trimmedSearchText = text.trimmed();
+        const QString regexHighlightPattern = regexEnabled_
+            ? regexHighlightPatternForSearchText(
+                text,
+                controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{}
+            )
+            : QString();
 
         const QStringList highlightTerms =
             regexEnabled_
-                ? (trimmedSearchText.isEmpty()
+                ? (regexHighlightPattern.isEmpty()
                     ? QStringList{}
-                    : QStringList{ trimmedSearchText })
+                    : QStringList{ regexHighlightPattern })
                 : highlightTermsForSearchText(text);
 
         model_->setSearchHighlightTerms(
@@ -1148,13 +1196,18 @@ void MainWindow::refreshSearchHighlighting()
     }
 
     const QString searchText = searchLine_->text();
-    const QString trimmedSearchText = searchText.trimmed();
+    const QString regexHighlightPattern = regexEnabled_
+        ? regexHighlightPatternForSearchText(
+            searchText,
+            controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{}
+        )
+        : QString();
 
     const QStringList highlightTerms =
         regexEnabled_
-            ? (trimmedSearchText.isEmpty()
+            ? (regexHighlightPattern.isEmpty()
                 ? QStringList{}
-                : QStringList{ trimmedSearchText })
+                : QStringList{ regexHighlightPattern })
             : highlightTermsForSearchText(searchText);
 
     model_->setSearchHighlightTerms(

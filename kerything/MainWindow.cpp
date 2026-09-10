@@ -25,6 +25,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSet>
 #include <QShortcut>
 #include <QActionGroup>
 #include <QSignalBlocker>
@@ -140,26 +141,56 @@ namespace {
             return text;
         }
 
-        QStringList expandedTokens;
-        const QStringList parts = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-        expandedTokens.reserve(parts.size());
+        static constexpr int MaxFilterMacroExpansionDepth = 32;
 
-        for (const QString& part : parts) {
-            const QString token = part.trimmed();
-
-            if (token.size() > 1 && token.endsWith(QLatin1Char(':'))) {
-                const QString macro = token.left(token.size() - 1).trimmed().toCaseFolded();
-
-                if (const auto it = queryByMacro.constFind(macro); it != queryByMacro.constEnd()) {
-                    expandedTokens << it.value();
-                    continue;
-                }
+        auto expandText = [&](const QString& input, QSet<QString>& expandingMacros, int depth, auto&& expandTextRef) -> QString {
+            if (depth >= MaxFilterMacroExpansionDepth) {
+                return input;
             }
 
-            expandedTokens << token;
-        }
+            QStringList expandedTokens;
+            const QStringList parts = input.split(
+                QRegularExpression(QStringLiteral("\\s+")),
+                Qt::SkipEmptyParts
+            );
 
-        return expandedTokens.join(QLatin1Char(' '));
+            expandedTokens.reserve(parts.size());
+
+            for (const QString& part : parts) {
+                const QString token = part.trimmed();
+
+                if (token.size() > 1 && token.endsWith(QLatin1Char(':'))) {
+                    const QString macro = token.left(token.size() - 1).trimmed().toCaseFolded();
+
+                    if (const auto it = queryByMacro.constFind(macro); it != queryByMacro.constEnd()) {
+                        if (expandingMacros.contains(macro)) {
+                            // Preferences validation should prevent circular macro references.
+                            // If a cycle still appears at runtime, keep the original token rather
+                            // than dropping it: dropping would silently broaden the search.
+                            expandedTokens << token;
+                            continue;
+                        }
+
+                        expandingMacros.insert(macro);
+                        expandedTokens << expandTextRef(
+                            it.value(),
+                            expandingMacros,
+                            depth + 1,
+                            expandTextRef
+                        );
+                        expandingMacros.remove(macro);
+                        continue;
+                    }
+                }
+
+                expandedTokens << token;
+            }
+
+            return expandedTokens.join(QLatin1Char(' '));
+        };
+
+        QSet<QString> expandingMacros;
+        return expandText(text, expandingMacros, 0, expandText);
     }
 }
 
@@ -793,18 +824,20 @@ void MainWindow::updateSearch(const QString &text) {
     const std::optional<IndexController::RecordHandle> currentHandle =
         captureCurrentRecordHandle();
 
-    QString effectiveQuery = effectiveSearchQueryWithFilterMacros(
-        text,
-        controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{}
-    );
+    QString rawEffectiveQuery = text;
 
     if (!activeSearchFilter_.isEmpty()) {
-        if (!effectiveQuery.trimmed().isEmpty()) {
-            effectiveQuery += QLatin1Char(' ');
+        if (!rawEffectiveQuery.trimmed().isEmpty()) {
+            rawEffectiveQuery += QLatin1Char(' ');
         }
 
-        effectiveQuery += activeSearchFilter_;
+        rawEffectiveQuery += activeSearchFilter_;
     }
+
+    const QString effectiveQuery = effectiveSearchQueryWithFilterMacros(
+        rawEffectiveQuery,
+        controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{}
+    );
 
     std::vector<IndexController::RecordHandle> results;
 

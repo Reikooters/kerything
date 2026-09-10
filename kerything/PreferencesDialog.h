@@ -6,6 +6,7 @@
 
 #include <QDialog>
 #include <QHash>
+#include <QSet>
 #include <QStringList>
 #include <vector>
 
@@ -90,6 +91,9 @@ private:
     static QString normalizedFilterQuery(QString query);
     static QString normalizedExtensionFilterToken(QString token);
     static bool isValidFilterMacro(const QString& macro);
+    static bool isBuiltInFilterKeyword(const QString& keyword);
+    static bool isKnownFilterKeyword(const QString& keyword, const QSet<QString>& macroKeywords);
+    static QStringList filterMacroReferencesInQuery(const QString& query, const QSet<QString>& macroKeywords);
 
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;

@@ -9,6 +9,8 @@
 #include <QLineEdit>
 #include <QTableView>
 #include <QString>
+#include <QtGlobal>
+#include <optional>
 #include <vector>
 #include <string>
 
@@ -30,6 +32,8 @@ public:
         QString activeSearchFilterName;
         QString activeSearchFilter;
         QString searchText;
+        int sortColumn = 0;
+        Qt::SortOrder sortOrder = Qt::AscendingOrder;
         bool matchCaseEnabled = false;
         bool matchWholeWordEnabled = false;
         bool regexEnabled = false;
@@ -38,7 +42,11 @@ public:
     /**
      * @brief Constructs the MainWindow.
      */
-    explicit MainWindow(AppController* controller, QWidget* parent = nullptr);
+    explicit MainWindow(
+        AppController* controller,
+        std::optional<NewWindowState> initialState = std::nullopt,
+        QWidget* parent = nullptr
+    );
 
     /**
      * @brief Updates the current database and UI.

@@ -1075,6 +1075,18 @@ QWidget* PreferencesDialog::createUiPage()
         )
     );
 
+    carryResultSortingToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over result sorting to new windows"),
+        windowsGroup
+    );
+    carryResultSortingToNewWindowsCheckBox_->setChecked(preferences_.carryResultSortingToNewWindows());
+    carryResultSortingToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current result sort column\n"
+            "and direction into the new search window."
+        )
+    );
+
     auto* newWindowStateDescription = new QLabel(
         QStringLiteral(
             "These options control what is copied from the current window when you open another window "
@@ -1087,6 +1099,7 @@ QWidget* PreferencesDialog::createUiPage()
     windowsLayout->addWidget(carryFilterToNewWindowsCheckBox_);
     windowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
     windowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
+    windowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
     windowsLayout->addWidget(newWindowStateDescription);
 
     layout->addWidget(windowsGroup);
@@ -1230,6 +1243,10 @@ QWidget* PreferencesDialog::createUiPage()
     });
 
     connect(carrySearchTextToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carryResultSortingToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -2557,6 +2574,12 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.carrySearchTextToNewWindows();
     }
 
+    if (carryResultSortingToNewWindowsCheckBox_) {
+        changed = changed ||
+            carryResultSortingToNewWindowsCheckBox_->isChecked() !=
+            preferences_.carryResultSortingToNewWindows();
+    }
+
     if (sortDateDescendingFirstCheckBox_) {
         changed = changed ||
             sortDateDescendingFirstCheckBox_->isChecked() !=
@@ -2683,6 +2706,12 @@ bool PreferencesDialog::applyChanges()
         if (carrySearchTextToNewWindowsCheckBox_) {
             preferences_.setCarrySearchTextToNewWindows(
                 carrySearchTextToNewWindowsCheckBox_->isChecked()
+            );
+        }
+
+        if (carryResultSortingToNewWindowsCheckBox_) {
+            preferences_.setCarryResultSortingToNewWindows(
+                carryResultSortingToNewWindowsCheckBox_->isChecked()
             );
         }
 

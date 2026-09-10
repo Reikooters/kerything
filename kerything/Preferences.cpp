@@ -82,6 +82,20 @@ void Preferences::setCarrySearchTextToNewWindows(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::carryResultSortingToNewWindows() const
+{
+    return settings_.value(
+        QStringLiteral("ui/carryResultSortingToNewWindows"),
+        false
+    ).toBool();
+}
+
+void Preferences::setCarryResultSortingToNewWindows(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/carryResultSortingToNewWindows"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::sortDateDescendingFirst() const
 {
     return settings_.value(

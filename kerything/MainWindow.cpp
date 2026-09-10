@@ -237,7 +237,11 @@ namespace {
     }
 }
 
-MainWindow::MainWindow(AppController* controller, QWidget* parent)
+MainWindow::MainWindow(
+    AppController* controller,
+    std::optional<NewWindowState> initialState,
+    QWidget* parent
+)
     : QMainWindow(parent),
       controller_(controller) {
     setWindowTitle("Kerything");
@@ -871,9 +875,14 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     updateSearchOptionChips();
     updateSearchMenuTitle();
 
-    // Start with a full list, sorted by name ascending
-    tableView_->horizontalHeader()->setSortIndicator(SearchResultColumn::Name, Qt::AscendingOrder);
-    updateSearch("");
+    if (initialState) {
+        applyNewWindowState(*initialState);
+    } else {
+        // Start with a full list, sorted by name ascending
+        tableView_->horizontalHeader()->setSortIndicator(SearchResultColumn::Name, Qt::AscendingOrder);
+        lastSortSection_ = SearchResultColumn::Name;
+        updateSearch(QString());
+    }
 }
 
 void MainWindow::updateSearch(const QString &text) {
@@ -1024,11 +1033,15 @@ int MainWindow::resultCount() const
 
 MainWindow::NewWindowState MainWindow::newWindowState() const
 {
+    const auto* header = tableView_ ? tableView_->horizontalHeader() : nullptr;
+
     return NewWindowState{
         .activeSearchFilterId = activeSearchFilterId_,
         .activeSearchFilterName = activeSearchFilterName_,
         .activeSearchFilter = activeSearchFilter_,
         .searchText = searchLine_ ? searchLine_->text() : QString(),
+        .sortColumn = header ? header->sortIndicatorSection() : SearchResultColumn::Name,
+        .sortOrder = header ? header->sortIndicatorOrder() : Qt::AscendingOrder,
         .matchCaseEnabled = matchCaseEnabled_,
         .matchWholeWordEnabled = matchWholeWordEnabled_,
         .regexEnabled = regexEnabled_,
@@ -1071,6 +1084,11 @@ void MainWindow::applyNewWindowState(const NewWindowState& state)
     updateSearchOptionChips();
     updateSearchMenuTitle();
     updateSearchLineFilterHint();
+
+    if (tableView_ && tableView_->horizontalHeader()) {
+        tableView_->horizontalHeader()->setSortIndicator(state.sortColumn, state.sortOrder);
+        lastSortSection_ = state.sortColumn;
+    }
 
     if (!searchLine_) {
         updateSearch(QString());

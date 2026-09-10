@@ -57,6 +57,8 @@ public:
     void setCarrySearchOptionsToNewWindows(bool enabled);
     [[nodiscard]] bool carrySearchTextToNewWindows() const;
     void setCarrySearchTextToNewWindows(bool enabled);
+    [[nodiscard]] bool carryResultSortingToNewWindows() const;
+    void setCarryResultSortingToNewWindows(bool enabled);
     [[nodiscard]] bool sortDateDescendingFirst() const;
     void setSortDateDescendingFirst(bool enabled);
     [[nodiscard]] bool sortSizeDescendingFirst() const;

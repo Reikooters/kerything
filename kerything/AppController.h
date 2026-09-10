@@ -50,6 +50,7 @@ public:
     [[nodiscard]] bool carryFilterToNewWindows() const;
     [[nodiscard]] bool carrySearchOptionsToNewWindows() const;
     [[nodiscard]] bool carrySearchTextToNewWindows() const;
+    [[nodiscard]] bool carryResultSortingToNewWindows() const;
     void setShowFiltersDropdown(bool enabled);
     IndexController* indexController() const noexcept;
 

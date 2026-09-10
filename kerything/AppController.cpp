@@ -15,6 +15,7 @@
 #include "SingleInstanceServer.h"
 #include "FileRecord.h"
 #include "LiveUpdateEvent.h"
+#include "SearchResultColumns.h"
 
 namespace {
     struct LiveUpdateBatchSummary {
@@ -710,7 +711,8 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
     if (sourceWindow &&
         (preferences_.carryFilterToNewWindows() ||
          preferences_.carrySearchOptionsToNewWindows() ||
-         preferences_.carrySearchTextToNewWindows())) {
+         preferences_.carrySearchTextToNewWindows() ||
+         preferences_.carryResultSortingToNewWindows())) {
         MainWindow::NewWindowState state = sourceWindow->newWindowState();
 
         if (!preferences_.carryFilterToNewWindows()) {
@@ -729,17 +731,18 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
             state.searchText.clear();
         }
 
+        if (!preferences_.carryResultSortingToNewWindows()) {
+            state.sortColumn = SearchResultColumn::Name;
+            state.sortOrder = Qt::AscendingOrder;
+        }
+
         stateToCarry = std::move(state);
     }
 
     // Create a top-level window. The controller is passed in so the window can
     // request app-level actions, but the Qt parent remains null by design.
-    auto* window = new MainWindow(this);
+    auto* window = new MainWindow(this, std::move(stateToCarry));
     windows_.append(window);
-
-    if (stateToCarry) {
-        window->applyNewWindowState(*stateToCarry);
-    }
 
     // When the window is destroyed, remove its pointer from the controller list.
     connect(window, &QObject::destroyed, this, [this, window]() {
@@ -1106,6 +1109,11 @@ bool AppController::carrySearchOptionsToNewWindows() const
 bool AppController::carrySearchTextToNewWindows() const
 {
     return preferences_.carrySearchTextToNewWindows();
+}
+
+bool AppController::carryResultSortingToNewWindows() const
+{
+    return preferences_.carryResultSortingToNewWindows();
 }
 
 void AppController::setShowFiltersDropdown(bool enabled)

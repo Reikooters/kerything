@@ -550,6 +550,13 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
 
     // Automatically Refresh Results for Live Updates
     autoRefreshLiveUpdatesAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("folder-sync"),
+            QIcon::fromTheme(
+                QStringLiteral("emblem-synchronizing"),
+                QIcon::fromTheme(QStringLiteral("view-refresh"))
+            )
+        ),
         QStringLiteral("Automatically Refresh Results for Live Updates"),
         this
     );

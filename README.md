@@ -76,7 +76,8 @@ again.
 - **Live Updates:** Tracks filesystem changes for mounted devices in real time using Linux `fanotify`, keeping the in-memory index updated. *(Note: filesystems mounted using `fuseblk` are not expected to work. See note below for more info.)*
 - **Extension Filters:** Narrow searches by file extension using queries such as `ext:mp4` or `ext:wav;mp3`, or use saved filters from the Filter menu.
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
-- **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning, regular expressions and other complex patterns, Kerything stays lightweight and responsive.
+- **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning and other complex patterns, Kerything stays lightweight and responsive.
+- **Search Options:** Optionally perform case-sensitive matching, match whole words, or use regular expressions to search for filenames using queries such as `^holiday.*\.jpg$`.
 - **Multithreaded:** Leverages Intel OneTBB for parallel trigram generation and sorting.
 - **Rich Context Actions:** Right-click menu integration to open, copy, or manage files directly from the results. *(Note: Most context actions are only available if the drive was mounted at the time it was scanned.)*
 - **Drag-and-Drop Support:** Easily copy or attach files by dragging them from the search results into Dolphin or other applications. *(Note: Currently not supported for Flatpak or other sandboxed applications due to portal limitations.)*
@@ -143,7 +144,7 @@ You can narrow results by file extension using `ext:`:
 ext:mp4
 ```
 
-Multiple extensions can be separated with semicolons:
+Multiple extensions can be separated with semicolons or commas:
 
 ```text
 ext:wav;mp3
@@ -224,6 +225,23 @@ ext:apng;avif;bmp;gif;heic;heif;ico;jpeg;jpg;jxl;png;svg;tif;tiff;webp
 Custom filters can be added, duplicated, removed, or restored to the default
 presets.
 
+Optionally, macros can be assigned to filters. Macros let you type a keyword
+followed by a colon, such as `audio:`, directly in the search box to apply
+that filter to the search query.
+
+Filter queries can reference macros for other filters to include them in the filter.
+This is useful for creating complex filter queries that combine multiple filters.
+For example, a filter called "Dragonforce Songs" could use the query:
+
+```text
+dragonforce audio:
+```
+
+When the search is performed, this would expand to `dragonforce ext:mp3;wav;flac;...`. 
+
+Attempting to create a filter which uses macros that create self or circular
+references (`a` references `b` references `c` references `a`) will raise an error. 
+
 ### Folder filter
 
 You can narrow results to only folders using `folder:`, or any of the below aliases:
@@ -235,28 +253,41 @@ type:folder
 type:folders
 ```
 
+### Files filter
+
+You can narrow results to only files using `file:`, or any of the below aliases:
+
+```text
+file:
+files:
+type:file
+type:files
+```
+
 ## Keyboard Shortcuts
 
 The following keyboard shortcuts are available in Kerything:
 
-| Shortcut                              | Action                                                                    |
-|:--------------------------------------|:--------------------------------------------------------------------------|
-| `Ctrl + L` or `Alt + D` or `Ctrl + F` | Focus search bar and select all text                                      |
-| `Esc`                                 | Focus search bar and clear all text                                       |
-| `Ctrl + I`                            | Toggle case-sensitive filename matching                                   |
-| `Ctrl + B`                            | Toggle whole-word filename matching                                       |
-| `Down / Up`                           | Move focus from search bar to the results table                           |
-| `Return`                              | Open selected file(s) with default applications                           |
-| `Ctrl + Return`                       | Open the folder containing the selected file                              |
-| `Ctrl + C`                            | Copy selected file(s) to clipboard (for pasting into another application) |
-| `Ctrl + Shift + C`                    | Copy selected file(s) file name(s) to clipboard                           |
-| `Ctrl + Alt + C`                      | Copy selected file(s) full absolute path(s) to clipboard                  |
-| `Alt + Shift + F4`                    | Open your default terminal in the folder of the selected file             |
-| `F5`                                  | Refresh indexes                                                           |
-| `Ctrl + N`                            | Open a new window                                                         |
-| `Ctrl + W`                            | Close window                                                              |
-| `Ctrl + Shift + ,`                    | Open preferences                                                          |
-| `Ctrl + Q`                            | Exit the application (closes all windows)                                 |
+| Shortcut                                  | Action                                                                    |
+|:------------------------------------------|:--------------------------------------------------------------------------|
+| `Ctrl + L` or `Alt + D` or `Ctrl + F`     | Focus search bar and select all text                                      |
+| `Esc`                                     | Focus search bar and clear all text                                       |
+| `Ctrl + Esc` or `Shift + Alt + Backspace` | Focus search bar and clear all text, active filter, and search options    |
+| `Ctrl + I`                                | Toggle case-sensitive filename matching                                   |
+| `Ctrl + B`                                | Toggle whole-word filename matching                                       |
+| `Ctrl + R`                                | Toggle regex                                                              |
+| `Down / Up`                               | Move focus from search bar to the results table                           |
+| `Return`                                  | Open selected file(s) with default applications                           |
+| `Ctrl + Return`                           | Open the folder containing the selected file                              |
+| `Ctrl + C`                                | Copy selected file(s) to clipboard (for pasting into another application) |
+| `Ctrl + Shift + C`                        | Copy selected file(s) file name(s) to clipboard                           |
+| `Ctrl + Alt + C`                          | Copy selected file(s) full absolute path(s) to clipboard                  |
+| `Alt + Shift + F4`                        | Open your default terminal in the folder of the selected file             |
+| `F5`                                      | Refresh indexes                                                           |
+| `Ctrl + N`                                | Open a new window                                                         |
+| `Ctrl + W`                                | Close window                                                              |
+| `Ctrl + Shift + ,`                        | Open preferences                                                          |
+| `Ctrl + Q`                                | Exit the application (closes all windows)                                 |
 
 ## Building and Installation
 
@@ -347,6 +378,7 @@ sudo pacman -S --needed \
   qt6-base \
   onetbb \
   e2fsprogs \
+  re2 \
   util-linux-libs \
   systemd-libs \
   kcoreaddons \
@@ -391,6 +423,7 @@ sudo pacman -S --needed \
   qt6-base \
   onetbb \
   e2fsprogs \
+  re2 \
   util-linux-libs \
   systemd-libs
 
@@ -426,6 +459,7 @@ Install the equivalent development packages using your package manager for:
 - Qt 6 Core, Widgets, and Network
 - oneTBB
 - e2fsprogs development files, including `ext2fs` and `com_err`
+- re2
 - util-linux development files, including `blkid` and `mount`
 - libudev development files
 - libsystemd development files
@@ -962,15 +996,35 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 
 ## Credits
 
+### Third-party Libraries
+
 Kerything makes use of the following open-source libraries and frameworks:
 
 - **[Qt](https://www.qt.io/):** Cross-platform application framework used for the GUI, IPC, and core application functionality.
 - **[KDE Frameworks](https://develop.kde.org/products/frameworks/):** Optional KDE integration for file actions, application launching, file manager integration, and desktop behavior.
 - **[oneTBB](https://github.com/oneapi-src/oneTBB):** Intel's oneAPI Threading Building Blocks library for parallelism.
 - **[e2fsprogs](https://github.com/tytso/e2fsprogs):** Linux filesystem tools and libraries used for EXT4 support.
+- **[re2](https://github.com/google/re2):** Provides regular expression support.
 - **[util-linux](https://github.com/util-linux/util-linux):** Provides libraries such as `blkid` and `mount` used for block device and mount information.
 - **[systemd / libudev](https://github.com/systemd/systemd):** Used by the daemon to monitor block device changes.
 - **[utfcpp](https://github.com/nemtrif/utfcpp):** A simple, portable and lightweight library for handling UTF-8 encoded strings in C++.
+
+### Community Thanks
+
+Special thanks to the following people for reporting bugs, suggesting features and improvements, and helping make this project better:
+
+- [@lc-guy](https://github.com/lc-guy)
+  - Suggested Btrfs filesystem support. Kerything has a dedicated Btrfs scanner which is currently a work in progress.
+  - Identified issue with NTFS scanner not cancelling when it should.
+- [@antonmeleshkevich](https://github.com/antonmeleshkevich)
+  - Suggested support for desktops other than KDE Plasma. This lead to the Qt-only build of Kerything without KDE dependencies.
+- [@derickso](https://github.com/derickso)
+  - Suggested support for filters, along with a number of filter-related enhancements.
+  - Identified issue with NTFS scanner missing files/folders during scanning under certain conditions.
+- [@progalt-pfo](https://github.com/progalt-pfo)
+  - Suggested F2FS filesystem support. Kerything does not yet have a dedicated scanner for F2FS, but this lead to the development of a generic filesystem scanner which broadened support to other filesystems besides EXT4 and NTFS.
+- [@KaMyKaSii](https://github.com/KaMyKaSii)
+  - Suggested support for regular expressions. I originally did not intend to implement support for regular expressions into Kerything, as I assumed it would be too slow. However, this lead to integrating `re2` into the project, which works fairly well when used in tandem with the application's other smarts, such as its trigram and extension indexes.
 
 ## License
 

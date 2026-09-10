@@ -724,9 +724,15 @@ namespace {
         const IndexController::DeviceIndex& index,
         const IndexController::ExtensionSet& extensionFilter,
         bool foldersOnly,
+        bool filesOnly,
         AppendResultFn&& appendResult
     ) {
         const bool hasExtensionFilter = !extensionFilter.empty();
+
+        // No indexed item can be both a file and a folder.
+        if (filesOnly && foldersOnly) {
+            return;
+        }
 
         // Extension filters are file-only, so this combination can never match.
         if (foldersOnly && hasExtensionFilter) {
@@ -746,6 +752,10 @@ namespace {
             const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
 
             if (foldersOnly && !isDirectory) {
+                return;
+            }
+
+            if (filesOnly && isDirectory) {
                 return;
             }
 
@@ -5451,14 +5461,19 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
             consumeExtensionList(lowercaseToken.substr(4));
         } else if (lowercaseToken.starts_with("extension:")) {
             consumeExtensionList(lowercaseToken.substr(10));
+        } else if (lowercaseToken == "file:" ||
+                   lowercaseToken == "files:" ||
+                   lowercaseToken == "type:file" ||
+                   lowercaseToken == "type:files") {
+            parsed.filesOnly = true;
         } else if (lowercaseToken == "folder:" ||
                    lowercaseToken == "folders:" ||
                    lowercaseToken == "type:folder" ||
                    lowercaseToken == "type:folders") {
             parsed.foldersOnly = true;
-       } else {
-           parsed.keywords.emplace_back(token);
-       }
+        } else {
+            parsed.keywords.emplace_back(token);
+        }
 
         start = end;
     }
@@ -5626,8 +5641,14 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
     const bool hasExtensionFilter = !extensionFilter.empty();
     const bool foldersOnly = parsedQuery.foldersOnly;
+    const bool filesOnly = parsedQuery.filesOnly;
 
     debugKeywordCount = keywords.size();
+
+    // No indexed item can be both a file and a folder.
+    if (filesOnly && foldersOnly) {
+        return results;
+    }
 
     // Extension filters are file-only, so this combination can never match.
     if (foldersOnly && hasExtensionFilter) {
@@ -5726,7 +5747,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
             ++debugDevicesSearched;
 
-            if (!hasExtensionFilter && !foldersOnly) {
+            if (!hasExtensionFilter && !foldersOnly && !filesOnly) {
                 appendAllVisibleResultsNoFilter(*indexPtr);
                 continue;
             }
@@ -5735,6 +5756,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 *indexPtr,
                 extensionFilter,
                 foldersOnly,
+                filesOnly,
                 appendResult
             );
         }
@@ -5898,6 +5920,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 return;
             }
 
+            if (filesOnly && isDirectory) {
+                return;
+            }
+
             // Extension filters apply to files only. Reject directories before
             // touching the string pool or scanning the name for a final extension.
             if (hasExtensionFilter && isDirectory) {
@@ -6011,7 +6037,14 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
     const bool hasExtensionFilter = !extensionFilter.empty();
     const bool foldersOnly = parsedQuery.foldersOnly;
+    const bool filesOnly = parsedQuery.filesOnly;
 
+    // No indexed item can be both a file and a folder.
+    if (filesOnly && foldersOnly) {
+        return searchResult;
+    }
+
+    // Extension filters are file-only, so this combination can never match.
     if (foldersOnly && hasExtensionFilter) {
         return searchResult;
     }
@@ -6081,6 +6114,7 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
                 *indexPtr,
                 extensionFilter,
                 foldersOnly,
+                filesOnly,
                 appendResult
             );
         }
@@ -6193,6 +6227,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
 
             if (foldersOnly && !isDirectory) {
+                return;
+            }
+
+            if (filesOnly && isDirectory) {
                 return;
             }
 

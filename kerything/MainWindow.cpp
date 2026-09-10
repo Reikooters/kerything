@@ -207,7 +207,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto* layout = new QVBoxLayout(centralWidget);
 
     searchLine_ = new QLineEdit(centralWidget);
-    searchLine_->setPlaceholderText("Search files...");
+    searchLine_->setPlaceholderText("Search...");
     searchLine_->setClearButtonEnabled(true);
 
     // Add magnifying glass icon to the search bar
@@ -1282,25 +1282,25 @@ void MainWindow::rebuildFilterMenu()
     auto* filterActionGroup = new QActionGroup(filterMenu_);
     filterActionGroup->setExclusive(true);
 
-    auto* allFilesAction = new QAction(QStringLiteral("All Files"), filterMenu_);
-    allFilesAction->setCheckable(true);
-    allFilesAction->setChecked(activeSearchFilterId_.isEmpty());
-    filterActionGroup->addAction(allFilesAction);
-    filterMenu_->addAction(allFilesAction);
+    auto* allFilterAction = new QAction(QStringLiteral("All"), filterMenu_);
+    allFilterAction->setCheckable(true);
+    allFilterAction->setChecked(activeSearchFilterId_.isEmpty());
+    filterActionGroup->addAction(allFilterAction);
+    filterMenu_->addAction(allFilterAction);
 
-    connect(allFilesAction, &QAction::triggered, this, [this]() {
+    connect(allFilterAction, &QAction::triggered, this, [this]() {
         applySearchFilter(QString(), QString(), QString());
     });
 
-    auto* foldersAction = new QAction(QStringLiteral("Folders"), filterMenu_);
-    foldersAction->setCheckable(true);
-    foldersAction->setStatusTip(QStringLiteral("folder:"));
-    foldersAction->setToolTip(QStringLiteral("folder:"));
-    foldersAction->setChecked(activeSearchFilterId_ == QStringLiteral("builtin-folders"));
-    filterActionGroup->addAction(foldersAction);
-    filterMenu_->addAction(foldersAction);
+    auto* foldersFilterAction = new QAction(QStringLiteral("Folders"), filterMenu_);
+    foldersFilterAction->setCheckable(true);
+    foldersFilterAction->setStatusTip(QStringLiteral("folder:"));
+    foldersFilterAction->setToolTip(QStringLiteral("folder:"));
+    foldersFilterAction->setChecked(activeSearchFilterId_ == QStringLiteral("builtin-folders"));
+    filterActionGroup->addAction(foldersFilterAction);
+    filterMenu_->addAction(foldersFilterAction);
 
-    connect(foldersAction, &QAction::triggered, this, [this]() {
+    connect(foldersFilterAction, &QAction::triggered, this, [this]() {
         applySearchFilter(
             QStringLiteral("builtin-folders"),
             QStringLiteral("Folders"),
@@ -1308,11 +1308,28 @@ void MainWindow::rebuildFilterMenu()
         );
     });
 
+    auto* filesFilterAction = new QAction(QStringLiteral("Files"), filterMenu_);
+    filesFilterAction->setCheckable(true);
+    filesFilterAction->setStatusTip(QStringLiteral("files:"));
+    filesFilterAction->setToolTip(QStringLiteral("files:"));
+    filesFilterAction->setChecked(activeSearchFilterId_ == QStringLiteral("builtin-files"));
+    filterActionGroup->addAction(filesFilterAction);
+    filterMenu_->addAction(filesFilterAction);
+
+    connect(filesFilterAction, &QAction::triggered, this, [this]() {
+        applySearchFilter(
+            QStringLiteral("builtin-files"),
+            QStringLiteral("Files"),
+            QStringLiteral("files:")
+        );
+    });
+
     filterMenu_->addSeparator();
 
     bool activeFilterStillExists =
         activeSearchFilterId_.isEmpty() ||
-        activeSearchFilterId_ == QStringLiteral("builtin-folders");
+        activeSearchFilterId_ == QStringLiteral("builtin-folders") ||
+        activeSearchFilterId_ == QStringLiteral("builtin-files");
 
     const std::vector<SearchFilterPreference> filters =
         controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
@@ -1347,7 +1364,7 @@ void MainWindow::rebuildFilterMenu()
         activeSearchFilterId_.clear();
         activeSearchFilterName_.clear();
         activeSearchFilter_.clear();
-        allFilesAction->setChecked(true);
+        allFilterAction->setChecked(true);
     }
 
     filterMenu_->addSeparator();
@@ -1374,7 +1391,7 @@ void MainWindow::rebuildFilterDropdown()
 
     filterDropdown_->clear();
 
-    filterDropdown_->addItem(QStringLiteral("All Files"));
+    filterDropdown_->addItem(QStringLiteral("All"));
     filterDropdown_->setItemData(0, QString(), FilterDropdownIdRole);
     filterDropdown_->setItemData(0, QString(), FilterDropdownNameRole);
     filterDropdown_->setItemData(0, QString(), FilterDropdownQueryRole);
@@ -1386,6 +1403,13 @@ void MainWindow::rebuildFilterDropdown()
     filterDropdown_->setItemData(1, QStringLiteral("folder:"), FilterDropdownQueryRole);
     filterDropdown_->setItemData(1, QStringLiteral("folder:"), Qt::ToolTipRole);
     filterDropdown_->setItemData(1, FilterDropdownKindFilter, FilterDropdownKindRole);
+
+    filterDropdown_->addItem(QStringLiteral("Files"));
+    filterDropdown_->setItemData(2, QStringLiteral("builtin-files"), FilterDropdownIdRole);
+    filterDropdown_->setItemData(2, QStringLiteral("Files"), FilterDropdownNameRole);
+    filterDropdown_->setItemData(2, QStringLiteral("files:"), FilterDropdownQueryRole);
+    filterDropdown_->setItemData(2, QStringLiteral("files:"), Qt::ToolTipRole);
+    filterDropdown_->setItemData(2, FilterDropdownKindFilter, FilterDropdownKindRole);
 
     const std::vector<SearchFilterPreference> filters =
         controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{};
@@ -1480,8 +1504,8 @@ void MainWindow::updateSearchLineFilterHint()
     if (activeSearchFilter_.isEmpty()) {
         searchLine_->setPlaceholderText(
             regexEnabled_
-                ? QStringLiteral("Search files with regex...")
-                : QStringLiteral("Search files...")
+                ? QStringLiteral("Search with regex...")
+                : QStringLiteral("Search...")
         );
         searchLine_->setToolTip(
             regexEnabled_
@@ -1493,10 +1517,10 @@ void MainWindow::updateSearchLineFilterHint()
                     "  screenshot[0-9]{4}      screenshot followed by four digits\n"
                     "  holiday\\.(png|jpg)$     holiday image files\n"
                     "  .*(draft|final)\\.pdf$   draft or final PDFs\n\n"
-                    "Filters such as ext:mp4, ext:wav;mp3, folder:, or a custom filter macro such as audio: can still be used."
+                    "Filters such as files:, folders:, ext:mp4, ext:wav;mp3, or a custom filter macro such as audio: can still be used."
                 )
                 : QStringLiteral(
-                    "Search indexed file names. You can use filters such as ext:mp4, ext:wav;mp3, folder:, or a custom filter macro such as audio:."
+                    "Search indexed file names. You can use filters such as files:, folders:, ext:mp4, ext:wav;mp3, or a custom filter macro such as audio:."
                 )
         );
         updateFilterChip();
@@ -1509,6 +1533,12 @@ void MainWindow::updateSearchLineFilterHint()
             regexEnabled_
                 ? QStringLiteral("Search folders with regex...")
                 : QStringLiteral("Search folders...")
+        );
+    } else if (activeSearchFilterId_ == QStringLiteral("builtin-files")) {
+        searchLine_->setPlaceholderText(
+            regexEnabled_
+                ? QStringLiteral("Search files with regex...")
+                : QStringLiteral("Search files...")
         );
     } else {
         searchLine_->setPlaceholderText(

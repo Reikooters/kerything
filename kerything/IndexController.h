@@ -2261,6 +2261,7 @@ public:
         std::vector<std::string> keywords;
         ExtensionSet extensions;
         bool foldersOnly = false;
+        bool filesOnly = false;
     };
 
     struct SearchOptions {

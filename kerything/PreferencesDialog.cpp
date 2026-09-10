@@ -1425,7 +1425,7 @@ void PreferencesDialog::populateDeviceTable()
                     "For NTFS, live updates require a kernel driver such as ntfs3 or the newer kernel ntfs driver."
                 )
             );
-            }
+        }
         else if (blockDevice.mounted && !blockDevice.mountedFsType.trimmed().isEmpty()) {
             statusItem->setToolTip(
                 QStringLiteral("Mounted as %1").arg(blockDevice.mountedFsType.trimmed())
@@ -1755,6 +1755,8 @@ bool PreferencesDialog::isBuiltInFilterKeyword(const QString& keyword)
 
     return folded == QStringLiteral("ext") ||
            folded == QStringLiteral("extension") ||
+           folded == QStringLiteral("file") ||
+           folded == QStringLiteral("files") ||
            folded == QStringLiteral("folder") ||
            folded == QStringLiteral("folders") ||
            folded == QStringLiteral("type");
@@ -1822,10 +1824,18 @@ QString PreferencesDialog::normalizedFilterQuery(QString query)
             trimmedToken = QStringLiteral("ext:") + trimmedToken.mid(4);
         } else if (foldedToken.startsWith(QStringLiteral("extension;"))) {
             trimmedToken = QStringLiteral("extension:") + trimmedToken.mid(10);
+        } else if (foldedToken == QStringLiteral("file;")) {
+            trimmedToken = QStringLiteral("file:");
+        } else if (foldedToken == QStringLiteral("files;")) {
+            trimmedToken = QStringLiteral("files:");
         } else if (foldedToken == QStringLiteral("folder;")) {
             trimmedToken = QStringLiteral("folder:");
         } else if (foldedToken == QStringLiteral("folders;")) {
             trimmedToken = QStringLiteral("folders:");
+        } else if (foldedToken == QStringLiteral("type;file")) {
+            trimmedToken = QStringLiteral("type:file");
+        } else if (foldedToken == QStringLiteral("type;files")) {
+            trimmedToken = QStringLiteral("type:files");
         } else if (foldedToken == QStringLiteral("type;folder")) {
             trimmedToken = QStringLiteral("type:folder");
         } else if (foldedToken == QStringLiteral("type;folders")) {
@@ -2230,7 +2240,7 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
             valid = false;
         } else if (!macro.isEmpty() && isBuiltInFilterKeyword(macro)) {
             const QString message = QStringLiteral(
-                "Filter macros cannot use built-in filter keywords such as ext, extension, folder, folders, or type."
+                "Filter macros cannot use built-in filter keywords such as ext, extension, file, files, folder, folders, or type."
             );
 
             markFilterCellInvalid(row, FilterMacroColumn, message);
@@ -2290,10 +2300,12 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
             }
 
             if (foldedToken.startsWith(QStringLiteral("type:"))) {
-                if (foldedToken != QStringLiteral("type:folder") &&
+                if (foldedToken != QStringLiteral("type:file") &&
+                    foldedToken != QStringLiteral("type:files") &&
+                    foldedToken != QStringLiteral("type:folder") &&
                     foldedToken != QStringLiteral("type:folders")) {
                     const QString message = QStringLiteral(
-                        "Unknown type filter \"%1\". Supported values are type:folder and type:folders."
+                        "Unknown type filter \"%1\". Supported values are type:file, type:files, type:folder, and type:folders."
                     ).arg(trimmedToken);
 
                     markFilterCellInvalid(row, FilterQueryColumn, message);

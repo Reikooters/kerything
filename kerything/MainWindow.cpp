@@ -496,10 +496,6 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
         searchLine_->setFocus();
     };
 
-    auto resetSearchAndFocus = [this]() {
-        resetSearchStateAndFocus();
-    };
-
     // Escape in the search line clears the search.
     auto *clearSearch = new QShortcut(QKeySequence(Qt::Key_Escape), searchLine_);
     clearSearch->setContext(Qt::WidgetShortcut);
@@ -509,16 +505,6 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     auto *clearSearchFromTable = new QShortcut(QKeySequence(Qt::Key_Escape), tableView_);
     clearSearchFromTable->setContext(Qt::WidgetShortcut);
     connect(clearSearchFromTable, &QShortcut::activated, this, clearSearchAndFocus);
-
-    // Ctrl+Escape OR Shift+Alt+Backspace resets the search text, active filter, search options,
-    // and focuses the search line.
-    auto* resetSearchShortcut = new QShortcut(this);
-    resetSearchShortcut->setKeys({
-        QKeySequence(Qt::CTRL | Qt::Key_Escape),
-        QKeySequence(Qt::ShiftModifier | Qt::AltModifier | Qt::Key_Backspace),
-    });
-    resetSearchShortcut->setContext(Qt::WindowShortcut);
-    connect(resetSearchShortcut, &QShortcut::activated, this, resetSearchAndFocus);
     // ---------------------
 
     // --- Global Window Actions (Shortcuts + Menu items) ---
@@ -618,8 +604,31 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(focusSearchAct);
 
+    // Reset Search
+    auto* resetSearchAct = new QAction(
+        QIcon::fromTheme(QStringLiteral("edit-clear")),
+        QStringLiteral("Reset Search"),
+        this
+    );
+    resetSearchAct->setShortcuts({
+        QKeySequence(Qt::CTRL | Qt::Key_Escape),
+        QKeySequence(Qt::ShiftModifier | Qt::AltModifier | Qt::Key_Backspace),
+    });
+    resetSearchAct->setStatusTip(
+        QStringLiteral("Clear the search text, active filter, and search options, then focus the search box")
+    );
+    connect(resetSearchAct, &QAction::triggered, this, &MainWindow::resetSearchStateAndFocus);
+    addAction(resetSearchAct);
+
     // Match Case
-    matchCaseAct_ = new QAction(QStringLiteral("Match Case"), this);
+    matchCaseAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("format-text-uppercase"),
+            QIcon::fromTheme(QStringLiteral("format-text-bold"))
+        ),
+        QStringLiteral("Match Case"),
+        this
+    );
     matchCaseAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_I));
     matchCaseAct_->setCheckable(true);
     matchCaseAct_->setChecked(matchCaseEnabled_);
@@ -628,7 +637,14 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     addAction(matchCaseAct_);
 
     // Match Whole Word
-    matchWholeWordAct_ = new QAction(QStringLiteral("Match Whole Word"), this);
+    matchWholeWordAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("tools-check-spelling"),
+            QIcon::fromTheme(QStringLiteral("format-text-bold"))
+        ),
+        QStringLiteral("Match Whole Word"),
+        this
+    );
     matchWholeWordAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_B));
     matchWholeWordAct_->setCheckable(true);
     matchWholeWordAct_->setChecked(matchWholeWordEnabled_);
@@ -637,7 +653,14 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     addAction(matchWholeWordAct_);
 
     // Regex
-    regexAct_ = new QAction(QStringLiteral("Regex"), this);
+    regexAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("code-context"),
+            QIcon::fromTheme(QStringLiteral("code-variable"))
+        ),
+        QStringLiteral("Regex"),
+        this
+    );
     regexAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
     regexAct_->setCheckable(true);
     regexAct_->setChecked(regexEnabled_);
@@ -729,6 +752,8 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     searchMenu_->addAction(matchCaseAct_);
     searchMenu_->addAction(matchWholeWordAct_);
     searchMenu_->addAction(regexAct_);
+    searchMenu_->addSeparator();
+    searchMenu_->addAction(resetSearchAct);
     updateSearchMenuTitle();
 
     // Filter Menu

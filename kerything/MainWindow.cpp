@@ -548,6 +548,7 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(refreshIndexesAct);
 
+    // Automatically Refresh Results for Live Updates
     autoRefreshLiveUpdatesAct_ = new QAction(
         QStringLiteral("Automatically Refresh Results for Live Updates"),
         this
@@ -566,7 +567,15 @@ MainWindow::MainWindow(AppController* controller, QWidget* parent)
     });
     addAction(autoRefreshLiveUpdatesAct_);
 
-    showFiltersDropdownAct_ = new QAction(QStringLiteral("Filters"), this);
+    // Filters Dropdown
+    showFiltersDropdownAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("view-filter"),
+            QIcon::fromTheme(QStringLiteral("filter"))
+        ),
+        QStringLiteral("Filters Dropdown"),
+        this
+    );
     showFiltersDropdownAct_->setCheckable(true);
     showFiltersDropdownAct_->setChecked(controller_ && controller_->showFiltersDropdown());
     showFiltersDropdownAct_->setStatusTip(QStringLiteral("Show the filters dropdown next to the search box"));

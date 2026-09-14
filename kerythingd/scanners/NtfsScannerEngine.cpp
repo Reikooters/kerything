@@ -26,20 +26,102 @@ namespace NtfsScannerEngine {
         return disk && disk.gcount() == size;
     }
 
-    void parseMftRuns(char* buffer, uint32_t attrOffset, std::vector<MftRun>& mftRuns) {
+    bool rangeFits(uint64_t offset, uint64_t length, uint64_t size) {
+        return offset <= size && length <= size - offset;
+    }
+
+    bool residentHeaderFits(uint32_t attrOffset, const AttributeHeader* attr, uint32_t recordSize) {
+        if (!attr || attr->nonResident != 0) {
+            return false;
+        }
+
+        return rangeFits(
+            static_cast<uint64_t>(attrOffset) + sizeof(AttributeHeader),
+            sizeof(ResidentHeader),
+            recordSize
+        );
+    }
+
+    bool residentDataFits(
+        uint32_t attrOffset,
+        const AttributeHeader* attr,
+        const ResidentHeader* resident,
+        uint32_t recordSize
+    ) {
+        if (!attr || !resident || attr->nonResident != 0) {
+            return false;
+        }
+
+        if (!rangeFits(attrOffset, attr->length, recordSize)) {
+            return false;
+        }
+
+        if (resident->dataOffset > attr->length) {
+            return false;
+        }
+
+        return resident->dataLength <= attr->length - resident->dataOffset;
+    }
+
+    bool nonResidentHeaderFits(uint32_t attrOffset, const AttributeHeader* attr, uint32_t recordSize) {
+        if (!attr || attr->nonResident == 0) {
+            return false;
+        }
+
+        return rangeFits(
+            static_cast<uint64_t>(attrOffset) + sizeof(AttributeHeader),
+            sizeof(NonResidentHeader),
+            recordSize
+        );
+    }
+
+    bool parseMftRuns(char* buffer, uint32_t attrOffset, uint32_t recordSize, std::vector<MftRun>& mftRuns) {
+        if (!buffer || !rangeFits(attrOffset, sizeof(AttributeHeader), recordSize)) {
+            return false;
+        }
+
         auto* attr = reinterpret_cast<AttributeHeader*>(buffer + attrOffset);
 
-        // The "Mapping Pairs" (Data Runs) offset is at byte 32 of a non-resident attribute header
-        uint16_t runOffset = *reinterpret_cast<uint16_t*>(reinterpret_cast<char*>(attr) + 32);
-        uint8_t* runPos = reinterpret_cast<uint8_t*>(reinterpret_cast<char*>(attr) + runOffset);
+        if (attr->length == 0 ||
+            !rangeFits(attrOffset, attr->length, recordSize) ||
+            !nonResidentHeaderFits(attrOffset, attr, recordSize)) {
+            return false;
+        }
+
+        auto* nonResident = reinterpret_cast<NonResidentHeader*>(
+            buffer + attrOffset + sizeof(AttributeHeader));
+
+        if (nonResident->mappingPairsOffset >= attr->length) {
+            return false;
+        }
+
+        const uint64_t runlistOffset =
+            static_cast<uint64_t>(attrOffset) + nonResident->mappingPairsOffset;
+
+        const uint64_t runlistEnd =
+            static_cast<uint64_t>(attrOffset) + attr->length;
+
+        if (runlistOffset >= runlistEnd || runlistEnd > recordSize) {
+            return false;
+        }
+
+        uint8_t* runPos = reinterpret_cast<uint8_t*>(buffer + runlistOffset);
+        uint8_t* runEnd = reinterpret_cast<uint8_t*>(buffer + runlistEnd);
 
         uint64_t currentVcn = 0;
         int64_t currentLcn = 0;
 
-        while (*runPos != 0) {
+        while (runPos < runEnd && *runPos != 0) {
             uint8_t header = *runPos++;
             uint8_t lenSize = header & 0x0F; // How many bytes encode the length
             uint8_t offSize = (header >> 4) & 0x0F; // How many bytes encode the offset
+
+            if (lenSize == 0 ||
+                lenSize > 8 ||
+                offSize > 8 ||
+                runPos + lenSize + offSize > runEnd) {
+                return false;
+            }
 
             uint64_t runLen = 0;
             for (int i = 0; i < lenSize; ++i) {
@@ -59,9 +141,16 @@ namespace NtfsScannerEngine {
             }
 
             currentLcn += runOff;
-            mftRuns.push_back({ currentVcn, (uint64_t)currentLcn, runLen });
+
+            if (currentLcn < 0 || runLen == 0) {
+                return false;
+            }
+
+            mftRuns.push_back({ currentVcn, static_cast<uint64_t>(currentLcn), runLen });
             currentVcn += runLen;
         }
+
+        return runPos < runEnd;
     }
 
     void applyFixups(char* buffer, uint32_t recordSize) {
@@ -127,11 +216,24 @@ namespace NtfsScannerEngine {
     bool processMftRecord(
         MFT_RecordHeader* header,
         char* buffer,
+        uint32_t mftRecordSize,
         uint64_t mftIndex,
         NtfsDatabase& db,
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
     {
+        if (!header || !buffer) {
+            return true;
+        }
+
+        if (mftRecordSize < sizeof(MFT_RecordHeader) ||
+            header->firstAttributeOffset < sizeof(MFT_RecordHeader) ||
+            header->firstAttributeOffset >= mftRecordSize ||
+            header->usedSize < header->firstAttributeOffset ||
+            header->usedSize > mftRecordSize) {
+            return true;
+        }
+
         uint64_t baseIndex = mftIndex;
         bool isBaseRecord = true;
 
@@ -174,11 +276,21 @@ namespace NtfsScannerEngine {
             }
             else if (attr->type == 0x30) { // $FILE_NAME
                 // Check if attribute is Resident.
-                // Most $FILE_NAME attributes are resident. If not, we'd need to parse data runs
-                // just to get a name, which is extremely rare and usually handled via extension records.
+                // $FILE_NAME is expected to be resident.
                 if (attr->nonResident == 0) {
+                    if (!residentHeaderFits(attrOffset, attr, recordSize)) {
+                        attrOffset += attr->length;
+                        continue;
+                    }
+
                     auto* res = reinterpret_cast<ResidentHeader*>(buffer + attrOffset + sizeof(AttributeHeader));
-                    uint32_t nameDataOffset = attrOffset + res->dataOffset;
+
+                    if (!residentDataFits(attrOffset, attr, res, recordSize)) {
+                        attrOffset += attr->length;
+                        continue;
+                    }
+
+                    const uint32_t nameDataOffset = attrOffset + res->dataOffset;
 
                     // Safety check: ensure the data offset and the FileNameAttribute struct fit
                     if (nameDataOffset + sizeof(FileNameAttribute) <= recordSize) {
@@ -214,17 +326,47 @@ namespace NtfsScannerEngine {
                         }
                     }
                 }
+#ifdef KERYTHING_ENABLE_LOGGING
                 else {
-                    std::cerr << "Non-resident $FILE_NAME attributes are not supported yet.\n";
+                    /*
+                     * $FILE_NAME is expected to be resident on NTFS. If it is marked
+                     * non-resident, treat this attribute as malformed/unsupported and
+                     * skip it. Implementing generic non-resident reads here would require
+                     * disk access and runlist resolution in processMftRecord(), and would
+                     * likely mask corrupt metadata rather than improve real-world scans.
+                     */
+                    std::cerr << "Skipping non-resident $FILE_NAME attribute"
+                              << " mftIndex=" << mftIndex
+                              << " attrOffset=" << attrOffset
+                              << " attrLength=" << attr->length
+                              << "\n";
                 }
+#endif
             }
             else if (attr->type == 0x80 && attr->nameLength == 0) { // $DATA (unnamed) (The actual file content)
                 dataAttrFound = true;
 
                 if (attr->nonResident == 0) {
+                    if (!residentHeaderFits(attrOffset, attr, recordSize)) {
+                        attrOffset += attr->length;
+                        continue;
+                    }
+
+                    auto* res = reinterpret_cast<ResidentHeader*>(buffer + attrOffset + sizeof(AttributeHeader));
+
+                    if (!residentDataFits(attrOffset, attr, res, recordSize)) {
+                        attrOffset += attr->length;
+                        continue;
+                    }
+
                     // Resident: data is right here in the MFT record
-                    sizeFromData = reinterpret_cast<ResidentHeader*>(buffer + attrOffset + sizeof(AttributeHeader))->dataLength;
+                    sizeFromData = res->dataLength;
                 } else {
+                    if (!nonResidentHeaderFits(attrOffset, attr, recordSize)) {
+                        attrOffset += attr->length;
+                        continue;
+                    }
+
                     // Non-resident: data is stored elsewhere, but we can still get the file size from the header
                     sizeFromData = reinterpret_cast<NonResidentHeader*>(buffer + attrOffset + sizeof(AttributeHeader))->dataSize;
                 }
@@ -248,7 +390,6 @@ namespace NtfsScannerEngine {
                 dataAttrFound,
                 sizeFromData,
                 db,
-                mftIndex,
                 onFileRecordChunk,
                 onStringPoolChunk
             );
@@ -297,7 +438,6 @@ namespace NtfsScannerEngine {
         bool dataAttrFound,
         uint64_t sizeFromData,
         NtfsDatabase& db,
-        uint64_t mftIndex,
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
     {
@@ -343,7 +483,7 @@ namespace NtfsScannerEngine {
             }
 
             // System files starting with $ are usually hidden in Everything
-            if (link.name[0] == '$' && mftIndex <= 38) {
+            if (link.name[0] == '$' && info.mftIndex <= 38) {
                 continue;
             }
 
@@ -367,7 +507,7 @@ namespace NtfsScannerEngine {
 
             if (!db.add(
                     link.name,
-                    mftIndex,
+                    info.mftIndex,
                     link.parentIndex,
                     info.size,
                     info.modificationTime,
@@ -424,7 +564,6 @@ namespace NtfsScannerEngine {
                     dataAttrFound,
                     sizeFromData,
                     db,
-                    baseMftIndex,
                     onFileRecordChunk,
                     onStringPoolChunk)) {
                 return false;
@@ -605,7 +744,12 @@ namespace NtfsScannerEngine {
                     );
                 }
 
-                parseMftRuns(buffer.data(), mftAttrOffset, mftRuns);
+                if (!parseMftRuns(buffer.data(), mftAttrOffset, mftRecordSize, mftRuns)) {
+                    return reportError(
+                        onError,
+                        QStringLiteral("Invalid NTFS $MFT data runs for %1").arg(devicePath)
+                    );
+                }
 
                 auto* nonResident = reinterpret_cast<NonResidentHeader*>(
                     buffer.data() + mftAttrOffset + sizeof(AttributeHeader));
@@ -713,6 +857,7 @@ namespace NtfsScannerEngine {
                     if (!processMftRecord(
                             mftRecordHeader,
                             mftRecordPtr,
+                            mftRecordSize,
                             mftRecordIndex,
                             db,
                             onFileRecordChunk,

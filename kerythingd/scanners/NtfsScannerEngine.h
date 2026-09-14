@@ -330,10 +330,11 @@ namespace NtfsScannerEngine {
      *               the raw attribute including the attribute header and the Data Runs.
      * @param attrOffset The offset, in bytes, within the buffer where the attribute starts. The Data Runs are
      *                   expected to begin at a specific offset relative to this base position.
+     * @param recordSize The size of the MFT record buffer containing the attribute.
      * @param mftRuns A reference to a vector where the parsed MFT runs will be stored. Each run represents
      *                a mapping from a Virtual Cluster Number (VCN) to a Logical Cluster Number (LCN).
      */
-    void parseMftRuns(char* buffer, uint32_t attrOffset, std::vector<MftRun>& mftRuns);
+    bool parseMftRuns(char* buffer, uint32_t attrOffset, uint32_t recordSize, std::vector<MftRun>& mftRuns);
 
     /**
      * NTFS Fixups (Update Sequence Array):
@@ -356,6 +357,7 @@ namespace NtfsScannerEngine {
      *
      * @param header Pointer to the MFT record header, containing metadata and attribute references.
      * @param buffer Raw binary data representing the content of the MFT record.
+     * @param mftRecordSize The fixed size of this MFT record buffer.
      * @param mftxInex The index of the current MFT record being processed.
      * @param db Reference to the NtfsDatabase for storing file records and string pool.
      * @param onFileRecordChunk Callback function to handle file record chunks.
@@ -364,6 +366,7 @@ namespace NtfsScannerEngine {
     bool processMftRecord(
         MFT_RecordHeader* header,
         char* buffer,
+        uint32_t mftRecordSize,
         uint64_t mftxInex,
         NtfsDatabase& db,
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
@@ -377,7 +380,6 @@ namespace NtfsScannerEngine {
      * @param dataAttrFound A boolean indicating whether a DATA attribute was found for the file.
      * @param sizeFromData A 64-bit integer specifying the file size derived from the DATA attribute, if available.
      * @param db Reference to a NtfsDatabase where the finalized file information will be stored.
-     * @param mftIndex A 64-bit integer representing the MFT index of the file.
      * @param onFileRecordChunk A callback function to handle file record chunk processing.
      * @param onStringPoolChunk A callback function to handle string pool chunk processing.
      */
@@ -387,7 +389,6 @@ namespace NtfsScannerEngine {
         bool dataAttrFound,
         uint64_t sizeFromData,
         NtfsDatabase& db,
-        uint64_t mftIndex,
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
 

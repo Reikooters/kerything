@@ -635,18 +635,18 @@ MainWindow::MainWindow(
     });
     addAction(autoRefreshLiveUpdatesAct_);
 
-    // Filters Dropdown
+    // Filter Dropdown
     showFiltersDropdownAct_ = new QAction(
         QIcon::fromTheme(
             QStringLiteral("view-filter"),
             QIcon::fromTheme(QStringLiteral("filter"))
         ),
-        QStringLiteral("Filters Dropdown"),
+        QStringLiteral("Filter Dropdown"),
         this
     );
     showFiltersDropdownAct_->setCheckable(true);
     showFiltersDropdownAct_->setChecked(controller_ && controller_->showFiltersDropdown());
-    showFiltersDropdownAct_->setStatusTip(QStringLiteral("Show the filters dropdown next to the search box"));
+    showFiltersDropdownAct_->setStatusTip(QStringLiteral("Show the filter dropdown next to the search box"));
     connect(showFiltersDropdownAct_, &QAction::toggled, this, [this](bool checked) {
         if (controller_) {
             controller_->setShowFiltersDropdown(checked);

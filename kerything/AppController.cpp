@@ -1144,8 +1144,8 @@ void AppController::setShowFiltersDropdown(bool enabled)
 
     requestWindowStatusMessage(
         enabled
-            ? QStringLiteral("Filters dropdown shown")
-            : QStringLiteral("Filters dropdown hidden"),
+            ? QStringLiteral("Filter dropdown shown")
+            : QStringLiteral("Filter dropdown hidden"),
         3000
     );
 }

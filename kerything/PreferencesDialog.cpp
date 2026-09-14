@@ -1187,13 +1187,13 @@ QWidget* PreferencesDialog::createUiPage()
     auto* filtersLayout = new QVBoxLayout(filtersGroup);
 
     showFiltersDropdownCheckBox_ = new QCheckBox(
-        QStringLiteral("Show filters dropdown next to the search box"),
+        QStringLiteral("Show filter dropdown next to the search box"),
         filtersGroup
     );
     showFiltersDropdownCheckBox_->setChecked(preferences_.showFiltersDropdown());
     showFiltersDropdownCheckBox_->setToolTip(
         QStringLiteral(
-            "When enabled, each search window shows a filters dropdown on the right side of the search box."
+            "When enabled, each search window shows a filter dropdown on the right side of the search box."
         )
     );
 

@@ -1017,12 +1017,12 @@ QWidget* PreferencesDialog::createWindowsPage()
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    auto* windowsGroup = new QGroupBox(QStringLiteral("Windows"), content);
-    auto* windowsLayout = new QVBoxLayout(windowsGroup);
+    auto* launchGroup = new QGroupBox(QStringLiteral("Launch"), content);
+    auto* launchLayout = new QVBoxLayout(launchGroup);
 
     createNewWindowOnLaunchCheckBox_ = new QCheckBox(
         QStringLiteral("Create a new window when running Kerything"),
-        windowsGroup
+        launchGroup
     );
     createNewWindowOnLaunchCheckBox_->setChecked(preferences_.createNewWindowOnLaunch());
     createNewWindowOnLaunchCheckBox_->setToolTip(
@@ -1038,16 +1038,21 @@ QWidget* PreferencesDialog::createWindowsPage()
             "When disabled, Kerything tries to present the last active window instead.\n"
             "Some Wayland compositors may ignore requests to raise or activate existing windows."
         ),
-        windowsGroup
+        launchGroup
     );
     createNewWindowOnLaunchDescription->setWordWrap(true);
 
-    windowsLayout->addWidget(createNewWindowOnLaunchCheckBox_);
-    windowsLayout->addWidget(createNewWindowOnLaunchDescription);
+    launchLayout->addWidget(createNewWindowOnLaunchCheckBox_);
+    launchLayout->addWidget(createNewWindowOnLaunchDescription);
+
+    layout->addWidget(launchGroup);
+
+    auto* newWindowsGroup = new QGroupBox(QStringLiteral("New Windows"), content);
+    auto* newWindowsLayout = new QVBoxLayout(newWindowsGroup);
 
     carryFilterToNewWindowsCheckBox_ = new QCheckBox(
         QStringLiteral("Carry over the active filter to new windows"),
-        windowsGroup
+        newWindowsGroup
     );
     carryFilterToNewWindowsCheckBox_->setChecked(preferences_.carryFilterToNewWindows());
     carryFilterToNewWindowsCheckBox_->setToolTip(
@@ -1059,7 +1064,7 @@ QWidget* PreferencesDialog::createWindowsPage()
 
     carrySearchOptionsToNewWindowsCheckBox_ = new QCheckBox(
         QStringLiteral("Carry over search options to new windows"),
-        windowsGroup
+        newWindowsGroup
     );
     carrySearchOptionsToNewWindowsCheckBox_->setChecked(preferences_.carrySearchOptionsToNewWindows());
     carrySearchOptionsToNewWindowsCheckBox_->setToolTip(
@@ -1071,7 +1076,7 @@ QWidget* PreferencesDialog::createWindowsPage()
 
     carrySearchTextToNewWindowsCheckBox_ = new QCheckBox(
         QStringLiteral("Carry over the search text to new windows"),
-        windowsGroup
+        newWindowsGroup
     );
     carrySearchTextToNewWindowsCheckBox_->setChecked(preferences_.carrySearchTextToNewWindows());
     carrySearchTextToNewWindowsCheckBox_->setToolTip(
@@ -1083,7 +1088,7 @@ QWidget* PreferencesDialog::createWindowsPage()
 
     carryResultSortingToNewWindowsCheckBox_ = new QCheckBox(
         QStringLiteral("Carry over result sorting to new windows"),
-        windowsGroup
+        newWindowsGroup
     );
     carryResultSortingToNewWindowsCheckBox_->setChecked(preferences_.carryResultSortingToNewWindows());
     carryResultSortingToNewWindowsCheckBox_->setToolTip(
@@ -1095,7 +1100,7 @@ QWidget* PreferencesDialog::createWindowsPage()
 
     carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = new QCheckBox(
         QStringLiteral("Carry over window size and column widths to new windows"),
-        windowsGroup
+        newWindowsGroup
     );
     carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setChecked(preferences_.carryWindowSizeAndColumnWidthsToNewWindows());
     carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setToolTip(
@@ -1110,18 +1115,18 @@ QWidget* PreferencesDialog::createWindowsPage()
             "These options control what is copied from the current window when you open another window "
             "using File > New Window or Ctrl+N."
         ),
-        windowsGroup
+        newWindowsGroup
     );
     newWindowStateDescription->setWordWrap(true);
 
-    windowsLayout->addWidget(carryFilterToNewWindowsCheckBox_);
-    windowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
-    windowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
-    windowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
-    windowsLayout->addWidget(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_);
-    windowsLayout->addWidget(newWindowStateDescription);
+    newWindowsLayout->addWidget(carryFilterToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(newWindowStateDescription);
 
-    layout->addWidget(windowsGroup);
+    layout->addWidget(newWindowsGroup);
     layout->addStretch();
 
     scrollArea->setWidget(content);

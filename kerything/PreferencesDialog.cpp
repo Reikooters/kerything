@@ -1047,7 +1047,7 @@ QWidget* PreferencesDialog::createWindowsPage()
 
     layout->addWidget(launchGroup);
 
-    auto* newWindowsGroup = new QGroupBox(QStringLiteral("New Windows"), content);
+    auto* newWindowsGroup = new QGroupBox(QStringLiteral("New windows"), content);
     auto* newWindowsLayout = new QVBoxLayout(newWindowsGroup);
 
     carryFilterToNewWindowsCheckBox_ = new QCheckBox(

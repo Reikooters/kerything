@@ -2723,6 +2723,16 @@ bool PreferencesDialog::applyChanges()
             ? showFiltersDropdownCheckBox_->isChecked()
             : preferences_.showFiltersDropdown();
 
+    /*
+     * NOTE: The following preferences are only written to in AppController, NOT from here:
+     * - UI - showFiltersDropdown
+     * - Advanced - autoRefreshResultsForLiveUpdates
+     *
+     * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog,
+     * so the AppController is used as a central location to save them. Therefore, we don't want to
+     * overwrite them here.
+     */
+
     if (windowChanged) {
         if (createNewWindowOnLaunchCheckBox_) {
             preferences_.setCreateNewWindowOnLaunch(
@@ -2756,16 +2766,6 @@ bool PreferencesDialog::applyChanges()
     }
 
     if (uiChanged) {
-        /*
-         * NOTE: The following preferences are only written to in AppController, NOT from here:
-         * - autoRefreshResultsForLiveUpdates
-         * - showFiltersDropdown
-         *
-         * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog,
-         * so the AppController is used as a central location to save them. Therefore, we don't want to
-         * overwrite them here.
-         */
-
         if (sortDateDescendingFirstCheckBox_) {
             preferences_.setSortDateDescendingFirst(
                 sortDateDescendingFirstCheckBox_->isChecked()

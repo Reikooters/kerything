@@ -326,6 +326,16 @@ MainWindow::MainWindow(
     tableView_->setColumnWidth(SearchResultColumn::Size, 100);
     // Column 3 (Date) will take the remaining space due to stretchLastSection
 
+    // Use initial state to set column widths if provided
+    if (initialState &&
+        static_cast<int>(initialState->columnWidths.size()) == SearchResultColumn::Count) {
+        for (int column = 0; column < SearchResultColumn::Count; ++column) {
+            if (initialState->columnWidths[column] > 0) {
+                tableView_->setColumnWidth(column, initialState->columnWidths[column]);
+            }
+        }
+    }
+
     layout->addWidget(tableView_);
 
     // --- Action State Management ---
@@ -483,12 +493,10 @@ MainWindow::MainWindow(
     statusBar()->addPermanentWidget(chipContainer_, 0);
 
     setCentralWidget(centralWidget);
+    resize(1200, 800);
 
     if (initialState && initialState->windowSize.isValid()) {
         resize(initialState->windowSize);
-    }
-    else {
-        resize(1200, 800);
     }
 
     // Connect search bar to our search logic
@@ -1041,12 +1049,20 @@ MainWindow::NewWindowState MainWindow::newWindowState() const
 {
     const auto* header = tableView_ ? tableView_->horizontalHeader() : nullptr;
 
+    std::vector<int> columnWidths;
+    columnWidths.reserve(SearchResultColumn::Count);
+
+    for (int column = 0; column < SearchResultColumn::Count; ++column) {
+        columnWidths.push_back(tableView_ ? tableView_->columnWidth(column) : 0);
+    }
+
     return NewWindowState{
         .activeSearchFilterId = activeSearchFilterId_,
         .activeSearchFilterName = activeSearchFilterName_,
         .activeSearchFilter = activeSearchFilter_,
         .searchText = searchLine_ ? searchLine_->text() : QString(),
         .windowSize = size(),
+        .columnWidths = std::move(columnWidths),
         .sortColumn = header ? header->sortIndicatorSection() : SearchResultColumn::Name,
         .sortOrder = header ? header->sortIndicatorOrder() : Qt::AscendingOrder,
         .matchCaseEnabled = matchCaseEnabled_,
@@ -1095,6 +1111,14 @@ void MainWindow::applyNewWindowState(const NewWindowState& state)
     if (tableView_ && tableView_->horizontalHeader()) {
         tableView_->horizontalHeader()->setSortIndicator(state.sortColumn, state.sortOrder);
         lastSortSection_ = state.sortColumn;
+
+        if (static_cast<int>(state.columnWidths.size()) == SearchResultColumn::Count) {
+            for (int column = 0; column < SearchResultColumn::Count; ++column) {
+                if (state.columnWidths[column] > 0) {
+                    tableView_->setColumnWidth(column, state.columnWidths[column]);
+                }
+            }
+        }
     }
 
     if (!searchLine_) {

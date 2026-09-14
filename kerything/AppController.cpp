@@ -713,7 +713,7 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
          preferences_.carrySearchOptionsToNewWindows() ||
          preferences_.carrySearchTextToNewWindows() ||
          preferences_.carryResultSortingToNewWindows() ||
-         preferences_.carryWindowSizeToNewWindows())) {
+         preferences_.carryWindowSizeAndColumnWidthsToNewWindows())) {
         MainWindow::NewWindowState state = sourceWindow->newWindowState();
 
         if (!preferences_.carryFilterToNewWindows()) {
@@ -737,8 +737,9 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
             state.sortOrder = Qt::AscendingOrder;
         }
 
-        if (!preferences_.carryWindowSizeToNewWindows()) {
+        if (!preferences_.carryWindowSizeAndColumnWidthsToNewWindows()) {
             state.windowSize = QSize();
+            state.columnWidths.clear();
         }
 
         stateToCarry = std::move(state);
@@ -1121,9 +1122,9 @@ bool AppController::carryResultSortingToNewWindows() const
     return preferences_.carryResultSortingToNewWindows();
 }
 
-bool AppController::carryWindowSizeToNewWindows() const
+bool AppController::carryWindowSizeAndColumnWidthsToNewWindows() const
 {
-    return preferences_.carryWindowSizeToNewWindows();
+    return preferences_.carryWindowSizeAndColumnWidthsToNewWindows();
 }
 
 void AppController::setShowFiltersDropdown(bool enabled)

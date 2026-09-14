@@ -59,7 +59,7 @@ public:
     void setCarrySearchTextToNewWindows(bool enabled);
     [[nodiscard]] bool carryResultSortingToNewWindows() const;
     void setCarryResultSortingToNewWindows(bool enabled);
-    [[nodiscard]] bool carryWindowSizeToNewWindows() const;
+    [[nodiscard]] bool carryWindowSizeAndColumnWidthsToNewWindows() const;
     void setCarryWindowSizeToNewWindows(bool enabled);
     [[nodiscard]] bool sortDateDescendingFirst() const;
     void setSortDateDescendingFirst(bool enabled);

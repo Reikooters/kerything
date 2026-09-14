@@ -1093,15 +1093,15 @@ QWidget* PreferencesDialog::createWindowsPage()
         )
     );
 
-    carryWindowSizeToNewWindowsCheckBox_ = new QCheckBox(
-        QStringLiteral("Carry over window size to new windows"),
+    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over window size and column widths to new windows"),
         windowsGroup
     );
-    carryWindowSizeToNewWindowsCheckBox_->setChecked(preferences_.carryWindowSizeToNewWindows());
-    carryWindowSizeToNewWindowsCheckBox_->setToolTip(
+    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setChecked(preferences_.carryWindowSizeAndColumnWidthsToNewWindows());
+    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setToolTip(
         QStringLiteral(
-            "When enabled, File > New Window and Ctrl+N use the current window's width\n"
-            "and height for the new search window."
+            "When enabled, File > New Window and Ctrl+N use the current window's width,\n"
+            "height, and search result column widths for the new search window."
         )
     );
 
@@ -1118,7 +1118,7 @@ QWidget* PreferencesDialog::createWindowsPage()
     windowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
     windowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
     windowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
-    windowsLayout->addWidget(carryWindowSizeToNewWindowsCheckBox_);
+    windowsLayout->addWidget(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_);
     windowsLayout->addWidget(newWindowStateDescription);
 
     layout->addWidget(windowsGroup);
@@ -1147,7 +1147,7 @@ QWidget* PreferencesDialog::createWindowsPage()
         updateApplyButtonEnabled();
     });
 
-    connect(carryWindowSizeToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+    connect(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -2638,10 +2638,10 @@ bool PreferencesDialog::hasWindowChanges() const
             preferences_.carryResultSortingToNewWindows();
     }
 
-    if (carryWindowSizeToNewWindowsCheckBox_) {
+    if (carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_) {
         changed = changed ||
-            carryWindowSizeToNewWindowsCheckBox_->isChecked() !=
-            preferences_.carryWindowSizeToNewWindows();
+            carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->isChecked() !=
+            preferences_.carryWindowSizeAndColumnWidthsToNewWindows();
     }
 
     return changed;
@@ -2787,9 +2787,9 @@ bool PreferencesDialog::applyChanges()
             );
         }
 
-        if (carryWindowSizeToNewWindowsCheckBox_) {
+        if (carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_) {
             preferences_.setCarryWindowSizeToNewWindows(
-                carryWindowSizeToNewWindowsCheckBox_->isChecked()
+                carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->isChecked()
             );
         }
     }

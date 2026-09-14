@@ -34,6 +34,7 @@ public:
         QString activeSearchFilter;
         QString searchText;
         QSize windowSize;
+        std::vector<int> columnWidths;
         int sortColumn = 0;
         Qt::SortOrder sortOrder = Qt::AscendingOrder;
         bool matchCaseEnabled = false;

@@ -96,17 +96,17 @@ void Preferences::setCarryResultSortingToNewWindows(bool enabled)
     settings_.sync();
 }
 
-bool Preferences::carryWindowSizeToNewWindows() const
+bool Preferences::carryWindowSizeAndColumnWidthsToNewWindows() const
 {
     return settings_.value(
-        QStringLiteral("ui/carryWindowSizeToNewWindows"),
+        QStringLiteral("ui/carryWindowSizeAndColumnWidthsToNewWindows"),
         false
     ).toBool();
 }
 
 void Preferences::setCarryWindowSizeToNewWindows(bool enabled)
 {
-    settings_.setValue(QStringLiteral("ui/carryWindowSizeToNewWindows"), enabled);
+    settings_.setValue(QStringLiteral("ui/carryWindowSizeAndColumnWidthsToNewWindows"), enabled);
     settings_.sync();
 }
 

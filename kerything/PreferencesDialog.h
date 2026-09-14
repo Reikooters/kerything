@@ -148,7 +148,7 @@ private:
     QCheckBox* carrySearchOptionsToNewWindowsCheckBox_ = nullptr;
     QCheckBox* carrySearchTextToNewWindowsCheckBox_ = nullptr;
     QCheckBox* carryResultSortingToNewWindowsCheckBox_ = nullptr;
-    QCheckBox* carryWindowSizeToNewWindowsCheckBox_ = nullptr;
+    QCheckBox* carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = nullptr;
     QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;
     QCheckBox* sortSizeDescendingFirstCheckBox_ = nullptr;
     QCheckBox* showInFileManagerOnPathDoubleClickCheckBox_ = nullptr;

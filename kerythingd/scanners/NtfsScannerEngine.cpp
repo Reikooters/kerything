@@ -187,6 +187,13 @@ namespace NtfsScannerEngine {
                         // Further safety: ensure the actual UTF-16 string fits in the record
                         // nameLength is in characters (2 bytes each)
                         if (nameDataOffset + offsetof(FileNameAttribute, name) + (fn->nameLength * 2) <= recordSize) {
+                            // Derive isDir from $FILE_NAME::flags as well as from the MFT record header.
+                            // This fixes extension records that carry a $FILE_NAME but whose MFT header does
+                            // not set FILE_ATTRIBUTE_DIRECTORY.
+                            if (fn->flags & FILE_ATTRIBUTE_DIRECTORY) {
+                                info.isDir = true;
+                            }
+
                             // MFT references are 64-bit, but only the first 48 bits are the record index.
                             // The top 16 bits are the "Sequence Number" used for consistency checks.
                             allNames.push_back({
@@ -261,9 +268,11 @@ namespace NtfsScannerEngine {
             // On my two test drives, one had 0.4% and the other had 2.7%
             // of records which are related to multiple records.
 
-            if (!dataAttrFound && allNames.empty()) {
-                // Record doesn't contain any information we care about,
-                // don't need to keep track of it for later
+            if (!dataAttrFound && allNames.empty() && !isBaseRecord) {
+                // This extension record doesn't contain any information we care about.
+                // Keep empty base records with $ATTRIBUTE_LIST, though: the base MFT
+                // header is authoritative for flags such as "is directory", and losing
+                // it can cause child paths to resolve at the mount root.
                 return true;
             }
 
@@ -402,6 +411,11 @@ namespace NtfsScannerEngine {
                     fileInfo.tempLinks.begin(),
                     fileInfo.tempLinks.end()
                 );
+            }
+
+            // Ignore groups without names
+            if (allNames.empty()) {
+                continue;
             }
 
             if (!finalizeAndAddFile(

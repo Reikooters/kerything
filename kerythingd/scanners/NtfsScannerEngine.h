@@ -164,6 +164,7 @@ namespace NtfsScannerEngine {
     #pragma pack(pop)
 
     // Constants for Reparse Points
+    static constexpr uint32_t FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
     static constexpr uint32_t FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
     static constexpr uint32_t IO_REPARSE_TAG_SYMLINK = 0xA000000C;
     static constexpr uint32_t IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003; // Junctions

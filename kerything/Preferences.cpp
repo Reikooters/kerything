@@ -5,6 +5,8 @@
 
 #include <algorithm>
 
+#include "SearchResultColumns.h"
+
 Preferences::Preferences()
     : settings_(QStringLiteral("Reikooters"), QStringLiteral("Kerything"))
 {
@@ -110,6 +112,82 @@ void Preferences::setCarryWindowSizeToNewWindows(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showFiltersDropdown() const
+{
+    return settings_.value(
+        QStringLiteral("ui/showFiltersDropdown"),
+        false
+    ).toBool();
+}
+
+void Preferences::setShowFiltersDropdown(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/showFiltersDropdown"), enabled);
+    settings_.sync();
+}
+
+int Preferences::defaultSortColumn() const
+{
+    const int column = settings_.value(
+        QStringLiteral("ui/defaultSortColumn"),
+        SearchResultColumn::Name
+    ).toInt();
+
+    switch (column) {
+        case SearchResultColumn::Name:
+        case SearchResultColumn::Path:
+        case SearchResultColumn::Size:
+        case SearchResultColumn::DateModified:
+            return column;
+
+        default:
+            return SearchResultColumn::Name;
+    }
+}
+
+void Preferences::setDefaultSortColumn(int column)
+{
+    switch (column) {
+        case SearchResultColumn::Name:
+        case SearchResultColumn::Path:
+        case SearchResultColumn::Size:
+        case SearchResultColumn::DateModified:
+            settings_.setValue(QStringLiteral("ui/defaultSortColumn"), column);
+            break;
+
+        default:
+            settings_.setValue(QStringLiteral("ui/defaultSortColumn"), SearchResultColumn::Name);
+            break;
+    }
+
+    settings_.sync();
+}
+
+Qt::SortOrder Preferences::defaultSortOrder() const
+{
+    const int order = settings_.value(
+        QStringLiteral("ui/defaultSortOrder"),
+        static_cast<int>(Qt::AscendingOrder)
+    ).toInt();
+
+    return order == static_cast<int>(Qt::DescendingOrder)
+        ? Qt::DescendingOrder
+        : Qt::AscendingOrder;
+}
+
+void Preferences::setDefaultSortOrder(Qt::SortOrder order)
+{
+    settings_.setValue(
+        QStringLiteral("ui/defaultSortOrder"),
+        static_cast<int>(
+            order == Qt::DescendingOrder
+                ? Qt::DescendingOrder
+                : Qt::AscendingOrder
+        )
+    );
+    settings_.sync();
+}
+
 bool Preferences::sortDateDescendingFirst() const
 {
     return settings_.value(
@@ -163,20 +241,6 @@ bool Preferences::showHighlightedSearchTerms() const
 void Preferences::setShowHighlightedSearchTerms(bool enabled)
 {
     settings_.setValue(QStringLiteral("ui/showHighlightedSearchTerms"), enabled);
-    settings_.sync();
-}
-
-bool Preferences::showFiltersDropdown() const
-{
-    return settings_.value(
-        QStringLiteral("ui/showFiltersDropdown"),
-        false
-    ).toBool();
-}
-
-void Preferences::setShowFiltersDropdown(bool enabled)
-{
-    settings_.setValue(QStringLiteral("ui/showFiltersDropdown"), enabled);
     settings_.sync();
 }
 

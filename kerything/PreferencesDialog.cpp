@@ -9,6 +9,7 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QColor>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDialogButtonBox>
 #include <QFrame>
@@ -41,6 +42,7 @@
 #include "PreferencesDialogPage.h"
 #include "BlockDeviceDisplayUtils.h"
 #include "HoverRowHighlight.h"
+#include "SearchResultColumns.h"
 
 namespace {
     constexpr int DeviceIdRole = Qt::UserRole + 1;
@@ -1213,6 +1215,51 @@ QWidget* PreferencesDialog::createUiPage()
     auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), content);
     auto* sortingLayout = new QVBoxLayout(sortingGroup);
 
+    auto* defaultSortRow = new QWidget(sortingGroup);
+    auto* defaultSortLayout = new QHBoxLayout(defaultSortRow);
+    defaultSortLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* defaultSortColumnLabel = new QLabel(QStringLiteral("Default sort column:"), defaultSortRow);
+
+    defaultSortColumnComboBox_ = new QComboBox(defaultSortRow);
+    defaultSortColumnComboBox_->addItem(QStringLiteral("Name"), SearchResultColumn::Name);
+    defaultSortColumnComboBox_->addItem(QStringLiteral("Path"), SearchResultColumn::Path);
+    defaultSortColumnComboBox_->addItem(QStringLiteral("Size"), SearchResultColumn::Size);
+    defaultSortColumnComboBox_->addItem(QStringLiteral("Date Modified"), SearchResultColumn::DateModified);
+
+    const int defaultSortColumnIndex = defaultSortColumnComboBox_->findData(preferences_.defaultSortColumn());
+    defaultSortColumnComboBox_->setCurrentIndex(defaultSortColumnIndex >= 0 ? defaultSortColumnIndex : 0);
+    defaultSortColumnComboBox_->setToolTip(
+        QStringLiteral("Choose the sort column used when a new search window does not carry sorting from another window.")
+    );
+
+    auto* defaultSortOrderLabel = new QLabel(QStringLiteral("Direction:"), defaultSortRow);
+
+    defaultSortOrderComboBox_ = new QComboBox(defaultSortRow);
+    defaultSortOrderComboBox_->addItem(
+        QStringLiteral("Ascending"),
+        static_cast<int>(Qt::AscendingOrder)
+    );
+    defaultSortOrderComboBox_->addItem(
+        QStringLiteral("Descending"),
+        static_cast<int>(Qt::DescendingOrder)
+    );
+
+    const int defaultSortOrderIndex = defaultSortOrderComboBox_->findData(
+        static_cast<int>(preferences_.defaultSortOrder())
+    );
+    defaultSortOrderComboBox_->setCurrentIndex(defaultSortOrderIndex >= 0 ? defaultSortOrderIndex : 0);
+    defaultSortOrderComboBox_->setToolTip(
+        QStringLiteral("Choose the sort direction used when a new search window does not carry sorting from another window.")
+    );
+
+    defaultSortLayout->addWidget(defaultSortColumnLabel);
+    defaultSortLayout->addWidget(defaultSortColumnComboBox_);
+    defaultSortLayout->addSpacing(12);
+    defaultSortLayout->addWidget(defaultSortOrderLabel);
+    defaultSortLayout->addWidget(defaultSortOrderComboBox_);
+    defaultSortLayout->addStretch();
+
     sortDateDescendingFirstCheckBox_ = new QCheckBox(
         QStringLiteral("Sort Date Modified descending (newest files) first"),
         sortingGroup
@@ -1235,12 +1282,14 @@ QWidget* PreferencesDialog::createUiPage()
         )
     );
 
+    sortingLayout->addWidget(defaultSortRow);
     sortingLayout->addWidget(sortDateDescendingFirstCheckBox_);
     sortingLayout->addWidget(sortSizeDescendingFirstCheckBox_);
 
     auto* sortingDescription = new QLabel(
         QStringLiteral(
-            "These options only affect the first click when changing to the Size or Date Modified column. "
+            "The default sort is used for new search windows unless result sorting is carried over from an existing window. "
+            "The first-click options only affect the first click when changing to the Size or Date Modified column. "
             "Further clicks continue toggling the sort direction normally."
         ),
         sortingGroup
@@ -1310,6 +1359,14 @@ QWidget* PreferencesDialog::createUiPage()
     pageLayout->addWidget(scrollArea, 1);
 
     connect(showFiltersDropdownCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(defaultSortColumnComboBox_, &QComboBox::currentIndexChanged, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(defaultSortOrderComboBox_, &QComboBox::currentIndexChanged, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -2656,6 +2713,18 @@ bool PreferencesDialog::hasUIChanges() const
 {
     bool changed = false;
 
+    if (defaultSortColumnComboBox_) {
+        changed = changed ||
+            defaultSortColumnComboBox_->currentData().toInt() !=
+            preferences_.defaultSortColumn();
+    }
+
+    if (defaultSortOrderComboBox_) {
+        changed = changed ||
+            defaultSortOrderComboBox_->currentData().toInt() !=
+            static_cast<int>(preferences_.defaultSortOrder());
+    }
+
     if (sortDateDescendingFirstCheckBox_) {
         changed = changed ||
             sortDateDescendingFirstCheckBox_->isChecked() !=
@@ -2800,6 +2869,22 @@ bool PreferencesDialog::applyChanges()
     }
 
     if (uiChanged) {
+        if (defaultSortColumnComboBox_) {
+            preferences_.setDefaultSortColumn(
+                defaultSortColumnComboBox_->currentData().toInt()
+            );
+        }
+
+        if (defaultSortOrderComboBox_) {
+            const Qt::SortOrder order =
+                defaultSortOrderComboBox_->currentData().toInt() ==
+                static_cast<int>(Qt::DescendingOrder)
+                    ? Qt::DescendingOrder
+                    : Qt::AscendingOrder;
+
+            preferences_.setDefaultSortOrder(order);
+        }
+
         if (sortDateDescendingFirstCheckBox_) {
             preferences_.setSortDateDescendingFirst(
                 sortDateDescendingFirstCheckBox_->isChecked()

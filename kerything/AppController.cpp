@@ -733,8 +733,8 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
         }
 
         if (!preferences_.carryResultSortingToNewWindows()) {
-            state.sortColumn = SearchResultColumn::Name;
-            state.sortOrder = Qt::AscendingOrder;
+            state.sortColumn = preferences_.defaultSortColumn();
+            state.sortOrder = preferences_.defaultSortOrder();
         }
 
         if (!preferences_.carryWindowSizeAndColumnWidthsToNewWindows()) {
@@ -1075,6 +1075,16 @@ void AppController::setAutoRefreshResultsForLiveUpdates(bool enabled)
             : QStringLiteral("Automatic result updates paused"),
         4000
     );
+}
+
+int AppController::defaultSortColumn() const
+{
+    return preferences_.defaultSortColumn();
+}
+
+Qt::SortOrder AppController::defaultSortOrder() const
+{
+    return preferences_.defaultSortOrder();
 }
 
 bool AppController::sortDateDescendingFirst() const

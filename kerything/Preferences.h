@@ -9,6 +9,7 @@
 #include <QSettings>
 #include <QString>
 #include <QStringList>
+#include <Qt>
 #include <vector>
 
 #include "BlockDevice.h"
@@ -48,7 +49,7 @@ public:
     [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
 
-    // UI
+    // Windows
     [[nodiscard]] bool createNewWindowOnLaunch() const;
     void setCreateNewWindowOnLaunch(bool enabled);
     [[nodiscard]] bool carryFilterToNewWindows() const;
@@ -61,6 +62,14 @@ public:
     void setCarryResultSortingToNewWindows(bool enabled);
     [[nodiscard]] bool carryWindowSizeAndColumnWidthsToNewWindows() const;
     void setCarryWindowSizeToNewWindows(bool enabled);
+
+    // UI
+    [[nodiscard]] bool showFiltersDropdown() const;
+    void setShowFiltersDropdown(bool enabled);
+    [[nodiscard]] int defaultSortColumn() const;
+    void setDefaultSortColumn(int column);
+    [[nodiscard]] Qt::SortOrder defaultSortOrder() const;
+    void setDefaultSortOrder(Qt::SortOrder order);
     [[nodiscard]] bool sortDateDescendingFirst() const;
     void setSortDateDescendingFirst(bool enabled);
     [[nodiscard]] bool sortSizeDescendingFirst() const;
@@ -69,8 +78,6 @@ public:
     void setShowInFileManagerOnPathDoubleClick(bool enabled);
     [[nodiscard]] bool showHighlightedSearchTerms() const;
     void setShowHighlightedSearchTerms(bool enabled);
-    [[nodiscard]] bool showFiltersDropdown() const;
-    void setShowFiltersDropdown(bool enabled);
 
     // Devices
     [[nodiscard]] bool hasAnyIndexedDevicePreferences() const;

@@ -17,6 +17,7 @@
 enum class PreferencesDialogPage;
 
 class QCheckBox;
+class QComboBox;
 class QDialogButtonBox;
 class QLabel;
 class QListWidget;
@@ -149,6 +150,8 @@ private:
     QCheckBox* carrySearchTextToNewWindowsCheckBox_ = nullptr;
     QCheckBox* carryResultSortingToNewWindowsCheckBox_ = nullptr;
     QCheckBox* carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = nullptr;
+    QComboBox* defaultSortColumnComboBox_ = nullptr;
+    QComboBox* defaultSortOrderComboBox_ = nullptr;
     QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;
     QCheckBox* sortSizeDescendingFirstCheckBox_ = nullptr;
     QCheckBox* showInFileManagerOnPathDoubleClickCheckBox_ = nullptr;

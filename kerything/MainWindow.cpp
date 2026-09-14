@@ -892,9 +892,16 @@ MainWindow::MainWindow(
     if (initialState) {
         applyNewWindowState(*initialState);
     } else {
-        // Start with a full list, sorted by name ascending
-        tableView_->horizontalHeader()->setSortIndicator(SearchResultColumn::Name, Qt::AscendingOrder);
-        lastSortSection_ = SearchResultColumn::Name;
+        const int defaultSortColumn = controller_
+            ? controller_->defaultSortColumn()
+            : SearchResultColumn::Name;
+
+        const Qt::SortOrder defaultSortOrder = controller_
+            ? controller_->defaultSortOrder()
+            : Qt::AscendingOrder;
+
+        tableView_->horizontalHeader()->setSortIndicator(defaultSortColumn, defaultSortOrder);
+        lastSortSection_ = defaultSortColumn;
         updateSearch(QString());
     }
 }

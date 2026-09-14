@@ -42,6 +42,8 @@ public:
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
     [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
+    [[nodiscard]] int defaultSortColumn() const;
+    [[nodiscard]] Qt::SortOrder defaultSortOrder() const;
     [[nodiscard]] bool sortDateDescendingFirst() const;
     [[nodiscard]] bool sortSizeDescendingFirst() const;
     [[nodiscard]] bool showInFileManagerOnPathDoubleClick() const;

@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QTableView>
 #include <QString>
+#include <QSize>
 #include <QtGlobal>
 #include <optional>
 #include <vector>
@@ -32,6 +33,7 @@ public:
         QString activeSearchFilterName;
         QString activeSearchFilter;
         QString searchText;
+        QSize windowSize;
         int sortColumn = 0;
         Qt::SortOrder sortOrder = Qt::AscendingOrder;
         bool matchCaseEnabled = false;

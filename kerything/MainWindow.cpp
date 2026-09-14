@@ -483,7 +483,13 @@ MainWindow::MainWindow(
     statusBar()->addPermanentWidget(chipContainer_, 0);
 
     setCentralWidget(centralWidget);
-    resize(1200, 800);
+
+    if (initialState && initialState->windowSize.isValid()) {
+        resize(initialState->windowSize);
+    }
+    else {
+        resize(1200, 800);
+    }
 
     // Connect search bar to our search logic
     connect(searchLine_, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
@@ -1040,6 +1046,7 @@ MainWindow::NewWindowState MainWindow::newWindowState() const
         .activeSearchFilterName = activeSearchFilterName_,
         .activeSearchFilter = activeSearchFilter_,
         .searchText = searchLine_ ? searchLine_->text() : QString(),
+        .windowSize = size(),
         .sortColumn = header ? header->sortIndicatorSection() : SearchResultColumn::Name,
         .sortOrder = header ? header->sortIndicatorOrder() : Qt::AscendingOrder,
         .matchCaseEnabled = matchCaseEnabled_,

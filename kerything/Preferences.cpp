@@ -96,6 +96,20 @@ void Preferences::setCarryResultSortingToNewWindows(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::carryWindowSizeToNewWindows() const
+{
+    return settings_.value(
+        QStringLiteral("ui/carryWindowSizeToNewWindows"),
+        false
+    ).toBool();
+}
+
+void Preferences::setCarryWindowSizeToNewWindows(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/carryWindowSizeToNewWindows"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::sortDateDescendingFirst() const
 {
     return settings_.value(

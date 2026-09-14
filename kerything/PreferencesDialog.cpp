@@ -1093,6 +1093,18 @@ QWidget* PreferencesDialog::createWindowsPage()
         )
     );
 
+    carryWindowSizeToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over window size to new windows"),
+        windowsGroup
+    );
+    carryWindowSizeToNewWindowsCheckBox_->setChecked(preferences_.carryWindowSizeToNewWindows());
+    carryWindowSizeToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N use the current window's width\n"
+            "and height for the new search window."
+        )
+    );
+
     auto* newWindowStateDescription = new QLabel(
         QStringLiteral(
             "These options control what is copied from the current window when you open another window "
@@ -1106,6 +1118,7 @@ QWidget* PreferencesDialog::createWindowsPage()
     windowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
     windowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
     windowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
+    windowsLayout->addWidget(carryWindowSizeToNewWindowsCheckBox_);
     windowsLayout->addWidget(newWindowStateDescription);
 
     layout->addWidget(windowsGroup);
@@ -1131,6 +1144,10 @@ QWidget* PreferencesDialog::createWindowsPage()
     });
 
     connect(carryResultSortingToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carryWindowSizeToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -2621,6 +2638,12 @@ bool PreferencesDialog::hasWindowChanges() const
             preferences_.carryResultSortingToNewWindows();
     }
 
+    if (carryWindowSizeToNewWindowsCheckBox_) {
+        changed = changed ||
+            carryWindowSizeToNewWindowsCheckBox_->isChecked() !=
+            preferences_.carryWindowSizeToNewWindows();
+    }
+
     return changed;
 }
 
@@ -2761,6 +2784,12 @@ bool PreferencesDialog::applyChanges()
         if (carryResultSortingToNewWindowsCheckBox_) {
             preferences_.setCarryResultSortingToNewWindows(
                 carryResultSortingToNewWindowsCheckBox_->isChecked()
+            );
+        }
+
+        if (carryWindowSizeToNewWindowsCheckBox_) {
+            preferences_.setCarryWindowSizeToNewWindows(
+                carryWindowSizeToNewWindowsCheckBox_->isChecked()
             );
         }
     }

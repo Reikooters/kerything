@@ -71,6 +71,7 @@ private:
 
     QWidget* createDevicesPage();
     QWidget* createFiltersPage();
+    QWidget* createWindowsPage();
     QWidget* createUiPage();
     QWidget* createIndexingPage();
     QWidget* createAdvancedPage();
@@ -84,6 +85,7 @@ private:
     bool hasChanges() const;
     bool hasDeviceChanges() const;
     bool hasFilterChanges() const;
+    bool hasWindowChanges() const;
     bool hasUIChanges() const;
     bool hasGeneralChanges() const;
     bool validateFilters(QString* errorText = nullptr, bool focusFirstInvalid = true) const;

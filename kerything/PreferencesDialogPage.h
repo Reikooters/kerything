@@ -7,6 +7,7 @@
 enum class PreferencesDialogPage {
     Devices,
     Filters,
+    Windows,
     UI,
     Advanced,
 };

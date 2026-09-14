@@ -204,11 +204,14 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
         case PreferencesDialogPage::Filters:
             row = 1;
             break;
-        case PreferencesDialogPage::UI:
+        case PreferencesDialogPage::Windows:
             row = 2;
             break;
-        case PreferencesDialogPage::Advanced:
+        case PreferencesDialogPage::UI:
             row = 3;
+            break;
+        case PreferencesDialogPage::Advanced:
+            row = 4;
             break;
     }
 
@@ -343,6 +346,9 @@ void PreferencesDialog::populateNavigation()
 
     pages_->addWidget(createFiltersPage());
     navigation_->addItem(QStringLiteral("Filters"));
+
+    pages_->addWidget(createWindowsPage());
+    navigation_->addItem(QStringLiteral("Windows"));
 
     pages_->addWidget(createUiPage());
     navigation_->addItem(QStringLiteral("UI"));
@@ -987,15 +993,15 @@ QWidget* PreferencesDialog::createIndexingPage()
     return page;
 }
 
-QWidget* PreferencesDialog::createUiPage()
+QWidget* PreferencesDialog::createWindowsPage()
 {
     auto* page = new QWidget(this);
     auto* pageLayout = new QVBoxLayout(page);
 
     auto* label = new QLabel(
         QStringLiteral(
-            "<h2>UI</h2>"
-            "<p>Configure window and user-interface behavior.</p>"
+            "<h2>Windows</h2>"
+            "<p>Configure how Kerything opens and initializes search windows.</p>"
         ),
         page
     );
@@ -1103,6 +1109,57 @@ QWidget* PreferencesDialog::createUiPage()
     windowsLayout->addWidget(newWindowStateDescription);
 
     layout->addWidget(windowsGroup);
+    layout->addStretch();
+
+    scrollArea->setWidget(content);
+    pageLayout->addWidget(scrollArea, 1);
+
+    connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carryFilterToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carrySearchOptionsToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carrySearchTextToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(carryResultSortingToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    return page;
+}
+
+QWidget* PreferencesDialog::createUiPage()
+{
+    auto* page = new QWidget(this);
+    auto* pageLayout = new QVBoxLayout(page);
+
+    auto* label = new QLabel(
+        QStringLiteral(
+            "<h2>UI</h2>"
+            "<p>Configure user-interface behavior.</p>"
+        ),
+        page
+    );
+    label->setWordWrap(true);
+
+    pageLayout->addWidget(label);
+
+    auto* scrollArea = new QScrollArea(page);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+
+    auto* content = new QWidget(scrollArea);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
 
     auto* filtersGroup = new QGroupBox(QStringLiteral("Filters"), content);
     auto* filtersLayout = new QVBoxLayout(filtersGroup);
@@ -1229,26 +1286,6 @@ QWidget* PreferencesDialog::createUiPage()
 
     scrollArea->setWidget(content);
     pageLayout->addWidget(scrollArea, 1);
-
-    connect(createNewWindowOnLaunchCheckBox_, &QCheckBox::toggled, this, [this]() {
-        updateApplyButtonEnabled();
-    });
-
-    connect(carryFilterToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
-        updateApplyButtonEnabled();
-    });
-
-    connect(carrySearchOptionsToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
-        updateApplyButtonEnabled();
-    });
-
-    connect(carrySearchTextToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
-        updateApplyButtonEnabled();
-    });
-
-    connect(carryResultSortingToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
-        updateApplyButtonEnabled();
-    });
 
     connect(showFiltersDropdownCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
@@ -2463,7 +2500,11 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
 
 bool PreferencesDialog::hasChanges() const
 {
-    return hasDeviceChanges() || hasFilterChanges() || hasUIChanges() || hasGeneralChanges();
+    return hasDeviceChanges() ||
+           hasFilterChanges() ||
+           hasWindowChanges() ||
+           hasUIChanges() ||
+           hasGeneralChanges();
 }
 
 bool PreferencesDialog::hasGeneralChanges() const
@@ -2546,7 +2587,7 @@ bool PreferencesDialog::hasFilterChanges() const
     return false;
 }
 
-bool PreferencesDialog::hasUIChanges() const
+bool PreferencesDialog::hasWindowChanges() const
 {
     bool changed = false;
 
@@ -2579,6 +2620,13 @@ bool PreferencesDialog::hasUIChanges() const
             carryResultSortingToNewWindowsCheckBox_->isChecked() !=
             preferences_.carryResultSortingToNewWindows();
     }
+
+    return changed;
+}
+
+bool PreferencesDialog::hasUIChanges() const
+{
+    bool changed = false;
 
     if (sortDateDescendingFirstCheckBox_) {
         changed = changed ||
@@ -2653,6 +2701,7 @@ bool PreferencesDialog::applyChanges()
     }
 
     const bool uiChanged = hasUIChanges();
+    const bool windowChanged = hasWindowChanges();
 
     const bool searchResultHighlightingChanged =
         showHighlightedSearchTermsCheckBox_ &&
@@ -2674,17 +2723,7 @@ bool PreferencesDialog::applyChanges()
             ? showFiltersDropdownCheckBox_->isChecked()
             : preferences_.showFiltersDropdown();
 
-    if (uiChanged) {
-        /*
-         * NOTE: The following preferences are only written to in AppController, NOT from here:
-         * - autoRefreshResultsForLiveUpdates
-         * - showFiltersDropdown
-         *
-         * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog,
-         * so the AppController is used as a central location to save them. Therefore, we don't want to
-         * overwrite them here.
-         */
-
+    if (windowChanged) {
         if (createNewWindowOnLaunchCheckBox_) {
             preferences_.setCreateNewWindowOnLaunch(
                 createNewWindowOnLaunchCheckBox_->isChecked()
@@ -2714,6 +2753,18 @@ bool PreferencesDialog::applyChanges()
                 carryResultSortingToNewWindowsCheckBox_->isChecked()
             );
         }
+    }
+
+    if (uiChanged) {
+        /*
+         * NOTE: The following preferences are only written to in AppController, NOT from here:
+         * - autoRefreshResultsForLiveUpdates
+         * - showFiltersDropdown
+         *
+         * This is because these preferences can be changed from the MainWindow OR from the PreferencesDialog,
+         * so the AppController is used as a central location to save them. Therefore, we don't want to
+         * overwrite them here.
+         */
 
         if (sortDateDescendingFirstCheckBox_) {
             preferences_.setSortDateDescendingFirst(

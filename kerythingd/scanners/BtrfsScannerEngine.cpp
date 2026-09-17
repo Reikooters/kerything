@@ -27,6 +27,13 @@
 #include <linux/btrfs_tree.h>
 
 namespace {
+    /*
+     * Small RAII wrapper for file descriptors.
+     *
+     * The Btrfs tree-search ioctl is issued against any fd inside the mounted
+     * filesystem. We open one mounted Btrfs root directory and reuse that fd for
+     * all root/tree searches.
+     */
     struct UniqueFd {
         int fd = -1;
 
@@ -78,6 +85,14 @@ namespace {
         }
     };
 
+    /*
+     * Minimal /proc/self/mountinfo representation.
+     *
+     * For Btrfs, mountinfo is important because a single block device can expose
+     * many mounted subvolumes. The mountinfo "root" field is the mounted filesystem
+     * root, e.g. "/@", "/@home", "/@cache", while the mount point is the VFS path,
+     * e.g. "/", "/home", "/var/cache".
+     */
     struct MountInfoEntry {
         std::string root;
         std::string mountPoint;
@@ -86,6 +101,13 @@ namespace {
         std::string superOptions;
     };
 
+    /*
+     * One mounted Btrfs root/subvolume selected for scanning.
+     *
+     * rootId is the Btrfs subvolume/root id, commonly shown as "subvolid=..."
+     * in mount options. Btrfs object ids/inode numbers are only unique within a
+     * root, so Kerything must treat (rootId, inode) as the true filesystem identity.
+     */
     struct MountedRoot {
         QString mountPoint;
         QString mountRoot;
@@ -95,6 +117,14 @@ namespace {
         QString subvolPath;
     };
 
+    /*
+     * Metadata read from BTRFS_INODE_ITEM_KEY items.
+     *
+     * Directory indexes tell us that a name exists under a parent directory, but
+     * the inode item carries file metadata such as size, mode, and timestamps.
+     * The scanner first builds this root-local inode map, then joins directory
+     * entries against it while emitting FileRecord objects.
+     */
     struct InodeInfo {
         quint64 inode = 0;
         quint64 size = 0;
@@ -103,6 +133,13 @@ namespace {
         bool present = false;
     };
 
+    /*
+     * Buffered output state for the daemon -> GUI scan pipeline.
+     *
+     * Btrfs records are produced from several mounted roots. Instead of sending
+     * one IPC message per file, records, namespace sidecars, and string-pool bytes
+     * are accumulated into chunks sized to stay below the protocol message limit.
+     */
     struct BtrfsStreamState {
         std::vector<FileRecord> records;
         std::vector<FileRecordNamespace> namespaces;
@@ -125,6 +162,11 @@ namespace {
             const ScannerHelper::FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
             const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
         {
+            /*
+             * FileRecord and FileRecordNamespace chunks must remain aligned:
+             * record N in the file-record chunk belongs to namespace sidecar N in
+             * the namespace chunk. The GUI validates this after scan completion.
+             */
             if (!records.empty()) {
                 std::vector<FileRecord> fileRecordChunk = std::move(records);
                 std::vector<FileRecordNamespace> namespaceChunk = std::move(namespaces);
@@ -149,6 +191,13 @@ namespace {
             if (!stringPool.empty()) {
                 std::vector<char> stringPoolChunk = std::move(stringPool);
 
+                /*
+                 * FileRecord::nameOffset is an absolute offset in the complete
+                 * string pool, not an offset relative to the current IPC chunk.
+                 * totalStringPoolLength tracks the number of string bytes already
+                 * flushed so newly emitted records can point to the final combined
+                 * pool after the GUI appends all chunks together.
+                 */
                 totalStringPoolLength += static_cast<uint32_t>(stringPoolChunk.size());
 
                 stringPool.clear();
@@ -176,6 +225,11 @@ namespace {
             const ScannerHelper::FileRecordNamespaceChunkCallback& onFileRecordNamespaceChunk,
             const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk)
         {
+            /*
+             * FileRecord stores name length in a quint16. Extremely long names are
+             * not expected on normal Linux filesystems, but skipping is safer than
+             * truncating because truncation would create misleading search results.
+             */
             if (name.size() > std::numeric_limits<quint16>::max()) {
                 return true;
             }
@@ -200,6 +254,12 @@ namespace {
             record.nameLen = static_cast<quint16>(name.size());
             record.flags = flags;
 
+            /*
+             * Btrfs inode/object ids are root-local. Two subvolumes may both have
+             * object id 12345, and they are different filesystem objects. The normal
+             * FileRecord fields keep the object ids; this sidecar provides the Btrfs
+             * root/subvolume namespace for the record and its parent.
+             */
             FileRecordNamespace namespaceEntry{};
             namespaceEntry.fsNamespace = rootId;
             namespaceEntry.parentFsNamespace = parentRootId;
@@ -212,6 +272,17 @@ namespace {
         }
     };
 
+    /*
+     * One directory entry found in a Btrfs root.
+     *
+     * rootId/parentInode identify the directory containing this name.
+     * childRootId/childInode identify the object named by the entry.
+     *
+     * For ordinary files and directories, childRootId == rootId.
+     * For a subvolume boundary, childRootId is the target subvolume root id and
+     * childInode is BTRFS_FIRST_FREE_OBJECTID, the root directory object id inside
+     * that target subvolume.
+     */
     struct DirEntry {
         quint64 rootId = 0;
         quint64 parentInode = 0;
@@ -222,6 +293,13 @@ namespace {
         quint8 btrfsType = 0;
     };
 
+    /*
+     * Deduplication key for directory entries.
+     *
+     * The same directory item may be encountered through index/ref variations or
+     * repeated scan continuation. Keep only one logical name -> object mapping per
+     * parent/root to avoid duplicate FileRecords.
+     */
     struct DirEntryKey {
         quint64 rootId = 0;
         quint64 parentInode = 0;
@@ -257,6 +335,13 @@ namespace {
         }
     };
 
+    /*
+     * All temporary data collected for one mounted Btrfs root.
+     *
+     * The scanner processes each mounted root independently because directory
+     * entries and inode items live in root-specific trees. The final index then
+     * combines them using namespace-aware FileRecord sidecars.
+     */
     struct RootScanState {
         MountedRoot mountedRoot;
 
@@ -264,12 +349,23 @@ namespace {
         std::vector<DirEntry> entries;
         std::unordered_set<DirEntryKey, DirEntryKeyHash> seenEntries;
 
+        /*
+         * Debug/path-reconstruction indexes. These are not used as the final
+         * Kerything parent pointers; final parent pointers are resolved later in
+         * IndexController using (namespace, inode) keys.
+         */
         std::unordered_map<quint64, std::vector<const DirEntry*>> entriesByChildInode;
         std::unordered_map<quint64, std::vector<const DirEntry*>> entriesByParentInode;
     };
 
     std::string decodeMountInfoField(const std::string& input)
     {
+        /*
+         * /proc/self/mountinfo escapes special characters using octal sequences,
+         * e.g. a space appears as "\040". Decode those so comparisons against
+         * QString mount points work for paths containing whitespace or other
+         * escaped characters.
+         */
         std::string out;
 
         for (std::size_t i = 0; i < input.size(); ++i) {
@@ -297,6 +393,19 @@ namespace {
 
     std::vector<MountInfoEntry> readMountInfo()
     {
+        /*
+         * mountinfo format is:
+         *
+         *   id parent major:minor root mountPoint mountOptions optional... -
+         *   fsType mountSource superOptions
+         *
+         * Only a small subset is needed here:
+         *   - root:        mounted filesystem root, e.g. "/@cache"
+         *   - mountPoint:  visible VFS path, e.g. "/var/cache"
+         *   - fsType:      must be "btrfs"
+         *   - mountSource: block device or source
+         *   - superOptions: contains "subvolid=..." and usually "subvol=..."
+         */
         std::ifstream file("/proc/self/mountinfo");
         std::vector<MountInfoEntry> entries;
 
@@ -353,6 +462,14 @@ namespace {
 
     std::optional<std::string> optionValue(std::string_view options, std::string_view key)
     {
+        /*
+         * Parse comma-separated mount option strings such as:
+         *
+         *   ro,ssd,space_cache=v2,subvolid=260,subvol=/@cache
+         *
+         * This intentionally handles only simple key=value options because that is
+         * all we need for subvolid/subvol extraction.
+         */
         std::size_t start = 0;
 
         while (start <= options.size()) {
@@ -423,6 +540,12 @@ namespace {
 
     bool sameCanonicalPath(const QString& lhs, const QString& rhs)
     {
+        /*
+         * Device discovery and mountinfo may spell the same mount point differently
+         * through symlinks or relative path components. Prefer canonical comparison
+         * when both paths exist, but fall back to direct string comparison if either
+         * path cannot be resolved.
+         */
         namespace fs = std::filesystem;
 
         std::error_code lhsError;
@@ -440,6 +563,19 @@ namespace {
 
     std::vector<MountedRoot> mountedBtrfsRootsForMountPoints(const QStringList& mountPoints)
     {
+        /*
+         * Convert the application's selected mount points into Btrfs roots.
+         *
+         * A single Btrfs filesystem can be mounted many times, once per subvolume.
+         * For example:
+         *
+         *   /          -> subvolid=256 subvol=/@
+         *   /home      -> subvolid=257 subvol=/@home
+         *   /var/cache -> subvolid=260 subvol=/@cache
+         *
+         * Kerything indexes each selected mounted root separately and later exposes
+         * records only through compatible mount points.
+         */
         std::vector<MountedRoot> roots;
         const std::vector<MountInfoEntry> mountInfo = readMountInfo();
 
@@ -491,6 +627,12 @@ namespace {
             }
         );
 
+        /*
+         * Avoid scanning the exact same mounted root/mount-point pair twice if it
+         * appears duplicated in the input. Multiple different mount points for the
+         * same root id are intentionally not collapsed here because those may affect
+         * result visibility elsewhere.
+         */
         roots.erase(
             std::unique(
                 roots.begin(),
@@ -515,6 +657,12 @@ namespace {
     template <typename T>
     T readUnaligned(const void* ptr)
     {
+        /*
+         * Btrfs ioctl search results are byte-packed in a buffer. Do not cast the
+         * data pointer directly to a struct pointer: it may be unaligned and that
+         * would be undefined behaviour on some architectures. memcpy into a local
+         * object is safe and lets the compiler optimize appropriately.
+         */
         T value{};
         std::memcpy(&value, ptr, sizeof(T));
         return value;
@@ -522,11 +670,20 @@ namespace {
 
     qint64 btrfsTimeToUnixSeconds(const btrfs_timespec& time)
     {
+        /*
+         * Kerything stores modification time as Unix seconds. Btrfs also provides
+         * nanoseconds, but the current FileRecord model does not store sub-second
+         * precision.
+         */
         return static_cast<qint64>(time.sec);
     }
 
     quint8 flagsFromMode(quint32 mode)
     {
+        /*
+         * Convert POSIX mode bits from the Btrfs inode item into Kerything's compact
+         * FileRecord flag set. Other file types are currently left as plain files.
+         */
         quint8 flags = 0;
 
         if (S_ISDIR(mode)) {
@@ -561,6 +718,24 @@ namespace {
         const ScannerHelper::CancelCallback& shouldCancel,
         QString* errorOut)
     {
+        /*
+         * Thin wrapper around BTRFS_IOC_TREE_SEARCH_V2.
+         *
+         * treeId is the Btrfs root/subvolume id to search. The remaining bounds form
+         * a key range. Btrfs keys are ordered lexicographically by:
+         *
+         *   (objectid, type, offset)
+         *
+         * The scanner uses this helper for two passes:
+         *   1. BTRFS_INODE_ITEM_KEY: metadata by inode/objectid
+         *   2. BTRFS_DIR_INDEX_KEY:  directory names by parent directory objectid
+         *
+         * Important: the ioctl continuation behaviour can still yield keys outside
+         * the logical type range requested by the caller. Therefore each returned
+         * header is filtered below before its payload is interpreted. Without that
+         * guard, non-inode payloads such as extent data can be misread as inode
+         * structs, producing nonsense sizes/timestamps.
+         */
         static constexpr std::size_t BufferSize = 1024 * 1024;
 
         std::vector<char> buffer(sizeof(btrfs_ioctl_search_args_v2) + BufferSize);
@@ -607,9 +782,26 @@ namespace {
                     return false;
                 }
 
+                /*
+                 * Each returned item is:
+                 *
+                 *   btrfs_ioctl_search_header
+                 *   payload bytes of length header.len
+                 *
+                 * The payload type is determined solely by header.type. Never parse
+                 * itemPtr as a specific Btrfs struct until header.type/header.len have
+                 * been validated by this helper and by the caller.
+                 */
                 const auto header = readUnaligned<btrfs_ioctl_search_header>(itemPtr);
                 itemPtr += sizeof(btrfs_ioctl_search_header);
 
+                /*
+                 * Defensive type/range filter.
+                 *
+                 * This is intentionally silent: out-of-range keys are expected during
+                 * broad object-id scans. The caller asked for a logical range, so only
+                 * items inside that range may be passed to onItem.
+                 */
                 if (header.objectid < minObjectId ||
                     header.objectid > maxObjectId ||
                     header.type < minType ||
@@ -633,6 +825,14 @@ namespace {
                 return true;
             }
 
+            /*
+             * Continue after the last key returned by the previous ioctl call.
+             *
+             * Because Btrfs keys are ordered as (objectid, type, offset), incrementing
+             * offset is normally enough. If offset overflows, advance type; if type
+             * moves beyond the caller's maximum type, wrap type back to the requested
+             * minimum and advance objectid.
+             */
             key.min_objectid = lastHeader.objectid;
             key.min_type = lastHeader.type;
             key.min_offset = lastHeader.offset + 1;
@@ -645,6 +845,11 @@ namespace {
                 }
             }
 
+            /*
+             * The kernel overwrites nr_items with the number of items actually
+             * returned. Reset it before the next ioctl call to request another full
+             * batch.
+             */
             key.nr_items = 4096;
         }
     }
@@ -655,6 +860,13 @@ namespace {
         const ScannerHelper::CancelCallback& shouldCancel,
         QString* errorOut)
     {
+        /*
+         * Read all inode metadata items for this mounted Btrfs root.
+         *
+         * BTRFS_INODE_ITEM_KEY payloads are fixed-size btrfs_inode_item structs.
+         * Their objectid is the inode/object id. Later, directory entries reference
+         * these same object ids so metadata can be joined onto names.
+         */
         return treeSearch(
             fd,
             root.mountedRoot.rootId,
@@ -663,6 +875,14 @@ namespace {
             BTRFS_INODE_ITEM_KEY,
             BTRFS_INODE_ITEM_KEY,
             [&root](const btrfs_ioctl_search_header& header, const char* data) {
+                /*
+                 * Be strict before parsing.
+                 *
+                 * This guard prevents the historical failure mode where non-inode
+                 * items returned by BTRFS_IOC_TREE_SEARCH_V2 were interpreted as
+                 * btrfs_inode_item payloads, producing huge bogus file sizes and
+                 * invalid timestamps.
+                 */
                 if (header.type != BTRFS_INODE_ITEM_KEY ||
                     header.offset != 0 ||
                     header.len != sizeof(btrfs_inode_item)) {
@@ -689,6 +909,11 @@ namespace {
                 info.flags = flagsFromMode(item.mode);
                 info.present = true;
 
+                /*
+                 * Store by object id inside this root. The root id namespace is
+                 * implicit because each RootScanState represents exactly one Btrfs
+                 * root/subvolume.
+                 */
                 root.inodes[info.inode] = info;
                 return true;
             },
@@ -705,6 +930,14 @@ namespace {
         const ScannerHelper::CancelCallback& shouldCancel,
         QString* errorOut)
     {
+        /*
+         * Read directory index items for this root.
+         *
+         * BTRFS_DIR_INDEX_KEY items are keyed by the parent directory object id.
+         * The payload contains a btrfs_dir_item followed by the UTF-8 name bytes.
+         * These entries provide the name and parent relationship; inode metadata is
+         * joined separately using the child object's object id.
+         */
         return treeSearch(
             fd,
             root.mountedRoot.rootId,
@@ -713,6 +946,10 @@ namespace {
             BTRFS_DIR_INDEX_KEY,
             BTRFS_DIR_INDEX_KEY,
             [&root, &mountedRootIds, &options](const btrfs_ioctl_search_header& header, const char* data) {
+                /*
+                 * treeSearch already filters by type, but keep this local check so
+                 * future refactors cannot accidentally parse the wrong payload type.
+                 */
                 if (header.type != BTRFS_DIR_INDEX_KEY) {
                     return true;
                 }
@@ -730,6 +967,11 @@ namespace {
                     return true;
                 }
 
+                /*
+                 * The filename immediately follows btrfs_dir_item inside the item
+                 * payload. Bounds-check before constructing QString from the raw
+                 * bytes.
+                 */
                 const std::size_t nameOffset = sizeof(btrfs_dir_item);
                 if (nameOffset + item.name_len > header.len) {
                     return true;
@@ -743,8 +985,16 @@ namespace {
                 quint64 childRootId = root.mountedRoot.rootId;
                 quint64 childInode = childObjectId;
 
-                // Btrfs encodes subvolume directory entries as type DIR with
-                // location.type == BTRFS_ROOT_ITEM_KEY and location.objectid == root id.
+                /*
+                 * Subvolume boundary handling.
+                 *
+                 * Btrfs represents a subvolume as a directory-like entry in the
+                 * parent root, but the entry's location points to a ROOT_ITEM rather
+                 * than an inode item. The objectid is the child subvolume's root id.
+                 *
+                 * For Kerything, this means the visible directory name belongs in the
+                 * parent root, while its contents live in a different root namespace.
+                 */
                 const bool isSubvolumeBoundary =
                     item.location.type == BTRFS_ROOT_ITEM_KEY;
 
@@ -752,6 +1002,14 @@ namespace {
                     childRootId = childObjectId;
                     childInode = BTRFS_FIRST_FREE_OBJECTID;
 
+                    /*
+                     * Mounted-only policy.
+                     *
+                     * Do not silently descend into child subvolumes that are present
+                     * in Btrfs metadata but not mounted/selected. If a child subvolume
+                     * is mounted, it will be scanned as its own RootScanState and
+                     * records will carry that child root id as their namespace.
+                     */
                     if (options.skipUnmountedSubvolumeBoundaries &&
                         !mountedRootIds.contains(childRootId)) {
                         return true;
@@ -773,6 +1031,11 @@ namespace {
                 key.childInode = entry.childInode;
                 key.name = entry.name;
 
+                /*
+                 * Avoid duplicate logical entries. Btrfs can expose both directory
+                 * index/ref information, and future scanner changes may widen which
+                 * item types are visited. Deduplicating here keeps output stable.
+                 */
                 if (!root.seenEntries.insert(std::move(key)).second) {
                     return true;
                 }
@@ -787,6 +1050,14 @@ namespace {
 
     void buildEntryIndexes(RootScanState& root)
     {
+        /*
+         * Build lightweight indexes used for debug path reconstruction.
+         *
+         * entriesByChildInode intentionally indexes only entries whose child object
+         * is in the same root. Subvolume boundary entries point into another Btrfs
+         * root namespace and cannot be reconstructed by walking this root's parent
+         * chain alone.
+         */
         root.entriesByChildInode.clear();
         root.entriesByParentInode.clear();
 
@@ -816,12 +1087,23 @@ namespace {
         quint64 inode,
         int depth = 0)
     {
+        /*
+         * Debug-only path reconstruction from directory entries.
+         *
+         * The production index does not use this for final parent pointers. It is
+         * only used by debug printing to make raw Btrfs object ids human-readable.
+         */
         static constexpr int MaxDepth = 4096;
 
         if (inode == BTRFS_FIRST_FREE_OBJECTID) {
             return root.mountedRoot.mountPoint;
         }
 
+        /*
+         * Defensive recursion limit. A valid directory tree should not approach
+         * this depth, but corrupted metadata or a scanner bug should not recurse
+         * forever while printing diagnostics.
+         */
         if (depth > MaxDepth) {
             return QStringLiteral("<path-depth-limit>");
         }
@@ -844,6 +1126,14 @@ namespace {
         const RootScanState& root,
         const DirEntry& entry)
     {
+        /*
+         * Debug helper for a single directory entry.
+         *
+         * Subvolume boundary entries cannot be rendered as normal child paths here
+         * because their child object lives in another root namespace. Make that
+         * explicit in debug output rather than pretending the boundary is a regular
+         * directory record.
+         */
         if (entry.childRootId != root.mountedRoot.rootId) {
             return QStringLiteral("<mounted-subvolume-boundary rootId=%1 name=%2>")
                 .arg(entry.childRootId)
@@ -873,6 +1163,11 @@ namespace {
 
     void printRecords(const RootScanState& root)
     {
+        /*
+         * Diagnostic dump of the root-local directory entries after inode metadata
+         * has been joined where possible. This is useful when comparing scanner
+         * output with `find`, `stat`, Dolphin, or `btrfs inspect-internal`.
+         */
         for (const DirEntry& entry : root.entries) {
             const auto inodeIt = root.inodes.find(entry.childInode);
 
@@ -897,7 +1192,11 @@ namespace {
             const QString path = reconstructEntryPath(root, entry);
             const bool isSubvolumeBoundary = entry.childRootId != entry.rootId;
 
-            // Boundary entries are debug-only and must not become normal FileRecords.
+            /*
+             * Boundary entries are printed for diagnosis only. In the real scan,
+             * mounted child subvolumes are represented by their own root record and
+             * their own entries, with FileRecordNamespace preserving root identity.
+             */
             std::cout << (isSubvolumeBoundary ? "BTRFS_BOUNDARY" : "BTRFS_RECORD")
                       << " rootId=" << entry.rootId
                       << " inode=" << entry.childInode
@@ -969,6 +1268,22 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
     const ScannerHelper::CancelCallback& shouldCancel,
     const ScannerHelper::ProgressCallback& onProgress)
 {
+    /*
+     * Production Btrfs scan flow:
+     *
+     *   1. Resolve selected VFS mount points to mounted Btrfs roots/subvolumes.
+     *   2. Open one Btrfs mount point to obtain an ioctl-capable fd.
+     *   3. For each mounted root:
+     *        a. scan inode items into root-local metadata map
+     *        b. scan directory index items into root-local name/parent entries
+     *   4. Stream synthetic root records and directory-entry records into the
+     *      normal Kerything FileRecord pipeline.
+     *
+     * Btrfs-specific identity is preserved by FileRecordNamespace sidecars:
+     *
+     *   FileRecord::fsIndex         = Btrfs objectid/inode
+     *   FileRecordNamespace::fsNamespace = Btrfs root/subvolume id
+     */
     if (shouldCancel && shouldCancel()) {
         return false;
     }
@@ -989,6 +1304,11 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
         O_RDONLY | O_DIRECTORY | O_CLOEXEC
     ));
 
+    /*
+     * BTRFS_IOC_TREE_SEARCH_V2 works through an fd on the mounted Btrfs filesystem.
+     * It does not need a separate fd per subvolume; the tree_id in the search key
+     * selects which Btrfs root/subvolume tree to search.
+     */
     if (!fd.valid()) {
         if (onError) {
             onError(errnoText("Failed to open Btrfs mount point"));
@@ -1000,6 +1320,11 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
     std::unordered_set<quint64> mountedRootIds;
     mountedRootIds.reserve(mountedRoots.size());
 
+    /*
+     * Fast lookup used when a directory entry crosses a subvolume boundary.
+     * We only keep such boundary entries if the target root is also selected for
+     * this scan.
+     */
     for (const MountedRoot& root : mountedRoots) {
         mountedRootIds.insert(root.rootId);
     }
@@ -1037,6 +1362,10 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
             return false;
         }
 
+        /*
+         * Scan this root/subvolume in isolation. Object ids read during these two
+         * passes are meaningful only inside mountedRoot.rootId.
+         */
         RootScanState state;
         state.mountedRoot = mountedRoot;
 
@@ -1075,6 +1404,12 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
             return false;
         }
 
+        /*
+         * Build debug/path helper indexes while state.entries is still stable.
+         * These indexes store pointers into state.entries, so they must be rebuilt
+         * after all entries have been pushed and before the state is moved into
+         * rootStates.
+         */
         buildEntryIndexes(state);
         rootStates.push_back(std::move(state));
 
@@ -1095,6 +1430,10 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
     stream.namespaces.reserve(BtrfsStreamState::kRecordsPerIpcChunk);
     stream.stringPool.reserve(BtrfsStreamState::kMaxIpcBufferSizeBytes);
 
+    /*
+     * Progress estimate: one emitted root record per mounted root, plus one record
+     * per collected directory entry.
+     */
     std::size_t estimatedEntryCount = 0;
     for (const RootScanState& root : rootStates) {
         estimatedEntryCount += root.entries.size();
@@ -1120,6 +1459,11 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
         qint64 rootModificationTime = 0;
         quint8 rootFlags = FileRecord_IsDir;
 
+        /*
+         * BTRFS_FIRST_FREE_OBJECTID is the conventional object id for a Btrfs root
+         * directory. Use its inode item metadata for the synthetic namespace root
+         * record when available.
+         */
         const auto rootInodeIt = root.inodes.find(BTRFS_FIRST_FREE_OBJECTID);
         if (rootInodeIt != root.inodes.end()) {
             rootSize = rootInodeIt->second.size;
@@ -1156,6 +1500,17 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
                 return false;
             }
 
+            /*
+             * Metadata lookup may need to use a different root than the parent entry.
+             *
+             * Normal entry:
+             *   entry.rootId == entry.childRootId, so metadata is in the current root.
+             *
+             * Subvolume boundary entry:
+             *   entry.rootId is the parent root, but entry.childRootId is the child
+             *   subvolume root. The child root directory metadata lives in the child
+             *   RootScanState.
+             */
             const RootScanState* childRoot =
                 findRootStateById(rootStates, entry.childRootId);
 
@@ -1177,6 +1532,12 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
                 flags = inodeInfo->flags;
             }
             else {
+                /*
+                 * If inode metadata is unavailable, still emit a usable record from
+                 * the directory entry. This can happen for boundary/stub cases or
+                 * unusual metadata. Type information from btrfs_dir_item is enough to
+                 * mark directories and symlinks.
+                 */
                 if (isDirectoryFromBtrfsDirType(entry.btrfsType)) {
                     flags |= FileRecord_IsDir;
                 }
@@ -1186,6 +1547,11 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
                 }
             }
 
+            /*
+             * Store names as UTF-8 bytes in the shared string pool. QString is used
+             * while scanning for convenience, but FileRecord stores byte offsets and
+             * lengths into the pooled UTF-8 representation.
+             */
             const QByteArray nameUtf8 = entry.name.toUtf8();
             if (nameUtf8.isEmpty()) {
                 continue;
@@ -1260,6 +1626,21 @@ bool BtrfsScannerEngine::debugScanMountedFilesystem(
     const ScannerHelper::ErrorCallback& onError,
     const ScannerHelper::CancelCallback& shouldCancel)
 {
+    /*
+     * Diagnostic variant of scanMountedFilesystem().
+     *
+     * This runs the same metadata discovery passes but does not stream FileRecord
+     * chunks to the GUI. Instead it prints raw-ish scanner state so Btrfs behaviour
+     * can be compared with external tools such as:
+     *
+     *   findmnt
+     *   btrfs subvolume list
+     *   find -xdev -inum ...
+     *   stat
+     *
+     * Keep this path close to the production scan path so diagnostics reproduce
+     * real scanner behaviour.
+     */
     if (shouldCancel && shouldCancel()) {
         return false;
     }
@@ -1287,6 +1668,10 @@ bool BtrfsScannerEngine::debugScanMountedFilesystem(
     std::unordered_set<quint64> mountedRootIds;
     mountedRootIds.reserve(mountedRoots.size());
 
+    /*
+     * Used by scanDirectoryIndexItems() to decide whether a subvolume boundary
+     * entry points to a root that is included in this debug scan.
+     */
     for (const MountedRoot& root : mountedRoots) {
         mountedRootIds.insert(root.rootId);
     }
@@ -1339,6 +1724,10 @@ bool BtrfsScannerEngine::debugScanMountedFilesystem(
         printMountTable(rootStates);
     }
 
+    /*
+     * Print sections are independent so tests can request just the mount table,
+     * just records, or only summary counts.
+     */
     if (options.printRecords) {
         for (const RootScanState& root : rootStates) {
             printRecords(root);

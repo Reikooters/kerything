@@ -28,6 +28,12 @@ namespace BtrfsScannerEngine {
      *
      * Btrfs object ids are only unique within a root/subvolume, so this scanner
      * emits one FileRecordNamespace sidecar entry for every FileRecord.
+     *
+     * Important implementation note:
+     * BTRFS_IOC_TREE_SEARCH_V2 returns raw key/value items. Every item payload must
+     * be validated against its returned key type and length before being interpreted
+     * as a concrete Btrfs structure. Do not assume a requested key range guarantees
+     * all returned payloads have the requested type.
      */
     bool scanMountedFilesystem(
         const QString& devicePath,

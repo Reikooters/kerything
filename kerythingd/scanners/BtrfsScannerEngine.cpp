@@ -610,6 +610,15 @@ namespace {
                 const auto header = readUnaligned<btrfs_ioctl_search_header>(itemPtr);
                 itemPtr += sizeof(btrfs_ioctl_search_header);
 
+                if (header.objectid < minObjectId ||
+                    header.objectid > maxObjectId ||
+                    header.type < minType ||
+                    header.type > maxType) {
+                    itemPtr += header.len;
+                    lastHeader = header;
+                    continue;
+                }
+
                 if (!onItem(header, itemPtr)) {
                     return false;
                 }
@@ -654,7 +663,20 @@ namespace {
             BTRFS_INODE_ITEM_KEY,
             BTRFS_INODE_ITEM_KEY,
             [&root](const btrfs_ioctl_search_header& header, const char* data) {
-                if (header.len < sizeof(btrfs_inode_item)) {
+                if (header.type != BTRFS_INODE_ITEM_KEY ||
+                    header.offset != 0 ||
+                    header.len != sizeof(btrfs_inode_item)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                    std::cerr << "[BtrfsScannerEngine] skipping non-canonical inode item"
+                              << " rootId=" << root.mountedRoot.rootId
+                              << " objectid=" << header.objectid
+                              << " type=" << header.type
+                              << " expectedType=" << BTRFS_INODE_ITEM_KEY
+                              << " offset=" << header.offset
+                              << " len=" << header.len
+                              << " sizeofInodeItem=" << sizeof(btrfs_inode_item)
+                              << "\n";
+#endif
                     return true;
                 }
 
@@ -691,6 +713,10 @@ namespace {
             BTRFS_DIR_INDEX_KEY,
             BTRFS_DIR_INDEX_KEY,
             [&root, &mountedRootIds, &options](const btrfs_ioctl_search_header& header, const char* data) {
+                if (header.type != BTRFS_DIR_INDEX_KEY) {
+                    return true;
+                }
+
                 if (header.len < sizeof(btrfs_dir_item)) {
                     return true;
                 }

@@ -707,6 +707,11 @@ namespace {
         return type == BTRFS_FT_SYMLINK;
     }
 
+    bool isSubvolumeBoundaryEntry(const DirEntry& entry) noexcept
+    {
+        return entry.childRootId != entry.rootId;
+    }
+
     bool treeSearch(
         int fd,
         quint64 treeId,
@@ -1432,11 +1437,18 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
 
     /*
      * Progress estimate: one emitted root record per mounted root, plus one record
-     * per collected directory entry.
+     * per streamable directory entry. Subvolume boundary entries are excluded because
+     * mounted child subvolumes are represented by their own synthetic root records.
      */
     std::size_t estimatedEntryCount = 0;
     for (const RootScanState& root : rootStates) {
-        estimatedEntryCount += root.entries.size();
+        estimatedEntryCount += std::count_if(
+            root.entries.begin(),
+            root.entries.end(),
+            [](const DirEntry& entry) {
+                return !isSubvolumeBoundaryEntry(entry);
+            }
+        );
     }
 
     if (onProgress) {
@@ -1501,16 +1513,35 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
             }
 
             /*
-             * Metadata lookup may need to use a different root than the parent entry.
+             * Do not emit Btrfs subvolume boundary entries as normal search
+             * results.
              *
-             * Normal entry:
-             *   entry.rootId == entry.childRootId, so metadata is in the current root.
+             * A boundary entry is a directory-like name in one root whose location
+             * points to another Btrfs root/subvolume. If that child subvolume is
+             * mounted and selected, it is scanned separately and represented by its
+             * own synthetic root record with an empty name.
              *
-             * Subvolume boundary entry:
-             *   entry.rootId is the parent root, but entry.childRootId is the child
-             *   subvolume root. The child root directory metadata lives in the child
-             *   RootScanState.
+             * Emitting the boundary entry itself would create fake paths such as:
+             *
+             *   /mnt/cachyos/@
+             *   /mnt/cachyos/home/@home
+             *   /mnt/cachyos/var/cache/@cache
+             *
+             * which do not exist in the mounted VFS view.
              */
+            if (isSubvolumeBoundaryEntry(entry)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                std::cerr << "[BtrfsScannerEngine] skipping subvolume boundary record"
+                          << " parentRootId=" << entry.rootId
+                          << " childRootId=" << entry.childRootId
+                          << " parentInode=" << entry.parentInode
+                          << " childInode=" << entry.childInode
+                          << " name=" << entry.name.toStdString()
+                          << "\n";
+#endif
+                continue;
+            }
+
             const RootScanState* childRoot =
                 findRootStateById(rootStates, entry.childRootId);
 

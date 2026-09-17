@@ -429,16 +429,38 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
              *
              * Btrfs subvolumes are different: mountinfo stores the mounted
              * subvolume path in the "root" field, for example "/@", "/@home",
-             * or "/@var/log". Those are real btrfs mount points, so accept
-             * non-root mountinfo roots when both the probed block device and
-             * the mounted filesystem are btrfs.
+             * or "/@/var/lib/portables". Those are real Btrfs mount points only
+             * when the mountinfo root matches the Btrfs subvol= option.
+             *
+             * Example of a real mounted Btrfs subvolume:
+             *   root=/@home
+             *   subvol=/@home
+             *   mountPoint=/home
+             *
+             * Example of a bind mount inside an already mounted Btrfs subvolume:
+             *   root=/@/usr
+             *   subvol=/@
+             *   mountPoint=/usr
+             *
+             * The second case must be ignored here, otherwise every record in the
+             * @ subvolume can be expanded through /, /usr, /etc, /boot, etc.
              */
             const QString mountedFsType = QString::fromStdString(mi.fsType).toLower();
-            const bool isBtrfsSubvolumeMount =
+            const QString mountRoot = QString::fromStdString(mi.root);
+            const QString subvolPath = parseStringMountOption(mi.superOptions, "subvol");
+
+            const bool isBtrfsMount =
                 fsType == QStringLiteral("btrfs") &&
                 mountedFsType == QStringLiteral("btrfs");
 
-            if (mi.root != "/" && !isBtrfsSubvolumeMount) {
+            const bool isBtrfsSubvolumeRootMount =
+                isBtrfsMount &&
+                (
+                    mountRoot == QStringLiteral("/") ||
+                    (!subvolPath.isEmpty() && mountRoot == subvolPath)
+                );
+
+            if (mi.root != "/" && !isBtrfsSubvolumeRootMount) {
                 continue;
             }
 
@@ -463,10 +485,10 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
                 BlockDeviceMountInfo mountInfoEntry;
                 mountInfoEntry.mountPoint = mountPoint;
                 mountInfoEntry.fsType = mountedFsType;
-                mountInfoEntry.root = QString::fromStdString(mi.root);
-                mountInfoEntry.subvolPath = parseStringMountOption(mi.superOptions, "subvol");
+                mountInfoEntry.root = mountRoot;
+                mountInfoEntry.subvolPath = subvolPath;
 
-                if (isBtrfsSubvolumeMount) {
+                if (isBtrfsMount) {
                     mountInfoEntry.btrfsRootId =
                         parseUnsignedMountOption(mi.superOptions, "subvolid");
                 }

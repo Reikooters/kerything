@@ -939,9 +939,10 @@ namespace {
          * Read directory index items for this root.
          *
          * BTRFS_DIR_INDEX_KEY items are keyed by the parent directory object id.
-         * The payload contains a btrfs_dir_item followed by the UTF-8 name bytes.
-         * These entries provide the name and parent relationship; inode metadata is
-         * joined separately using the child object's object id.
+         * The payload contains one or more packed btrfs_dir_item records. Each
+         * record is followed by its UTF-8 name bytes and optional data bytes.
+         * These entries provide the name and parent relationship; inode metadata
+         * is joined separately using the child object's object id.
          */
         return treeSearch(
             fd,
@@ -959,93 +960,137 @@ namespace {
                     return true;
                 }
 
-                if (header.len < sizeof(btrfs_dir_item)) {
-                    return true;
-                }
+                std::size_t offset = 0;
 
-                const auto item = readUnaligned<btrfs_dir_item>(data);
+                while (offset < header.len) {
+                    if (header.len - offset < sizeof(btrfs_dir_item)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                        std::cerr << "[BtrfsScannerEngine] skipping truncated packed dir item"
+                                  << " rootId=" << root.mountedRoot.rootId
+                                  << " parentObjectId=" << header.objectid
+                                  << " offset=" << offset
+                                  << " remaining=" << (header.len - offset)
+                                  << " len=" << header.len
+                                  << "\n";
+#endif
+                        break;
+                    }
 
-                const quint64 childObjectId = item.location.objectid;
-                const quint8 type = item.type;
+                    const auto item = readUnaligned<btrfs_dir_item>(data + offset);
 
-                if (item.name_len == 0) {
-                    return true;
-                }
-
-                /*
-                 * The filename immediately follows btrfs_dir_item inside the item
-                 * payload. Bounds-check before constructing QString from the raw
-                 * bytes.
-                 */
-                const std::size_t nameOffset = sizeof(btrfs_dir_item);
-                if (nameOffset + item.name_len > header.len) {
-                    return true;
-                }
-
-                QString name = QString::fromUtf8(data + nameOffset, static_cast<int>(item.name_len));
-                if (name == QStringLiteral(".") || name == QStringLiteral("..")) {
-                    return true;
-                }
-
-                quint64 childRootId = root.mountedRoot.rootId;
-                quint64 childInode = childObjectId;
-
-                /*
-                 * Subvolume boundary handling.
-                 *
-                 * Btrfs represents a subvolume as a directory-like entry in the
-                 * parent root, but the entry's location points to a ROOT_ITEM rather
-                 * than an inode item. The objectid is the child subvolume's root id.
-                 *
-                 * For Kerything, this means the visible directory name belongs in the
-                 * parent root, while its contents live in a different root namespace.
-                 */
-                const bool isSubvolumeBoundary =
-                    item.location.type == BTRFS_ROOT_ITEM_KEY;
-
-                if (isSubvolumeBoundary) {
-                    childRootId = childObjectId;
-                    childInode = BTRFS_FIRST_FREE_OBJECTID;
+                    const std::size_t nameOffset = offset + sizeof(btrfs_dir_item);
+                    const std::size_t nameLength = item.name_len;
+                    const std::size_t dataOffset = nameOffset + nameLength;
+                    const std::size_t dataLength = item.data_len;
+                    const std::size_t nextOffset = dataOffset + dataLength;
 
                     /*
-                     * Mounted-only policy.
+                     * Each packed record is:
                      *
-                     * Do not silently descend into child subvolumes that are present
-                     * in Btrfs metadata but not mounted/selected. If a child subvolume
-                     * is mounted, it will be scanned as its own RootScanState and
-                     * records will carry that child root id as their namespace.
+                     *   btrfs_dir_item
+                     *   name bytes
+                     *   optional data bytes
+                     *
+                     * Validate the whole record before using any variable-length
+                     * fields. Include data_len in the stride even though normal
+                     * directory entries usually have no data payload.
                      */
-                    if (options.skipUnmountedSubvolumeBoundaries &&
-                        !mountedRootIds.contains(childRootId)) {
-                        return true;
+                    if (nameOffset > header.len ||
+                        dataOffset > header.len ||
+                        nextOffset > header.len ||
+                        nextOffset <= offset) {
+#ifdef KERYTHING_ENABLE_LOGGING
+                        std::cerr << "[BtrfsScannerEngine] skipping malformed packed dir item"
+                                  << " rootId=" << root.mountedRoot.rootId
+                                  << " parentObjectId=" << header.objectid
+                                  << " offset=" << offset
+                                  << " nameLen=" << item.name_len
+                                  << " dataLen=" << item.data_len
+                                  << " len=" << header.len
+                                  << "\n";
+#endif
+                        break;
                     }
+
+                    offset = nextOffset;
+
+                    if (item.name_len == 0) {
+                        continue;
+                    }
+
+                    const quint64 childObjectId = item.location.objectid;
+                    const quint8 type = item.type;
+
+                    QString name = QString::fromUtf8(
+                        data + nameOffset,
+                        static_cast<int>(item.name_len)
+                    );
+
+                    if (name == QStringLiteral(".") || name == QStringLiteral("..")) {
+                        continue;
+                    }
+
+                    quint64 childRootId = root.mountedRoot.rootId;
+                    quint64 childInode = childObjectId;
+
+                    /*
+                     * Subvolume boundary handling.
+                     *
+                     * Btrfs represents a subvolume as a directory-like entry in the
+                     * parent root, but the entry's location points to a ROOT_ITEM rather
+                     * than an inode item. The objectid is the child subvolume's root id.
+                     *
+                     * For Kerything, this means the visible directory name belongs in the
+                     * parent root, while its contents live in a different root namespace.
+                     */
+                    const bool isSubvolumeBoundary =
+                        item.location.type == BTRFS_ROOT_ITEM_KEY;
+
+                    if (isSubvolumeBoundary) {
+                        childRootId = childObjectId;
+                        childInode = BTRFS_FIRST_FREE_OBJECTID;
+
+                        /*
+                         * Mounted-only policy.
+                         *
+                         * Do not silently descend into child subvolumes that are present
+                         * in Btrfs metadata but not mounted/selected. If a child subvolume
+                         * is mounted, it will be scanned as its own RootScanState and
+                         * records will carry that child root id as their namespace.
+                         */
+                        if (options.skipUnmountedSubvolumeBoundaries &&
+                            !mountedRootIds.contains(childRootId)) {
+                            continue;
+                        }
+                    }
+
+                    DirEntry entry;
+                    entry.rootId = root.mountedRoot.rootId;
+                    entry.parentInode = header.objectid;
+                    entry.childRootId = childRootId;
+                    entry.childInode = childInode;
+                    entry.name = std::move(name);
+                    entry.btrfsType = type;
+
+                    DirEntryKey key;
+                    key.rootId = entry.rootId;
+                    key.parentInode = entry.parentInode;
+                    key.childRootId = entry.childRootId;
+                    key.childInode = entry.childInode;
+                    key.name = entry.name;
+
+                    /*
+                     * Avoid duplicate logical entries. Btrfs can expose both directory
+                     * index/ref information, and future scanner changes may widen which
+                     * item types are visited. Deduplicating here keeps output stable.
+                     */
+                    if (!root.seenEntries.insert(std::move(key)).second) {
+                        continue;
+                    }
+
+                    root.entries.push_back(std::move(entry));
                 }
 
-                DirEntry entry;
-                entry.rootId = root.mountedRoot.rootId;
-                entry.parentInode = header.objectid;
-                entry.childRootId = childRootId;
-                entry.childInode = childInode;
-                entry.name = std::move(name);
-                entry.btrfsType = type;
-
-                DirEntryKey key;
-                key.rootId = entry.rootId;
-                key.parentInode = entry.parentInode;
-                key.childRootId = entry.childRootId;
-                key.childInode = entry.childInode;
-                key.name = entry.name;
-
-                /*
-                 * Avoid duplicate logical entries. Btrfs can expose both directory
-                 * index/ref information, and future scanner changes may widen which
-                 * item types are visited. Deduplicating here keeps output stable.
-                 */
-                if (!root.seenEntries.insert(std::move(key)).second) {
-                    return true;
-                }
-
-                root.entries.push_back(std::move(entry));
                 return true;
             },
             shouldCancel,

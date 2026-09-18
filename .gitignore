@@ -29,3 +29,6 @@ pkg/
 
 # MeGit
 .project
+
+# Packaging
+releases/

@@ -630,13 +630,26 @@ QWidget* PreferencesDialog::createDevicesPage()
                 BlockDeviceDisplayUtils::isBtrfsDevice(knownDeviceIt.value())) {
                 liveUpdatesEnabledCheckBox_->setToolTip(
                     QStringLiteral(
-                        "Kerything will watch each discovered mounted Btrfs subvolume for this filesystem.\n"
-                        "Live updates use the Btrfs subvolume id and inode together so files in different\n"
-                        "subvolumes can be tracked correctly.\n\n"
+                        "<qt>"
+                        "<p>"
+                        "Kerything will try to keep this filesystem up to date using fanotify whenever it is mounted."
+                        "</p>"
+                        "<p>"
+                        "For Btrfs, Kerything may create a private, read-only helper mount so it can watch "
+                        "the filesystem root reliably, even on systems where your normal mounts are subvolumes "
+                        "such as <tt>/@</tt> or <tt>/@home</tt>."
+                        "</p>"
+                        "<p>"
+                        "This helper mount will be located under <tt>/run/kerythingd/btrfs-live</tt> and is "
+                        "used only by the Kerything daemon for change monitoring. It is mounted read-only "
+                        "with restricted options and is not intended for browsing."
+                        "</p>"
+                        "<p>Discovered mounted Btrfs subvolumes:</p>"
                         "%1"
-                    ).arg(BlockDeviceDisplayUtils::mountPointToolTipForBlockDevice(knownDeviceIt.value()))
+                        "</qt>"
+                    ).arg(BlockDeviceDisplayUtils::btrfsMountedSubvolumesTableHtml(knownDeviceIt.value()))
                 );
-                }
+            }
             else {
                 liveUpdatesEnabledCheckBox_->setToolTip(
                     QStringLiteral(

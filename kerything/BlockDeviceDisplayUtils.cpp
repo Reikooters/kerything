@@ -270,22 +270,28 @@ namespace BlockDeviceDisplayUtils {
             );
         }
 
-        html += QStringLiteral("Filesystem: %1<br>").arg(
+        html += QStringLiteral("Filesystem: %1").arg(
             filesystemDisplayTextForBlockDevice(blockDevice).toHtmlEscaped()
         );
 
         if (!blockDevice.mounted) {
-            html += QStringLiteral("This device is not currently mounted.");
+            html += QStringLiteral("<br>This device is not currently mounted.");
             return html;
         }
 
         if (!isBtrfsDevice(blockDevice)) {
             const QString mountPoint = blockDevice.primaryMountPoint.trimmed();
             html += mountPoint.isEmpty()
-                ? QStringLiteral("This device is currently mounted.")
-                : QStringLiteral("Currently mounted at <b>%1</b>.").arg(mountPoint.toHtmlEscaped());
+                ? QStringLiteral("<br>This device is currently mounted.")
+                : QStringLiteral("<br>Currently mounted at <b>%1</b>.").arg(mountPoint.toHtmlEscaped());
             return html;
         }
+
+        html += QStringLiteral(
+            "<p>For reliable live updates, Kerything may create a private, read-only helper "
+            "mount of this Btrfs filesystem. This is used only by the Kerything daemon for "
+            "change monitoring and does not change where your files are normally mounted.</p>"
+        );
 
         const qsizetype subvolumeCount = btrfsMountedSubvolumeCount(blockDevice);
 
@@ -294,6 +300,7 @@ namespace BlockDeviceDisplayUtils {
             : QStringLiteral("Kerything found <b>%1 mounted Btrfs subvolumes</b>:").arg(subvolumeCount);
 
         html += btrfsMountedSubvolumesTableHtml(blockDevice);
+
         return html;
     }
 }

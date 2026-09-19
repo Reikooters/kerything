@@ -122,7 +122,30 @@ In practice, this means that if a mounted Btrfs filesystem contains a child subv
 
 For example, if `/mnt/my-btrfs-device/my-child-subvolume` is a child subvolume, scanning `/mnt/my-btrfs-device` will not include files inside `my-child-subvolume`. However, if that child subvolume were also mounted at `/mnt/my-btrfs-device-child`, Kerything will index it through `/mnt/my-btrfs-device-child`.
 
-Known limitations:
+#### Live updates on Btrfs filesystems
+
+For reliable live updates on typical desktop installations, Kerything may
+create a private helper mount of the Btrfs filesystem root. This is needed because
+many distributions mount only selected Btrfs subvolumes, such as `/@` and `/@home`,
+while filesystem change monitoring works best when the daemon can watch from the
+filesystem root.
+
+The helper mount is created by `kerythingd` under:
+
+```text
+/run/kerythingd/btrfs-live/<device-id>
+```
+
+This mount is used only by the Kerything daemon for indexing and live-update
+tracking. It is mounted read-only, with restricted options such as no-execute, and
+is made private so it does not become part of your normal desktop mount layout.
+
+Depending on how `kerythingd` was started, especially when using systemd socket
+activation, this helper mount may not appear in ordinary user-session tools such
+as `lsblk`. This is expected and is a result of systemd mount namespace isolation.
+Kerything will clean up the helper mount when it is no longer needed.
+
+#### Known limitations for Btrfs
 
 - Only mounted Btrfs subvolumes are indexed.
 - Subvolume boundaries are not crossed during scanning.

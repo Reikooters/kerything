@@ -1306,6 +1306,118 @@ namespace {
 
         return &*it;
     }
+
+    QString normalizedMountPoint(QString mountPoint)
+    {
+        mountPoint = mountPoint.trimmed();
+
+        while (mountPoint.size() > 1 && mountPoint.endsWith(QLatin1Char('/'))) {
+            mountPoint.chop(1);
+        }
+
+        return mountPoint.isEmpty()
+            ? QStringLiteral("/")
+            : mountPoint;
+    }
+
+    int pathComponentCount(const QString& path)
+    {
+        const QString normalized = normalizedMountPoint(path);
+
+        if (normalized == QStringLiteral("/")) {
+            return 0;
+        }
+
+        return normalized.split(QLatin1Char('/'), Qt::SkipEmptyParts).size();
+    }
+
+    QString normalizedSubvolumePath(QString path)
+    {
+        path = path.trimmed();
+
+        while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
+            path.chop(1);
+        }
+
+        return path.isEmpty()
+            ? QStringLiteral("/")
+            : path;
+    }
+
+    int subvolumePathComponentCount(const QString& path)
+    {
+        const QString normalized = normalizedSubvolumePath(path);
+
+        if (normalized == QStringLiteral("/")) {
+            return 0;
+        }
+
+        return normalized.split(QLatin1Char('/'), Qt::SkipEmptyParts).size();
+    }
+
+    bool rootIsBetterSyntheticRootAnchor(
+        const RootScanState& candidate,
+        const RootScanState& currentBest)
+    {
+        const QString candidateMountPoint =
+            normalizedMountPoint(candidate.mountedRoot.mountPoint);
+
+        const QString currentBestMountPoint =
+            normalizedMountPoint(currentBest.mountedRoot.mountPoint);
+
+        const int candidateMountDepth = pathComponentCount(candidateMountPoint);
+        const int currentBestMountDepth = pathComponentCount(currentBestMountPoint);
+
+        if (candidateMountDepth != currentBestMountDepth) {
+            return candidateMountDepth < currentBestMountDepth;
+        }
+
+        const QString candidateSubvolumePath =
+            normalizedSubvolumePath(candidate.mountedRoot.subvolPath);
+
+        const QString currentBestSubvolumePath =
+            normalizedSubvolumePath(currentBest.mountedRoot.subvolPath);
+
+        const int candidateSubvolumeDepth =
+            subvolumePathComponentCount(candidateSubvolumePath);
+
+        const int currentBestSubvolumeDepth =
+            subvolumePathComponentCount(currentBestSubvolumePath);
+
+        if (candidateSubvolumeDepth != currentBestSubvolumeDepth) {
+            return candidateSubvolumeDepth < currentBestSubvolumeDepth;
+        }
+
+        if (candidateSubvolumePath.size() != currentBestSubvolumePath.size()) {
+            return candidateSubvolumePath.size() < currentBestSubvolumePath.size();
+        }
+
+        if (candidateMountPoint != currentBestMountPoint) {
+            return candidateMountPoint < currentBestMountPoint;
+        }
+
+        return candidate.mountedRoot.rootId < currentBest.mountedRoot.rootId;
+    }
+
+    std::unordered_set<quint64> syntheticRootIdsToKeep(const std::vector<RootScanState>& roots)
+    {
+        std::unordered_set<quint64> out;
+
+        if (roots.empty()) {
+            return out;
+        }
+
+        const RootScanState* bestRoot = &roots.front();
+
+        for (const RootScanState& root : roots) {
+            if (rootIsBetterSyntheticRootAnchor(root, *bestRoot)) {
+                bestRoot = &root;
+            }
+        }
+
+        out.insert(bestRoot->mountedRoot.rootId);
+        return out;
+    }
 }
 
 bool BtrfsScannerEngine::scanMountedFilesystem(
@@ -1481,12 +1593,21 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
     stream.stringPool.reserve(BtrfsStreamState::kMaxIpcBufferSizeBytes);
 
     /*
-     * Progress estimate: one emitted root record per mounted root, plus one record
-     * per streamable directory entry. Subvolume boundary entries are excluded because
-     * mounted child subvolumes are represented by their own synthetic root records.
+     * Progress estimate: one emitted root record for the chosen mounted-root anchor,
+     * plus one record per streamable directory entry. Subvolume boundary entries are
+     * excluded because mounted child subvolumes are scanned as separate roots.
      */
+    const std::unordered_set<quint64> syntheticRootsToKeep =
+        syntheticRootIdsToKeep(rootStates);
+
     std::size_t estimatedEntryCount = 0;
+    std::size_t estimatedSyntheticRootCount = 0;
+
     for (const RootScanState& root : rootStates) {
+        if (syntheticRootsToKeep.contains(root.mountedRoot.rootId)) {
+            ++estimatedSyntheticRootCount;
+        }
+
         estimatedEntryCount += std::count_if(
             root.entries.begin(),
             root.entries.end(),
@@ -1501,7 +1622,7 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
             .phase = QStringLiteral("Streaming Btrfs records"),
             .unit = QStringLiteral("records"),
             .processed = 0,
-            .total = static_cast<quint64>(estimatedEntryCount + rootStates.size())
+            .total = static_cast<quint64>(estimatedEntryCount + estimatedSyntheticRootCount)
         });
     }
 
@@ -1529,28 +1650,30 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
         }
 
         /*
-         * Emit one synthetic/real root record per mounted Btrfs root.
+         * Emit an empty-name root record only for the selected scan anchor.
          *
-         * Empty name plus self-parent means this root expands as the top of the
-         * indexed namespace. Path/mount expansion will become more precise in
-         * Phase 2.
+         * This keeps one useful openable/searchable root for the mounted Btrfs
+         * filesystem, such as "/" or "/mnt/cachyos", without producing one
+         * empty-name result per mounted subvolume.
          */
-        if (!stream.addRecord(
-                root.mountedRoot.rootId,
-                BTRFS_FIRST_FREE_OBJECTID,
-                root.mountedRoot.rootId,
-                BTRFS_FIRST_FREE_OBJECTID,
-                std::string_view{},
-                rootSize,
-                rootModificationTime,
-                rootFlags,
-                onFileRecordChunk,
-                onFileRecordNamespaceChunk,
-                onStringPoolChunk)) {
-            return false;
-        }
+        if (syntheticRootsToKeep.contains(root.mountedRoot.rootId)) {
+            if (!stream.addRecord(
+                    root.mountedRoot.rootId,
+                    BTRFS_FIRST_FREE_OBJECTID,
+                    root.mountedRoot.rootId,
+                    BTRFS_FIRST_FREE_OBJECTID,
+                    std::string_view{},
+                    rootSize,
+                    rootModificationTime,
+                    rootFlags,
+                    onFileRecordChunk,
+                    onFileRecordNamespaceChunk,
+                    onStringPoolChunk)) {
+                return false;
+            }
 
-        ++recordsStreamed;
+            ++recordsStreamed;
+        }
 
         for (const DirEntry& entry : root.entries) {
             if (shouldCancel && shouldCancel()) {
@@ -1660,7 +1783,7 @@ bool BtrfsScannerEngine::scanMountedFilesystem(
                     .phase = QStringLiteral("Streaming Btrfs records"),
                     .unit = QStringLiteral("records"),
                     .processed = recordsStreamed,
-                    .total = static_cast<quint64>(estimatedEntryCount + rootStates.size())
+                    .total = static_cast<quint64>(estimatedEntryCount + estimatedSyntheticRootCount)
                 });
             }
         }

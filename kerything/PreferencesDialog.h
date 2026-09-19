@@ -101,6 +101,7 @@ private:
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;
     bool showOfflineResultsForDevice(const QString& deviceId) const;
+    bool isBtrfsDevice(const QString& deviceId) const;
     bool unmountedScanningSupportedForDevice(const QString& deviceId) const;
     bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     bool liveUpdatesSupportedForDevice(const QString& deviceId) const;

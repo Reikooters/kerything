@@ -598,12 +598,24 @@ QWidget* PreferencesDialog::createDevicesPage()
             scanWhenUnmountedCheckBox_->setText(
                 QStringLiteral("Scan this device even when it is not mounted (EXT4/NTFS only)")
             );
-            scanWhenUnmountedCheckBox_->setToolTip(
-                QStringLiteral(
-                    "This filesystem is indexed with the generic mounted-device scanner,\n"
-                    "which uses Linux filesystem APIs and requires the device to be mounted."
-                )
-            );
+
+            if (isBtrfsDevice(deviceId)) {
+                scanWhenUnmountedCheckBox_->setToolTip(
+                    QStringLiteral(
+                        "Btrfs is indexed with a dedicated mounted Btrfs scanner so Kerything can handle\n"
+                        "subvolumes correctly. It still requires the filesystem to be mounted.\n\n"
+                        "Low-level offline scanning is currently available only for EXT4 and NTFS."
+                    )
+                );
+            } else {
+                scanWhenUnmountedCheckBox_->setToolTip(
+                    QStringLiteral(
+                        "This filesystem is indexed with the generic mounted-device scanner,\n"
+                        "which uses Linux filesystem APIs and requires the device to be mounted.\n\n"
+                        "Low-level offline scanning is currently available only for EXT4 and NTFS."
+                    )
+                );
+            }
         }
 
         liveUpdatesEnabledCheckBox_->setText(
@@ -1718,6 +1730,25 @@ bool PreferencesDialog::showOfflineResultsForDevice(const QString& deviceId) con
     }
 
     return true;
+}
+
+bool PreferencesDialog::isBtrfsDevice(const QString& deviceId) const
+{
+    const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
+    if (knownDeviceIt != knownDeviceById_.constEnd()) {
+        return BlockDeviceDisplayUtils::isBtrfsDevice(knownDeviceIt.value());
+    }
+
+    const IndexedDevicePreference preference =
+        originalPreferencesByDeviceId_.value(
+            deviceId,
+            IndexedDevicePreference{ .deviceId = deviceId }
+        );
+
+    return preference.fsType.trimmed().compare(
+        QStringLiteral("btrfs"),
+        Qt::CaseInsensitive
+    ) == 0;
 }
 
 bool PreferencesDialog::unmountedScanningSupportedForDevice(const QString& deviceId) const

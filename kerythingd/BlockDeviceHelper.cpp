@@ -476,6 +476,12 @@ std::vector<BlockDevice> BlockDeviceHelper::listKnownDevices()
 
             if (srcResolved.string() == devNode) {
                 const QString mountPoint = QString::fromStdString(mi.mountPoint);
+
+                if (mountPoint == QStringLiteral("/run/kerythingd") ||
+                    mountPoint.startsWith(QStringLiteral("/run/kerythingd/"))) {
+                    continue;
+                }
+
                 mountPoints << mountPoint;
                 mountFsTypeByMountPoint.insert(
                     mountPoint,

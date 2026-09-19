@@ -253,7 +253,14 @@ bool FanotifyWatcher::start()
         QString errorText = QStringLiteral("fanotify_mark failed for %1: %2")
             .arg(mountPoint_, QString::fromLocal8Bit(std::strerror(markErrno)));
 
-        if (markErrno == EOPNOTSUPP || markErrno == ENOSYS || markErrno == EINVAL) {
+        if (markErrno == EXDEV) {
+            errorText += QStringLiteral(
+                ". On Btrfs this commonly means the selected path is a subvolume mount. "
+                "FAN_MARK_FILESYSTEM with file-handle reporting may require the top-level "
+                "Btrfs root, usually subvolid=5."
+            );
+        }
+        else if (markErrno == EOPNOTSUPP || markErrno == ENOSYS || markErrno == EINVAL) {
             errorText += QStringLiteral(
                 ". This filesystem or kernel may not support the fanotify features required for live updates."
             );

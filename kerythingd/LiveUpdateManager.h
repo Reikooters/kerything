@@ -7,7 +7,9 @@
 #include <QHash>
 #include <QObject>
 #include <QString>
+#include <QSet>
 
+#include <optional>
 #include <vector>
 
 #include "BlockDevice.h"
@@ -50,7 +52,14 @@ private:
     static bool isLiveUpdateEligible(const BlockDevice& device);
     static QString maskToString(quint64 mask);
 
-    static std::vector<WatchTarget> watchTargetsForDevice(const BlockDevice& device);
+    std::vector<WatchTarget> watchTargetsForDevice(const BlockDevice& device);
+    [[nodiscard]] std::optional<QString> ensureBtrfsTopLevelMountForDevice(const BlockDevice& device);
+    static QString internalBtrfsTopLevelMountPointForDevice(const BlockDevice& device);
+    static QString sanitizedMountDirectoryName(QString value);
+    static bool isMountPoint(const QString& path);
+    static bool setDirectoryOwnerOnlyPermissions(const QString& path);
+    void cleanupStaleInternalBtrfsMounts();
+    void unmountInternalBtrfsMountIfUnused(const QString& mountPoint);
 
     void startWatcherForDevice(const BlockDevice& device);
     void startWatcherForTarget(const WatchTarget& target);
@@ -63,6 +72,7 @@ private:
     );
 
     QHash<QString, FanotifyWatcher*> watchersByKey_;
+    QSet<QString> internalBtrfsMountPoints_;
 };
 
 #endif // KERYTHINGD_LIVEUPDATEMANAGER_H

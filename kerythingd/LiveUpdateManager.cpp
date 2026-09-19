@@ -10,9 +10,17 @@
 #include <iostream>
 #include <optional>
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QSet>
+#include <QTextStream>
 
+#include <errno.h>
 #include <linux/fanotify.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
     struct ParsedBtrfsFileHandle {
@@ -131,12 +139,64 @@ namespace {
         return fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0;
     }
 
-    LiveUpdateOperation needsRescanOperation(const QString& reason)
+    bool isBtrfsTopLevelMount(const BlockDeviceMountInfo& mount)
     {
-        LiveUpdateOperation operation;
-        operation.kind = LiveUpdateOperationKind::NeedsRescan;
-        operation.reason = reason;
-        return operation;
+        if (!deviceIsBtrfs(mount.fsType)) {
+            return false;
+        }
+
+        /*
+         * mount.root comes from /proc/self/mountinfo's "root" field.
+         *
+         * For a Btrfs top-level root mount this is normally "/".
+         * The conventional top-level Btrfs root id is 5.
+         *
+         * Accept either signal because some mount option combinations may expose
+         * one more reliably than the other.
+         */
+        const QString root = mount.root.trimmed();
+        const QString subvolPath = mount.subvolPath.trimmed();
+
+        return root == QStringLiteral("/") ||
+               subvolPath == QStringLiteral("/") ||
+               mount.btrfsRootId == 5;
+    }
+
+    const BlockDeviceMountInfo* preferredBtrfsFanotifyMount(const BlockDevice& device)
+    {
+        const BlockDeviceMountInfo* firstBtrfsMount = nullptr;
+        const BlockDeviceMountInfo* shortestTopLevelMount = nullptr;
+
+        for (const BlockDeviceMountInfo& mount : device.mounts) {
+            if (mount.mountPoint.trimmed().isEmpty()) {
+                continue;
+            }
+
+            if (!deviceIsBtrfs(mount.fsType)) {
+                continue;
+            }
+
+            if (!firstBtrfsMount) {
+                firstBtrfsMount = &mount;
+            }
+
+            if (!isBtrfsTopLevelMount(mount)) {
+                continue;
+            }
+
+            if (!shortestTopLevelMount ||
+                mount.mountPoint.size() < shortestTopLevelMount->mountPoint.size()) {
+                shortestTopLevelMount = &mount;
+            }
+        }
+
+        /*
+         * Prefer a real top-level Btrfs mount if one is already visible.
+         * If none exists, return the first Btrfs mount as a diagnostic/fallback
+         * candidate. The caller can then decide to create an internal subvolid=5
+         * mount instead of trying to fanotify_mark this subvolume mount directly.
+         */
+        return shortestTopLevelMount ? shortestTopLevelMount : firstBtrfsMount;
     }
 
     bool applyParentIdentityFromDirectoryEntryInfo(
@@ -593,6 +653,7 @@ namespace {
 LiveUpdateManager::LiveUpdateManager(QObject* parent)
     : QObject(parent)
 {
+    cleanupStaleInternalBtrfsMounts();
 }
 
 void LiveUpdateManager::setKnownDevices(const std::vector<BlockDevice>& devices)
@@ -752,79 +813,468 @@ LiveUpdateManager::watchTargetsForDevice(const BlockDevice& device)
     }
 
     /*
-     * Btrfs can have multiple mounted subvolumes for one filesystem/device.
-     * Watch each mounted subvolume so live updates are generated with the
-     * correct root/subvolume namespace.
+     * Btrfs special case:
+     *
+     * fanotify FID reporting can fail with EXDEV when FAN_MARK_FILESYSTEM is
+     * placed through a Btrfs subvolume mount such as /, /home, or /mnt/foo
+     * mounted as subvol=/@.
+     *
+     * Prefer an already-mounted top-level root when one exists. On normal
+     * installations it often does not exist, so fall back to creating a private
+     * daemon-owned top-level mount under /run/kerythingd.
      */
-    targets.reserve(device.mounts.size());
+    const BlockDeviceMountInfo* selectedMount = preferredBtrfsFanotifyMount(device);
+    QString watchMountPoint;
 
-    for (const BlockDeviceMountInfo& mount : device.mounts) {
-        if (mount.mountPoint.trimmed().isEmpty()) {
-            continue;
+    if (selectedMount && isBtrfsTopLevelMount(*selectedMount)) {
+        watchMountPoint = selectedMount->mountPoint;
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cout << "Btrfs live updates: using existing top-level filesystem mark mountPoint="
+                  << watchMountPoint.toStdString()
+                  << " root="
+                  << selectedMount->root.toStdString()
+                  << " subvolPath="
+                  << selectedMount->subvolPath.toStdString()
+                  << " btrfsRootId="
+                  << selectedMount->btrfsRootId
+                  << " deviceId="
+                  << device.deviceId.toStdString()
+                  << "\n";
+#endif
+    }
+    else {
+        const std::optional<QString> internalMountPoint =
+            ensureBtrfsTopLevelMountForDevice(device);
+
+        if (!internalMountPoint) {
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cout << "Btrfs live updates: could not create internal top-level mount"
+                      << " deviceId="
+                      << device.deviceId.toStdString()
+                      << " devNode="
+                      << device.devNode.toStdString()
+                      << "\n";
+#endif
+            return targets;
         }
 
-        if (mount.fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) != 0) {
-            continue;
-        }
+        watchMountPoint = *internalMountPoint;
 
-        if (mount.btrfsRootId == 0) {
-            continue;
-        }
-
-        WatchTarget target;
-        target.deviceId = device.deviceId;
-        target.mountPoint = mount.mountPoint;
-        target.fsType = device.fsType;
-        target.fsNamespace = mount.btrfsRootId;
-        target.key = watchKeyForTarget(target);
-
-        if (!target.key.isEmpty()) {
-            targets.push_back(std::move(target));
-        }
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cout << "Btrfs live updates: using internal top-level filesystem mark mountPoint="
+                  << watchMountPoint.toStdString()
+                  << " deviceId="
+                  << device.deviceId.toStdString()
+                  << " devNode="
+                  << device.devNode.toStdString()
+                  << "\n";
+#endif
     }
 
-    std::sort(
-        targets.begin(),
-        targets.end(),
-        [](const WatchTarget& lhs, const WatchTarget& rhs) {
-            if (lhs.key != rhs.key) {
-                return lhs.key < rhs.key;
-            }
+    WatchTarget target;
+    target.deviceId = device.deviceId;
+    target.mountPoint = watchMountPoint;
+    target.fsType = device.fsType;
+    target.fsNamespace = 0;
+    target.key = watchKeyForTarget(target);
 
-            return lhs.fsNamespace < rhs.fsNamespace;
-        }
-    );
-
-    targets.erase(
-        std::unique(
-            targets.begin(),
-            targets.end(),
-            [](const WatchTarget& lhs, const WatchTarget& rhs) {
-                return lhs.key == rhs.key;
-            }
-        ),
-        targets.end()
-    );
-
-    /*
-     * Fallback for unusual mount metadata: if device.mounts was not populated
-     * but the device is mounted, try the primary mount point using namespace 0.
-     * startWatcherForTarget() will reject Btrfs namespace 0 conservatively.
-     */
-    if (targets.empty()) {
-        WatchTarget target;
-        target.deviceId = device.deviceId;
-        target.mountPoint = device.primaryMountPoint;
-        target.fsType = device.fsType;
-        target.fsNamespace = 0;
-        target.key = watchKeyForTarget(target);
-
-        if (!target.key.isEmpty()) {
-            targets.push_back(std::move(target));
-        }
+    if (!target.key.isEmpty()) {
+        targets.push_back(std::move(target));
     }
 
     return targets;
+}
+
+QString LiveUpdateManager::sanitizedMountDirectoryName(QString value)
+{
+    if (value.isEmpty()) {
+        return QStringLiteral("unknown");
+    }
+
+    for (QChar& ch : value) {
+        const bool safe =
+            ch.isLetterOrNumber() ||
+            ch == QLatin1Char('.') ||
+            ch == QLatin1Char('_') ||
+            ch == QLatin1Char('-');
+
+        if (!safe) {
+            ch = QLatin1Char('_');
+        }
+    }
+
+    return value;
+}
+
+QString LiveUpdateManager::internalBtrfsTopLevelMountPointForDevice(const BlockDevice& device)
+{
+    return QStringLiteral("/run/kerythingd/btrfs-live/%1")
+        .arg(sanitizedMountDirectoryName(device.deviceId));
+}
+
+bool LiveUpdateManager::isMountPoint(const QString& path)
+{
+    const QString cleanPath = QDir::cleanPath(path);
+    const QByteArray nativePath = QFile::encodeName(cleanPath);
+
+    struct stat pathStat {};
+    if (::stat(nativePath.constData(), &pathStat) != 0) {
+        return false;
+    }
+
+    const QString parentPath = QDir::cleanPath(cleanPath + QStringLiteral("/.."));
+    const QByteArray nativeParentPath = QFile::encodeName(parentPath);
+
+    struct stat parentStat {};
+    if (::stat(nativeParentPath.constData(), &parentStat) != 0) {
+        return false;
+    }
+
+    /*
+     * A mount point normally has a different device id from its parent.
+     *
+     * The second condition handles filesystem roots, where "." and ".." refer
+     * to the same inode on the same device.
+     */
+    if (pathStat.st_dev != parentStat.st_dev) {
+        return true;
+    }
+
+    if (pathStat.st_dev == parentStat.st_dev &&
+        pathStat.st_ino == parentStat.st_ino) {
+        return true;
+    }
+
+    /*
+     * Fallback to mountinfo parsing. This is mostly defensive; the stat-based
+     * check above is the primary path and avoids relying on mountinfo escaping
+     * details.
+     */
+    QFile mountInfo(QStringLiteral("/proc/self/mountinfo"));
+    if (!mountInfo.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+
+    QTextStream in(&mountInfo);
+
+    while (!in.atEnd()) {
+        const QString line = in.readLine();
+        const int separator = line.indexOf(QStringLiteral(" - "));
+
+        if (separator < 0) {
+            continue;
+        }
+
+        const QString left = line.left(separator);
+        const QStringList fields = left.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+
+        /*
+         * mountinfo left side:
+         *   id parent major:minor root mount_point options ...
+         */
+        if (fields.size() < 5) {
+            continue;
+        }
+
+        QString mountPoint = fields.at(4);
+        mountPoint.replace(QStringLiteral("\\040"), QStringLiteral(" "));
+        mountPoint.replace(QStringLiteral("\\011"), QStringLiteral("\t"));
+        mountPoint.replace(QStringLiteral("\\012"), QStringLiteral("\n"));
+        mountPoint.replace(QStringLiteral("\\134"), QStringLiteral("\\"));
+
+        if (QDir::cleanPath(mountPoint) == cleanPath) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool LiveUpdateManager::setDirectoryOwnerOnlyPermissions(const QString& path)
+{
+    const QByteArray nativePath = QFile::encodeName(path);
+
+    if (::chmod(nativePath.constData(), S_IRWXU) != 0) {
+        std::cerr << "Btrfs live updates: failed to chmod 0700 "
+                  << path.toStdString()
+                  << ": "
+                  << std::strerror(errno)
+                  << "\n";
+        return false;
+    }
+
+    return true;
+}
+
+void LiveUpdateManager::cleanupStaleInternalBtrfsMounts()
+{
+    const QString root = QStringLiteral("/run/kerythingd/btrfs-live");
+    QDir dir(root);
+
+    if (!dir.exists()) {
+        return;
+    }
+
+    const QFileInfoList entries = dir.entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
+        QDir::Name
+    );
+
+    for (const QFileInfo& entry : entries) {
+        const QString mountPoint = entry.absoluteFilePath();
+
+        if (!isMountPoint(mountPoint)) {
+            continue;
+        }
+
+        const QByteArray nativeMountPoint = QFile::encodeName(mountPoint);
+
+        if (::umount2(nativeMountPoint.constData(), MNT_DETACH) != 0) {
+            std::cerr << "Btrfs live updates: failed to clean up stale internal mount "
+                      << mountPoint.toStdString()
+                      << ": "
+                      << std::strerror(errno)
+                      << "\n";
+            continue;
+        }
+
+        internalBtrfsMountPoints_.remove(mountPoint);
+
+        std::cout << "Btrfs live updates: cleaned up stale internal mount mountPoint="
+                  << mountPoint.toStdString()
+                  << "\n";
+    }
+
+    /*
+     * Only chmod the internal mount root. Do not chmod per-device child paths
+     * here because a missed stale mount would make chmod target the read-only
+     * Btrfs filesystem root instead of the underlying /run directory.
+     */
+    setDirectoryOwnerOnlyPermissions(root);
+
+    /*
+     * Best-effort removal of empty per-device directories after stale mounts
+     * have been detached.
+     */
+    const QFileInfoList cleanupEntries = dir.entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
+        QDir::Name
+    );
+
+    for (const QFileInfo& entry : cleanupEntries) {
+        const QString childPath = entry.absoluteFilePath();
+
+        if (isMountPoint(childPath)) {
+            continue;
+        }
+
+        QDir staleDir(childPath);
+        staleDir.rmdir(QStringLiteral("."));
+    }
+}
+
+std::optional<QString> LiveUpdateManager::ensureBtrfsTopLevelMountForDevice(const BlockDevice& device)
+{
+    if (device.devNode.trimmed().isEmpty()) {
+        return std::nullopt;
+    }
+
+    const QString mountRoot = QStringLiteral("/run/kerythingd/btrfs-live");
+    const QString mountPoint = internalBtrfsTopLevelMountPointForDevice(device);
+
+    QDir dir;
+    if (!dir.mkpath(mountRoot)) {
+        std::cerr << "Btrfs live updates: failed to create internal mount root "
+                  << mountRoot.toStdString()
+                  << "\n";
+        return std::nullopt;
+    }
+
+    setDirectoryOwnerOnlyPermissions(mountRoot);
+
+    if (!dir.mkpath(mountPoint)) {
+        std::cerr << "Btrfs live updates: failed to create internal mount point "
+                  << mountPoint.toStdString()
+                  << "\n";
+        return std::nullopt;
+    }
+
+    /*
+     * If this daemon instance already mounted it, reuse it. Do this before
+     * chmod'ing mountPoint because chmod would affect the read-only mounted
+     * filesystem root, not the underlying /run directory.
+     */
+    if (internalBtrfsMountPoints_.contains(mountPoint)) {
+        return mountPoint;
+    }
+
+    const QByteArray mountPointNative = QFile::encodeName(mountPoint);
+
+    /*
+     * If a previous daemon instance crashed or was force-stopped, this path may
+     * still be mounted. Detach it first so chmod below applies to the underlying
+     * /run directory rather than to the read-only Btrfs mount root.
+     */
+    if (isMountPoint(mountPoint)) {
+        if (::umount2(mountPointNative.constData(), MNT_DETACH) != 0) {
+            std::cerr << "Btrfs live updates: failed to detach stale internal mount "
+                      << mountPoint.toStdString()
+                      << ": "
+                      << std::strerror(errno)
+                      << "\n";
+            return std::nullopt;
+        }
+
+        internalBtrfsMountPoints_.remove(mountPoint);
+
+        std::cout << "Btrfs live updates: detached stale internal mount mountPoint="
+                  << mountPoint.toStdString()
+                  << "\n";
+    }
+
+    /*
+     * Re-check before chmod. If this is still a mount point for any reason, do
+     * not chmod it: chmod would affect the mounted read-only Btrfs root and fail
+     * with EROFS.
+     */
+    if (!isMountPoint(mountPoint)) {
+        setDirectoryOwnerOnlyPermissions(mountPoint);
+    }
+    else {
+        std::cerr << "Btrfs live updates: internal mount point is still mounted after detach attempt "
+                  << mountPoint.toStdString()
+                  << "\n";
+        return std::nullopt;
+    }
+
+    const QByteArray devNodeNative = QFile::encodeName(device.devNode);
+
+    /*
+     * Use subvolid=5 to expose the Btrfs top-level root for fanotify marking.
+     * The mount is daemon-internal and should not be used as a display path for
+     * search results.
+     */
+    const QByteArray options = QByteArrayLiteral("subvolid=5");
+
+    const unsigned long mountFlags =
+        MS_RDONLY |
+        MS_NOSUID |
+        MS_NODEV |
+        MS_NOEXEC |
+        MS_NOATIME;
+
+    auto mountTopLevelRoot = [&]() {
+        return ::mount(
+            devNodeNative.constData(),
+            mountPointNative.constData(),
+            "btrfs",
+            mountFlags,
+            options.constData()
+        );
+    };
+
+    if (mountTopLevelRoot() != 0) {
+        int mountErrno = errno;
+
+        if (mountErrno == EBUSY && isMountPoint(mountPoint)) {
+            if (::umount2(mountPointNative.constData(), MNT_DETACH) == 0) {
+                internalBtrfsMountPoints_.remove(mountPoint);
+
+                std::cout << "Btrfs live updates: detached busy stale internal mount mountPoint="
+                          << mountPoint.toStdString()
+                          << "\n";
+
+                if (mountTopLevelRoot() == 0) {
+                    mountErrno = 0;
+                }
+                else {
+                    mountErrno = errno;
+                }
+            }
+        }
+
+        if (mountErrno != 0) {
+            std::cerr << "Btrfs live updates: failed to mount top-level root for "
+                      << device.devNode.toStdString()
+                      << " at "
+                      << mountPoint.toStdString()
+                      << ": "
+                      << std::strerror(mountErrno)
+                      << "\n";
+
+            return std::nullopt;
+        }
+    }
+
+    /*
+     * Prevent mount propagation surprises. This internal mount should remain
+     * local to the daemon's mount namespace and should not propagate elsewhere
+     * if the parent hierarchy is shared.
+     */
+    if (::mount(
+            nullptr,
+            mountPointNative.constData(),
+            nullptr,
+            MS_PRIVATE | MS_REC,
+            nullptr
+        ) != 0) {
+        std::cerr << "Btrfs live updates: failed to make internal mount private mountPoint="
+                  << mountPoint.toStdString()
+                  << ": "
+                  << std::strerror(errno)
+                  << "\n";
+
+        ::umount2(mountPointNative.constData(), MNT_DETACH);
+        return std::nullopt;
+    }
+
+    internalBtrfsMountPoints_.insert(mountPoint);
+
+    std::cout << "Btrfs live updates: mounted internal top-level root devNode="
+              << device.devNode.toStdString()
+              << " mountPoint="
+              << mountPoint.toStdString()
+              << "\n";
+
+    return mountPoint;
+}
+
+void LiveUpdateManager::unmountInternalBtrfsMountIfUnused(const QString& mountPoint)
+{
+    if (!internalBtrfsMountPoints_.contains(mountPoint)) {
+        return;
+    }
+
+    for (auto it = watchersByKey_.cbegin(); it != watchersByKey_.cend(); ++it) {
+        const FanotifyWatcher* watcher = it.value();
+
+        if (watcher && watcher->mountPoint() == mountPoint) {
+            return;
+        }
+    }
+
+    const QByteArray mountPointNative = QFile::encodeName(mountPoint);
+
+    if (isMountPoint(mountPoint)) {
+        if (::umount2(mountPointNative.constData(), MNT_DETACH) != 0) {
+            std::cerr << "Btrfs live updates: failed to unmount internal top-level root mountPoint="
+                      << mountPoint.toStdString()
+                      << ": "
+                      << std::strerror(errno)
+                      << "\n";
+            return;
+        }
+
+        std::cout << "Btrfs live updates: unmounted internal top-level root mountPoint="
+                  << mountPoint.toStdString()
+                  << "\n";
+    }
+
+    internalBtrfsMountPoints_.remove(mountPoint);
+
+    QDir parent(QStringLiteral("/run/kerythingd/btrfs-live"));
+    parent.rmdir(QFileInfo(mountPoint).fileName());
 }
 
 QString LiveUpdateManager::maskToString(quint64 mask)
@@ -926,23 +1376,6 @@ void LiveUpdateManager::startWatcherForTarget(const WatchTarget& target)
     }
 
     const bool isBtrfs = deviceIsBtrfs(target.fsType);
-
-    if (isBtrfs && target.fsNamespace == 0) {
-        Q_EMIT liveUpdateStatusChanged(
-            target.deviceId,
-            LiveUpdateStatus::StaleNeedsRescan,
-            QStringLiteral("Btrfs live updates require a known mount subvolid for %1")
-                .arg(target.mountPoint)
-        );
-
-        Q_EMIT deviceNeedsRescan(
-            target.deviceId,
-            QStringLiteral("Btrfs live updates require a known mount subvolid for %1")
-                .arg(target.mountPoint)
-        );
-
-        return;
-    }
 
     auto* watcher = new FanotifyWatcher(
         target.deviceId,
@@ -1071,6 +1504,7 @@ void LiveUpdateManager::removeWatcher(const QString& key)
     }
 
     const QString deviceId = watcher->deviceId();
+    const QString mountPoint = watcher->mountPoint();
 
     std::cout << "fanotify: stopping watcher deviceId="
               << watcher->deviceId().toStdString()
@@ -1085,4 +1519,6 @@ void LiveUpdateManager::removeWatcher(const QString& key)
     );
 
     watcher->deleteLater();
+
+    unmountInternalBtrfsMountIfUnused(mountPoint);
 }

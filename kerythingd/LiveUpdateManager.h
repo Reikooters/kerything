@@ -58,6 +58,7 @@ private:
     static QString sanitizedMountDirectoryName(QString value);
     static bool isMountPoint(const QString& path);
     static bool setDirectoryOwnerOnlyPermissions(const QString& path);
+    static bool ensureInternalBtrfsMountRoot();
     void cleanupStaleInternalBtrfsMounts();
     void unmountInternalBtrfsMountIfUnused(const QString& mountPoint);
 

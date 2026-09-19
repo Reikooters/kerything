@@ -1007,6 +1007,70 @@ bool LiveUpdateManager::setDirectoryOwnerOnlyPermissions(const QString& path)
     return true;
 }
 
+bool LiveUpdateManager::ensureInternalBtrfsMountRoot()
+{
+    const QString root = QStringLiteral("/run/kerythingd/btrfs-live");
+
+    QDir dir;
+    if (!dir.mkpath(root)) {
+        std::cerr << "Btrfs live updates: failed to create internal mount root "
+                  << root.toStdString()
+                  << "\n";
+        return false;
+    }
+
+    setDirectoryOwnerOnlyPermissions(root);
+
+    const QByteArray nativeRoot = QFile::encodeName(root);
+
+    /*
+     * Mount propagation settings apply to mounts, not arbitrary directories.
+     *
+     * Create a dedicated mount at /run/kerythingd/btrfs-live by bind-mounting
+     * the directory onto itself. Then make that subtree private so internal
+     * Btrfs fanotify mounts created below it do not propagate elsewhere.
+     */
+    if (!isMountPoint(root)) {
+        if (::mount(
+                nativeRoot.constData(),
+                nativeRoot.constData(),
+                nullptr,
+                MS_BIND | MS_REC,
+                nullptr
+            ) != 0) {
+            std::cerr << "Btrfs live updates: failed to create private bind root "
+                      << root.toStdString()
+                      << ": "
+                      << std::strerror(errno)
+                      << "\n";
+            return false;
+        }
+    }
+
+    if (::mount(
+            nullptr,
+            nativeRoot.constData(),
+            nullptr,
+            MS_PRIVATE | MS_REC,
+            nullptr
+        ) != 0) {
+        std::cerr << "Btrfs live updates: failed to make internal mount root private "
+                  << root.toStdString()
+                  << ": "
+                  << std::strerror(errno)
+                  << "\n";
+        return false;
+    }
+
+    /*
+     * This chmod affects the bind-mounted /run directory itself, not a Btrfs
+     * device mount, so it should remain writable unless /run itself is broken.
+     */
+    setDirectoryOwnerOnlyPermissions(root);
+
+    return true;
+}
+
 void LiveUpdateManager::cleanupStaleInternalBtrfsMounts()
 {
     const QString root = QStringLiteral("/run/kerythingd/btrfs-live");
@@ -1072,6 +1136,12 @@ void LiveUpdateManager::cleanupStaleInternalBtrfsMounts()
         QDir staleDir(childPath);
         staleDir.rmdir(QStringLiteral("."));
     }
+
+    /*
+     * If the root itself is already a private bind mount from a previous daemon
+     * instance, keep it. Reusing it is fine, and unmounting it is unnecessary.
+     * ensureInternalBtrfsMountRoot() will make it private again before use.
+     */
 }
 
 std::optional<QString> LiveUpdateManager::ensureBtrfsTopLevelMountForDevice(const BlockDevice& device)
@@ -1080,19 +1150,13 @@ std::optional<QString> LiveUpdateManager::ensureBtrfsTopLevelMountForDevice(cons
         return std::nullopt;
     }
 
-    const QString mountRoot = QStringLiteral("/run/kerythingd/btrfs-live");
-    const QString mountPoint = internalBtrfsTopLevelMountPointForDevice(device);
-
-    QDir dir;
-    if (!dir.mkpath(mountRoot)) {
-        std::cerr << "Btrfs live updates: failed to create internal mount root "
-                  << mountRoot.toStdString()
-                  << "\n";
+    if (!ensureInternalBtrfsMountRoot()) {
         return std::nullopt;
     }
 
-    setDirectoryOwnerOnlyPermissions(mountRoot);
+    const QString mountPoint = internalBtrfsTopLevelMountPointForDevice(device);
 
+    QDir dir;
     if (!dir.mkpath(mountPoint)) {
         std::cerr << "Btrfs live updates: failed to create internal mount point "
                   << mountPoint.toStdString()

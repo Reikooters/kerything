@@ -84,7 +84,24 @@ namespace BlockDeviceDisplayUtils {
 
     bool isBtrfsDevice(const BlockDevice& blockDevice)
     {
-        return blockDevice.fsType.trimmed().compare(QStringLiteral("btrfs"), Qt::CaseInsensitive) == 0;
+        auto isBtrfsFsType = [](const QString& fsType) {
+            return fsType.trimmed().compare(
+                QStringLiteral("btrfs"),
+                Qt::CaseInsensitive
+            ) == 0;
+        };
+
+        if (isBtrfsFsType(blockDevice.fsType) ||
+            isBtrfsFsType(blockDevice.mountedFsType)) {
+            return true;
+        }
+
+        return std::ranges::any_of(
+            blockDevice.mounts,
+            [&](const BlockDeviceMountInfo& mount) {
+                return isBtrfsFsType(mount.fsType);
+            }
+        );
     }
 
     qsizetype btrfsMountedSubvolumeCount(const BlockDevice& blockDevice)

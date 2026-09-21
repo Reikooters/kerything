@@ -50,6 +50,7 @@ namespace Ext4ScannerEngine {
 
         constexpr uint32_t kInvalidRecordIndex = 0xFFFFFFFF;
         constexpr uint64_t kProgressEvery = 4096; // must be power of two
+        constexpr uint32_t kDirEntryCancelCheckEvery = 1024; // must be power of two
 
         [[nodiscard]] double seconds(Nanoseconds value)
         {
@@ -254,6 +255,7 @@ namespace Ext4ScannerEngine {
         const ScannerHelper::CancelCallback& shouldCancel;
         Ext4ScanTimings* timings = nullptr;
         Ext4ScanCounters* counters = nullptr;
+        uint32_t entriesSinceCancelCheck = 0;
         bool cancelled = false;
         bool failed = false;
     };
@@ -368,9 +370,12 @@ namespace Ext4ScannerEngine {
             ++ctx->counters->dirCallbackCalls;
         }
 
-        if (ctx->shouldCancel && ctx->shouldCancel()) {
-            ctx->cancelled = true;
-            return 1;
+        ++ctx->entriesSinceCancelCheck;
+        if ((ctx->entriesSinceCancelCheck & (kDirEntryCancelCheckEvery - 1)) == 0) {
+            if (ctx->shouldCancel && ctx->shouldCancel()) {
+                ctx->cancelled = true;
+                return 1;
+            }
         }
 
         // Ignore invalid entries or empty inodes

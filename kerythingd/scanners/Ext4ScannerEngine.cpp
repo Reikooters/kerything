@@ -33,6 +33,8 @@ namespace Ext4ScannerEngine {
         uint64_t usedInodesSeen = 0;
         uint64_t inodeStatsEntries = 0;
         uint64_t directoryInodes = 0;
+        uint64_t inodeStatsLookupBuckets = 0;
+        uint64_t inodeStatsLookupBucketSpan = 0;
         uint64_t directoriesScanned = 0;
         uint64_t dirCallbackCalls = 0;
         uint64_t dirEntriesSeen = 0;
@@ -51,6 +53,7 @@ namespace Ext4ScannerEngine {
         constexpr uint32_t kInvalidRecordIndex = 0xFFFFFFFF;
         constexpr uint64_t kProgressEvery = 4096; // must be power of two
         constexpr uint32_t kDirEntryCancelCheckEvery = 1024; // must be power of two
+        constexpr uint32_t kDirectoryCancelCheckEvery = 256; // must be power of two
 
         [[nodiscard]] double seconds(Nanoseconds value)
         {
@@ -87,6 +90,8 @@ namespace Ext4ScannerEngine {
                       << "    usedInodesSeen=" << counters.usedInodesSeen << "\n"
                       << "    inodeStatsEntries=" << counters.inodeStatsEntries << "\n"
                       << "    directoryInodes=" << counters.directoryInodes << "\n"
+                      << "    inodeStatsLookupBuckets=" << counters.inodeStatsLookupBuckets << "\n"
+                      << "    inodeStatsLookupBucketSpan=" << counters.inodeStatsLookupBucketSpan << "\n"
                       << "    directoriesScanned=" << counters.directoriesScanned << "\n"
                       << "    dirCallbackCalls=" << counters.dirCallbackCalls << "\n"
                       << "    dirEntriesSeen=" << counters.dirEntriesSeen << "\n"
@@ -141,6 +146,187 @@ namespace Ext4ScannerEngine {
                 });
 
             if (it == inodeStats.end() || it->inode != inode) {
+                return nullptr;
+            }
+
+            return &it->stats;
+        }
+
+        struct InodeStatsBucket {
+            uint32_t offset = 0;
+            uint32_t count = 0;
+        };
+
+        struct InodeStatsLookup {
+            const std::vector<InodeStatsEntry>* entries = nullptr;
+            uint32_t inodeSpanPerBucket = 0;
+            std::vector<InodeStatsBucket> buckets;
+        };
+
+        [[nodiscard]] uint32_t inodeGroupForLookup(uint32_t inode, uint32_t inodeSpanPerBucket) noexcept
+        {
+            if (inode == 0 || inodeSpanPerBucket == 0) {
+                return 0;
+            }
+
+            return (inode - 1) / inodeSpanPerBucket;
+        }
+
+        [[nodiscard]] uint32_t chooseInodeLookupBucketSpan(uint32_t totalInodes,
+                                                           uint32_t fsInodesPerGroup,
+                                                           std::size_t usedInodeCount) noexcept
+        {
+            if (totalInodes == 0 || usedInodeCount == 0) {
+                return 0;
+            }
+
+            /*
+             * Aim for reasonably small binary-search ranges without creating a huge
+             * mostly-empty bucket table on sparse large filesystems.
+             *
+             * This stays parallel-friendly because buckets are still immutable
+             * inode-number ranges.
+             */
+            static constexpr std::size_t TargetUsedInodesPerBucket = 256;
+            static constexpr std::size_t MinUsefulBucketCount = 64;
+            static constexpr std::size_t MaxBucketCount = 65536;
+
+            std::size_t targetBucketCount =
+                (usedInodeCount + TargetUsedInodesPerBucket - 1) /
+                TargetUsedInodesPerBucket;
+
+            targetBucketCount = std::clamp<std::size_t>(
+                targetBucketCount,
+                MinUsefulBucketCount,
+                MaxBucketCount
+            );
+
+            const uint64_t adaptiveSpan =
+                (static_cast<uint64_t>(totalInodes) + targetBucketCount - 1) /
+                targetBucketCount;
+
+            const uint64_t span = std::max<uint64_t>(
+                std::max<uint32_t>(fsInodesPerGroup, 1),
+                adaptiveSpan
+            );
+
+            return static_cast<uint32_t>(
+                std::min<uint64_t>(span, std::numeric_limits<uint32_t>::max())
+            );
+        }
+
+        [[nodiscard]] InodeStatsLookup buildInodeStatsLookup(const std::vector<InodeStatsEntry>& inodeStats,
+                                                             uint32_t totalInodes,
+                                                             uint32_t fsInodesPerGroup)
+        {
+            InodeStatsLookup lookup;
+            lookup.entries = &inodeStats;
+            lookup.inodeSpanPerBucket = chooseInodeLookupBucketSpan(
+                totalInodes,
+                fsInodesPerGroup,
+                inodeStats.size()
+            );
+
+            if (inodeStats.empty() || totalInodes == 0 || lookup.inodeSpanPerBucket == 0) {
+                return lookup;
+            }
+
+            const uint64_t bucketCount64 =
+                (static_cast<uint64_t>(totalInodes) + lookup.inodeSpanPerBucket - 1) /
+                lookup.inodeSpanPerBucket;
+
+            const uint32_t bucketCount =
+                static_cast<uint32_t>(std::min<uint64_t>(
+                    bucketCount64,
+                    std::numeric_limits<uint32_t>::max()
+                ));
+
+            lookup.buckets.assign(bucketCount, InodeStatsBucket{});
+
+            uint32_t currentBucket = inodeGroupForLookup(
+                inodeStats.front().inode,
+                lookup.inodeSpanPerBucket
+            );
+
+            std::size_t bucketStart = 0;
+
+            for (std::size_t i = 0; i < inodeStats.size(); ++i) {
+                const uint32_t bucket = inodeGroupForLookup(
+                    inodeStats[i].inode,
+                    lookup.inodeSpanPerBucket
+                );
+
+                if (bucket == currentBucket) {
+                    continue;
+                }
+
+                if (currentBucket < lookup.buckets.size()) {
+                    lookup.buckets[currentBucket] = InodeStatsBucket{
+                        .offset = static_cast<uint32_t>(bucketStart),
+                        .count = static_cast<uint32_t>(i - bucketStart)
+                    };
+                }
+
+                currentBucket = bucket;
+                bucketStart = i;
+            }
+
+            if (currentBucket < lookup.buckets.size()) {
+                lookup.buckets[currentBucket] = InodeStatsBucket{
+                    .offset = static_cast<uint32_t>(bucketStart),
+                    .count = static_cast<uint32_t>(inodeStats.size() - bucketStart)
+                };
+            }
+
+            return lookup;
+        }
+
+        [[nodiscard]] const FileStats* findStatsByInode(const InodeStatsLookup& lookup,
+                                                        uint32_t inode)
+        {
+            if (!lookup.entries || lookup.inodeSpanPerBucket == 0 || lookup.buckets.empty()) {
+                return nullptr;
+            }
+
+            const uint32_t bucketIdx = inodeGroupForLookup(
+                inode,
+                lookup.inodeSpanPerBucket
+            );
+
+            if (bucketIdx >= lookup.buckets.size()) {
+                return nullptr;
+            }
+
+            const InodeStatsBucket bucket = lookup.buckets[bucketIdx];
+
+            if (bucket.count == 0) {
+                return nullptr;
+            }
+
+            const std::vector<InodeStatsEntry>& entries = *lookup.entries;
+
+            if (bucket.offset >= entries.size()) {
+                return nullptr;
+            }
+
+            const std::size_t beginOffset = bucket.offset;
+            const std::size_t endOffset = std::min<std::size_t>(
+                entries.size(),
+                beginOffset + bucket.count
+            );
+
+            const auto begin = entries.begin() + static_cast<std::ptrdiff_t>(beginOffset);
+            const auto end = entries.begin() + static_cast<std::ptrdiff_t>(endOffset);
+
+            const auto it = std::lower_bound(
+                begin,
+                end,
+                inode,
+                [](const InodeStatsEntry& entry, uint32_t value) {
+                    return entry.inode < value;
+                });
+
+            if (it == end || it->inode != inode) {
                 return nullptr;
             }
 
@@ -249,7 +435,7 @@ namespace Ext4ScannerEngine {
     struct DirCallbackContext {
         ext2_filsys fs = nullptr;
         Ext4StreamState& stream;
-        const std::vector<InodeStatsEntry>& inodeStats;
+        const InodeStatsLookup& inodeStatsLookup;
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk;
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk;
         const ScannerHelper::CancelCallback& shouldCancel;
@@ -425,7 +611,7 @@ namespace Ext4ScannerEngine {
                 lookupTimer.emplace(ctx->timings->inodeStatsLookup);
             }
 
-            stats = findStatsByInode(ctx->inodeStats, dirent->inode);
+            stats = findStatsByInode(ctx->inodeStatsLookup, dirent->inode);
         }
 
         if (!stats) {
@@ -540,6 +726,13 @@ namespace Ext4ScannerEngine {
             }
         }
 
+        const uint32_t inodesPerGroup = fs->super->s_inodes_per_group;
+        const InodeStatsLookup inodeStatsLookup =
+            buildInodeStatsLookup(inodeStats, totalInodes, inodesPerGroup);
+
+        counters.inodeStatsLookupBuckets = inodeStatsLookup.buckets.size();
+        counters.inodeStatsLookupBucketSpan = inodeStatsLookup.inodeSpanPerBucket;
+
         Ext4StreamState stream{};
         stream.records.reserve(Ext4StreamState::kRecordsPerIpcChunk);
         stream.stringPool.reserve(Ext4StreamState::kMaxIpcBufferSizeBytes);
@@ -548,7 +741,7 @@ namespace Ext4ScannerEngine {
             ScopedTimer timer("[Ext4ScannerEngine] directory entry streaming");
             ScopedAccumulatedTimer directoryStreamingTimer(timings.directoryStreaming);
 
-            const FileStats* rootStats = findStatsByInode(inodeStats, EXT2_ROOT_INO);
+            const FileStats* rootStats = findStatsByInode(inodeStatsLookup, EXT2_ROOT_INO);
             if (rootStats) {
                 ScopedAccumulatedTimer rootTimer(timings.rootRecordEmit);
 
@@ -573,7 +766,7 @@ namespace Ext4ScannerEngine {
             DirCallbackContext ctx{
                 fs,
                 stream,
-                inodeStats,
+                inodeStatsLookup,
                 onFileRecordChunk,
                 onStringPoolChunk,
                 shouldCancel,
@@ -593,14 +786,16 @@ namespace Ext4ScannerEngine {
             }
 
             for (const uint32_t dirInode : directoryInodes) {
-                if (shouldCancel && shouldCancel()) {
-                    {
-                        ScopedAccumulatedTimer closeTimer(timings.close);
-                        ext2fs_close(fs);
-                    }
+                if ((directoriesScanned & (kDirectoryCancelCheckEvery - 1)) == 0) {
+                    if (shouldCancel && shouldCancel()) {
+                        {
+                            ScopedAccumulatedTimer closeTimer(timings.close);
+                            ext2fs_close(fs);
+                        }
 
-                    logExt4ScanProfile(timings, counters);
-                    return false;
+                        logExt4ScanProfile(timings, counters);
+                        return false;
+                    }
                 }
 
                 {

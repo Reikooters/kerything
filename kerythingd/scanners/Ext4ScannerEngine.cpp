@@ -8,8 +8,10 @@
 #include <optional>
 #include <string_view>
 
+#ifdef KERYTHING_ENABLE_LOGGING
 #include "ScopedAccumulatedTimer.h"
 #include "ScopedTimer.h"
+#endif
 
 namespace Ext4ScannerEngine {
 
@@ -19,6 +21,7 @@ namespace Ext4ScannerEngine {
         Nanoseconds open{};
         Nanoseconds inodeStatsScan{};
         Nanoseconds inodeStatsSort{};
+        Nanoseconds inodeStatsLookupBuild{};
         Nanoseconds rootRecordEmit{};
         Nanoseconds directoryStreaming{};
         Nanoseconds dirIterateCalls{};
@@ -55,6 +58,7 @@ namespace Ext4ScannerEngine {
         constexpr uint32_t kDirEntryCancelCheckEvery = 1024; // must be power of two
         constexpr uint32_t kDirectoryCancelCheckEvery = 256; // must be power of two
 
+#ifdef KERYTHING_ENABLE_LOGGING
         [[nodiscard]] double seconds(Nanoseconds value)
         {
             return std::chrono::duration<double>(value).count();
@@ -67,6 +71,7 @@ namespace Ext4ScannerEngine {
                 timings.open +
                 timings.inodeStatsScan +
                 timings.inodeStatsSort +
+                timings.inodeStatsLookupBuild +
                 timings.rootRecordEmit +
                 timings.directoryStreaming +
                 timings.finalFlush +
@@ -77,6 +82,7 @@ namespace Ext4ScannerEngine {
                       << "    open=" << seconds(timings.open) << "s\n"
                       << "    inodeStatsScan=" << seconds(timings.inodeStatsScan) << "s\n"
                       << "    inodeStatsSort=" << seconds(timings.inodeStatsSort) << "s\n"
+                      << "    inodeStatsLookupBuild=" << seconds(timings.inodeStatsLookupBuild) << "s\n"
                       << "    rootRecordEmit=" << seconds(timings.rootRecordEmit) << "s\n"
                       << "    directoryStreaming=" << seconds(timings.directoryStreaming) << "s\n"
                       << "      dirIterateCalls=" << seconds(timings.dirIterateCalls) << "s\n"
@@ -104,6 +110,7 @@ namespace Ext4ScannerEngine {
                       << "    fileRecordChunks=" << counters.fileRecordChunks << "\n"
                       << "    stringPoolChunks=" << counters.stringPoolChunks << "\n";
         }
+#endif
 
         [[nodiscard]] std::string makeExt2Error(const char* prefix, errcode_t code) {
             std::ostringstream out;
@@ -341,7 +348,9 @@ namespace Ext4ScannerEngine {
                                              const ScannerHelper::CancelCallback& shouldCancel,
                                              const ScannerHelper::ProgressCallback& onProgress,
                                              Ext4ScanCounters* counters) {
+#ifdef KERYTHING_ENABLE_LOGGING
             ScopedTimer timer("[Ext4ScannerEngine] inode stats scan");
+#endif
 
             ext2_inode_scan scan = nullptr;
             constexpr int bufferBlocks = 4096;
@@ -450,10 +459,14 @@ namespace Ext4ScannerEngine {
                                 const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
                                 Ext4ScanTimings* timings,
                                 Ext4ScanCounters* counters) {
+#ifdef KERYTHING_ENABLE_LOGGING
         std::optional<ScopedAccumulatedTimer> flushTimer;
         if (timings) {
             flushTimer.emplace(timings->streamFlush);
         }
+#else
+        Q_UNUSED(timings);
+#endif
 
         if (counters) {
             ++counters->flushCalls;
@@ -547,10 +560,12 @@ namespace Ext4ScannerEngine {
             return 1;
         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::optional<ScopedAccumulatedTimer> callbackTimer;
         if (ctx->timings) {
             callbackTimer.emplace(ctx->timings->dirCallback);
         }
+#endif
 
         if (ctx->counters) {
             ++ctx->counters->dirCallbackCalls;
@@ -606,10 +621,12 @@ namespace Ext4ScannerEngine {
 
         const FileStats* stats = nullptr;
         {
+#ifdef KERYTHING_ENABLE_LOGGING
             std::optional<ScopedAccumulatedTimer> lookupTimer;
             if (ctx->timings) {
                 lookupTimer.emplace(ctx->timings->inodeStatsLookup);
             }
+#endif
 
             stats = findStatsByInode(ctx->inodeStatsLookup, dirent->inode);
         }
@@ -645,17 +662,26 @@ namespace Ext4ScannerEngine {
                     const ScannerHelper::ErrorCallback& onError,
                     const ScannerHelper::CancelCallback& shouldCancel,
                     const ScannerHelper::ProgressCallback& onProgress) {
+#ifdef KERYTHING_ENABLE_LOGGING
         ScopedTimer totalTimer("[Ext4ScannerEngine] total ext4 scan");
 
         Ext4ScanTimings timings;
         Ext4ScanCounters counters;
+        Ext4ScanTimings* profileTimings = &timings;
+        Ext4ScanCounters* profileCounters = &counters;
+#else
+        Ext4ScanTimings* profileTimings = nullptr;
+        Ext4ScanCounters* profileCounters = nullptr;
+#endif
 
         ext2_filsys fs = nullptr;
         const std::string devicePathStd = devicePath.toStdString();
 
         errcode_t retval = 0;
         {
-            ScopedAccumulatedTimer timer(timings.open);
+#ifdef KERYTHING_ENABLE_LOGGING
+            ScopedAccumulatedTimer timer(profileTimings->open);
+#endif
             retval = ext2fs_open(devicePathStd.c_str(), 0, 0, 0, unix_io_manager, &fs);
         }
 
@@ -668,10 +694,12 @@ namespace Ext4ScannerEngine {
         const uint32_t freeInodes  = fs->super->s_free_inodes_count;
         const uint32_t inodesInUse = (freeInodes <= totalInodes) ? (totalInodes - freeInodes) : totalInodes;
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "[Ext4ScannerEngine] totalInodes=" << totalInodes
                   << " freeInodes=" << freeInodes
                   << " estimatedInodesInUse=" << inodesInUse
                   << "\n";
+#endif
 
         std::vector<InodeStatsEntry> inodeStats;
         std::vector<uint32_t> directoryInodes;
@@ -688,7 +716,9 @@ namespace Ext4ScannerEngine {
 
         bool inodeStatsCollected = false;
         {
-            ScopedAccumulatedTimer timer(timings.inodeStatsScan);
+#ifdef KERYTHING_ENABLE_LOGGING
+            ScopedAccumulatedTimer timer(profileTimings->inodeStatsScan);
+#endif
             inodeStatsCollected = collectInodeStats(fs,
                                                     inodeStats,
                                                     directoryInodes,
@@ -696,22 +726,28 @@ namespace Ext4ScannerEngine {
                                                     onError,
                                                     shouldCancel,
                                                     onProgress,
-                                                    &counters);
+                                                    profileCounters);
         }
 
         if (!inodeStatsCollected) {
             {
-                ScopedAccumulatedTimer timer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+                ScopedAccumulatedTimer timer(profileTimings->close);
+#endif
                 ext2fs_close(fs);
             }
 
+#ifdef KERYTHING_ENABLE_LOGGING
             logExt4ScanProfile(timings, counters);
+#endif
             return false;
         }
 
         {
+#ifdef KERYTHING_ENABLE_LOGGING
             ScopedTimer timer("[Ext4ScannerEngine] inode stats sort");
             ScopedAccumulatedTimer profileTimer(timings.inodeStatsSort);
+#endif
 
             if (!std::is_sorted(inodeStats.begin(),
                     inodeStats.end(),
@@ -727,23 +763,39 @@ namespace Ext4ScannerEngine {
         }
 
         const uint32_t inodesPerGroup = fs->super->s_inodes_per_group;
-        const InodeStatsLookup inodeStatsLookup =
-            buildInodeStatsLookup(inodeStats, totalInodes, inodesPerGroup);
 
-        counters.inodeStatsLookupBuckets = inodeStatsLookup.buckets.size();
-        counters.inodeStatsLookupBucketSpan = inodeStatsLookup.inodeSpanPerBucket;
+        InodeStatsLookup inodeStatsLookup;
+        {
+#ifdef KERYTHING_ENABLE_LOGGING
+            ScopedAccumulatedTimer timer(profileTimings->inodeStatsLookupBuild);
+#endif
+            inodeStatsLookup = buildInodeStatsLookup(
+                inodeStats,
+                totalInodes,
+                inodesPerGroup
+            );
+        }
+
+        if (profileCounters) {
+            profileCounters->inodeStatsLookupBuckets = inodeStatsLookup.buckets.size();
+            profileCounters->inodeStatsLookupBucketSpan = inodeStatsLookup.inodeSpanPerBucket;
+        }
 
         Ext4StreamState stream{};
         stream.records.reserve(Ext4StreamState::kRecordsPerIpcChunk);
         stream.stringPool.reserve(Ext4StreamState::kMaxIpcBufferSizeBytes);
 
         {
+#ifdef KERYTHING_ENABLE_LOGGING
             ScopedTimer timer("[Ext4ScannerEngine] directory entry streaming");
-            ScopedAccumulatedTimer directoryStreamingTimer(timings.directoryStreaming);
+            ScopedAccumulatedTimer directoryStreamingTimer(profileTimings->directoryStreaming);
+#endif
 
             const FileStats* rootStats = findStatsByInode(inodeStatsLookup, EXT2_ROOT_INO);
             if (rootStats) {
-                ScopedAccumulatedTimer rootTimer(timings.rootRecordEmit);
+#ifdef KERYTHING_ENABLE_LOGGING
+                ScopedAccumulatedTimer rootTimer(profileTimings->rootRecordEmit);
+#endif
 
                 if (!stream.addRecord(EXT2_ROOT_INO,
                                       EXT2_ROOT_INO,
@@ -751,14 +803,18 @@ namespace Ext4ScannerEngine {
                                       *rootStats,
                                       onFileRecordChunk,
                                       onStringPoolChunk,
-                                      &timings,
-                                      &counters)) {
+                                      profileTimings,
+                                      profileCounters)) {
                     {
-                        ScopedAccumulatedTimer closeTimer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
                         ext2fs_close(fs);
                     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
                     logExt4ScanProfile(timings, counters);
+#endif
                     return false;
                 }
             }
@@ -770,8 +826,8 @@ namespace Ext4ScannerEngine {
                 onFileRecordChunk,
                 onStringPoolChunk,
                 shouldCancel,
-                &timings,
-                &counters
+                profileTimings,
+                profileCounters
             };
 
             uint64_t directoriesScanned = 0;
@@ -789,17 +845,23 @@ namespace Ext4ScannerEngine {
                 if ((directoriesScanned & (kDirectoryCancelCheckEvery - 1)) == 0) {
                     if (shouldCancel && shouldCancel()) {
                         {
-                            ScopedAccumulatedTimer closeTimer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+                            ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
                             ext2fs_close(fs);
                         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
                         logExt4ScanProfile(timings, counters);
+#endif
                         return false;
                     }
                 }
 
                 {
-                    ScopedAccumulatedTimer iterateTimer(timings.dirIterateCalls);
+#ifdef KERYTHING_ENABLE_LOGGING
+                    ScopedAccumulatedTimer iterateTimer(profileTimings->dirIterateCalls);
+#endif
                     retval = ext2fs_dir_iterate2(fs,
                                                  dirInode,
                                                  0,
@@ -810,21 +872,29 @@ namespace Ext4ScannerEngine {
 
                 if (ctx.cancelled) {
                     {
-                        ScopedAccumulatedTimer closeTimer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
                         ext2fs_close(fs);
                     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
                     logExt4ScanProfile(timings, counters);
+#endif
                     return false;
                 }
 
                 if (ctx.failed) {
                     {
-                        ScopedAccumulatedTimer closeTimer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
                         ext2fs_close(fs);
                     }
 
+#ifdef KERYTHING_ENABLE_LOGGING
                     logExt4ScanProfile(timings, counters);
+#endif
                     return false;
                 }
 
@@ -838,7 +908,9 @@ namespace Ext4ScannerEngine {
                 }
 
                 ++directoriesScanned;
+#ifdef KERYTHING_ENABLE_LOGGING
                 counters.directoriesScanned = directoriesScanned;
+#endif
 
                 if (onProgress && ((directoriesScanned & (kProgressEvery - 1)) == 0)) {
                     onProgress(Protocol::ScanProgress{
@@ -852,23 +924,32 @@ namespace Ext4ScannerEngine {
         }
 
         {
-            ScopedAccumulatedTimer timer(timings.finalFlush);
-            if (!stream.flush(onFileRecordChunk, onStringPoolChunk, &timings, &counters)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+            ScopedAccumulatedTimer timer(profileTimings->finalFlush);
+#endif
+            if (!stream.flush(onFileRecordChunk, onStringPoolChunk, profileTimings, profileCounters)) {
                 {
-                    ScopedAccumulatedTimer closeTimer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+                    ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
                     ext2fs_close(fs);
                 }
 
+#ifdef KERYTHING_ENABLE_LOGGING
                 logExt4ScanProfile(timings, counters);
+#endif
                 return false;
             }
         }
 
         {
-            ScopedAccumulatedTimer timer(timings.close);
+#ifdef KERYTHING_ENABLE_LOGGING
+            ScopedAccumulatedTimer timer(profileTimings->close);
+#endif
             ext2fs_close(fs);
         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
         std::cerr << "[Ext4ScannerEngine] emitted stringPoolBytes="
                   << stream.totalStringPoolLength
                   << " inodeStatsCount="
@@ -876,6 +957,7 @@ namespace Ext4ScannerEngine {
                   << " directoryCount="
                   << directoryInodes.size()
                   << "\n";
+#endif
 
         if (onProgress) {
             onProgress(Protocol::ScanProgress{
@@ -886,7 +968,9 @@ namespace Ext4ScannerEngine {
             });
         }
 
+#ifdef KERYTHING_ENABLE_LOGGING
         logExt4ScanProfile(timings, counters);
+#endif
 
         return true;
     }

@@ -485,8 +485,15 @@ namespace Ext4ScannerEngine {
         std::vector<InodeStatsEntry> inodeStats;
         std::vector<uint32_t> directoryInodes;
 
-        inodeStats.reserve(static_cast<size_t>(std::min<uint32_t>(inodesInUse, 1'000'000)));
-        directoryInodes.reserve(65536);
+        inodeStats.reserve(static_cast<std::size_t>(inodesInUse));
+
+        const std::size_t estimatedDirectoryInodes = std::clamp<std::size_t>(
+            static_cast<std::size_t>(inodesInUse) / 8,
+            4096,
+            static_cast<std::size_t>(inodesInUse)
+        );
+
+        directoryInodes.reserve(estimatedDirectoryInodes);
 
         bool inodeStatsCollected = false;
         {

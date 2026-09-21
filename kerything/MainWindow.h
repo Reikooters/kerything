@@ -18,7 +18,9 @@
 #include "FileModel.h"
 
 class AppController;
-class QComboBox;;
+class QComboBox;
+class QSplitter;
+class PreviewPane;
 class QToolButton;
 
 /**
@@ -35,11 +37,13 @@ public:
         QString searchText;
         QSize windowSize;
         std::vector<int> columnWidths;
+        QList<int> splitterSizes;
         int sortColumn = 0;
         Qt::SortOrder sortOrder = Qt::AscendingOrder;
         bool matchCaseEnabled = false;
         bool matchWholeWordEnabled = false;
         bool regexEnabled = false;
+        bool previewPaneVisible = false;
     };
 
     /**
@@ -70,6 +74,8 @@ public:
     void markLiveMetadataRefreshDirty();
     void trimSortScratch();
     void showTemporaryStatus(const QString& text, int timeoutMs);
+    void setPreviewPaneVisible(bool visible);
+    void updatePreview();
 
 protected:
     /**
@@ -226,6 +232,9 @@ private:
     QAction* matchCaseAct_ = nullptr;
     QAction* matchWholeWordAct_ = nullptr;
     QAction* regexAct_ = nullptr;
+    QAction* togglePreviewAct_ = nullptr;
+    QSplitter* mainSplitter_ = nullptr;
+    PreviewPane* previewPane_ = nullptr;
 
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;

@@ -708,12 +708,7 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
 
     std::optional<MainWindow::NewWindowState> stateToCarry;
 
-    if (sourceWindow &&
-        (preferences_.carryFilterToNewWindows() ||
-         preferences_.carrySearchOptionsToNewWindows() ||
-         preferences_.carrySearchTextToNewWindows() ||
-         preferences_.carryResultSortingToNewWindows() ||
-         preferences_.carryWindowSizeAndColumnWidthsToNewWindows())) {
+    if (sourceWindow) {
         MainWindow::NewWindowState state = sourceWindow->newWindowState();
 
         if (!preferences_.carryFilterToNewWindows()) {
@@ -740,6 +735,7 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
         if (!preferences_.carryWindowSizeAndColumnWidthsToNewWindows()) {
             state.windowSize = QSize();
             state.columnWidths.clear();
+            state.splitterSizes.clear();
         }
 
         stateToCarry = std::move(state);
@@ -1115,6 +1111,16 @@ bool AppController::showFiltersDropdown() const
 bool AppController::carryFilterToNewWindows() const
 {
     return preferences_.carryFilterToNewWindows();
+}
+
+bool AppController::showPreviewPane() const
+{
+    return preferences_.showPreviewPane();
+}
+
+void AppController::setShowPreviewPane(bool enabled)
+{
+    preferences_.setShowPreviewPane(enabled);
 }
 
 bool AppController::carrySearchOptionsToNewWindows() const

@@ -158,6 +158,7 @@ private:
     QCheckBox* showInFileManagerOnPathDoubleClickCheckBox_ = nullptr;
     QCheckBox* showHighlightedSearchTermsCheckBox_ = nullptr;
     QCheckBox* showFiltersDropdownCheckBox_ = nullptr;
+    QCheckBox* showPreviewPaneCheckBox_ = nullptr;
 
     QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 };

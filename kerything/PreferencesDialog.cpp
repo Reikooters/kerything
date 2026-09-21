@@ -1237,6 +1237,20 @@ QWidget* PreferencesDialog::createUiPage()
 
     layout->addWidget(filtersGroup);
 
+    // --- Preview Pane Group ---
+    auto* previewGroup = new QGroupBox(QStringLiteral("Preview Pane"), content);
+    auto* previewLayout = new QVBoxLayout(previewGroup);
+
+    showPreviewPaneCheckBox_ = new QCheckBox(
+        QStringLiteral("Show preview pane by default"),
+        previewGroup
+    );
+    showPreviewPaneCheckBox_->setChecked(preferences_.showPreviewPane());
+
+    previewLayout->addWidget(showPreviewPaneCheckBox_);
+
+    layout->addWidget(previewGroup);
+
     auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), content);
     auto* sortingLayout = new QVBoxLayout(sortingGroup);
 
@@ -2799,6 +2813,12 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.showFiltersDropdown();
     }
 
+    if (showPreviewPaneCheckBox_) {
+        changed = changed ||
+            showPreviewPaneCheckBox_->isChecked() !=
+            preferences_.showPreviewPane();
+    }
+
     return changed;
 }
 
@@ -2839,6 +2859,10 @@ bool PreferencesDialog::applyChanges()
         preferences_.saveSearchFilters(filtersFromTable());
         originalSearchFilters_ = preferences_.searchFilters();
         populateFilterTable();
+    }
+
+    if (showPreviewPaneCheckBox_) {
+        preferences_.setShowPreviewPane(showPreviewPaneCheckBox_->isChecked());
     }
 
     const bool uiChanged = hasUIChanges();

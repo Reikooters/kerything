@@ -66,6 +66,8 @@ public:
     // UI
     [[nodiscard]] bool showFiltersDropdown() const;
     void setShowFiltersDropdown(bool enabled);
+    [[nodiscard]] bool showPreviewPane() const;
+    void setShowPreviewPane(bool enabled);
     [[nodiscard]] int defaultSortColumn() const;
     void setDefaultSortColumn(int column);
     [[nodiscard]] Qt::SortOrder defaultSortOrder() const;

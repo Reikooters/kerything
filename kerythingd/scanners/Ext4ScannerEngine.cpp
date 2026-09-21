@@ -4,16 +4,100 @@
 #include "Ext4ScannerEngine.h"
 
 #include <algorithm>
+#include <chrono>
+#include <optional>
 #include <string_view>
 
+#include "ScopedAccumulatedTimer.h"
 #include "ScopedTimer.h"
 
 namespace Ext4ScannerEngine {
+
+    using Nanoseconds = std::chrono::nanoseconds;
+
+    struct Ext4ScanTimings {
+        Nanoseconds open{};
+        Nanoseconds inodeStatsScan{};
+        Nanoseconds inodeStatsSort{};
+        Nanoseconds rootRecordEmit{};
+        Nanoseconds directoryStreaming{};
+        Nanoseconds dirIterateCalls{};
+        Nanoseconds dirCallback{};
+        Nanoseconds inodeStatsLookup{};
+        Nanoseconds streamFlush{};
+        Nanoseconds finalFlush{};
+        Nanoseconds close{};
+    };
+
+    struct Ext4ScanCounters {
+        uint64_t usedInodesSeen = 0;
+        uint64_t inodeStatsEntries = 0;
+        uint64_t directoryInodes = 0;
+        uint64_t directoriesScanned = 0;
+        uint64_t dirCallbackCalls = 0;
+        uint64_t dirEntriesSeen = 0;
+        uint64_t dirEntriesSkippedEmptyInode = 0;
+        uint64_t dirEntriesSkippedEmptyName = 0;
+        uint64_t dirEntriesSkippedDot = 0;
+        uint64_t dirEntriesSkippedMissingStats = 0;
+        uint64_t recordsEmitted = 0;
+        uint64_t flushCalls = 0;
+        uint64_t fileRecordChunks = 0;
+        uint64_t stringPoolChunks = 0;
+    };
 
     namespace {
 
         constexpr uint32_t kInvalidRecordIndex = 0xFFFFFFFF;
         constexpr uint64_t kProgressEvery = 4096; // must be power of two
+
+        [[nodiscard]] double seconds(Nanoseconds value)
+        {
+            return std::chrono::duration<double>(value).count();
+        }
+
+        void logExt4ScanProfile(const Ext4ScanTimings& timings,
+                                const Ext4ScanCounters& counters)
+        {
+            const Nanoseconds measuredTotal =
+                timings.open +
+                timings.inodeStatsScan +
+                timings.inodeStatsSort +
+                timings.rootRecordEmit +
+                timings.directoryStreaming +
+                timings.finalFlush +
+                timings.close;
+
+            std::cerr << "[Ext4ScannerEngine] profile summary\n"
+                      << "  timings:\n"
+                      << "    open=" << seconds(timings.open) << "s\n"
+                      << "    inodeStatsScan=" << seconds(timings.inodeStatsScan) << "s\n"
+                      << "    inodeStatsSort=" << seconds(timings.inodeStatsSort) << "s\n"
+                      << "    rootRecordEmit=" << seconds(timings.rootRecordEmit) << "s\n"
+                      << "    directoryStreaming=" << seconds(timings.directoryStreaming) << "s\n"
+                      << "      dirIterateCalls=" << seconds(timings.dirIterateCalls) << "s\n"
+                      << "      dirCallback=" << seconds(timings.dirCallback) << "s\n"
+                      << "      inodeStatsLookup=" << seconds(timings.inodeStatsLookup) << "s\n"
+                      << "      streamFlush=" << seconds(timings.streamFlush) << "s\n"
+                      << "    finalFlush=" << seconds(timings.finalFlush) << "s\n"
+                      << "    close=" << seconds(timings.close) << "s\n"
+                      << "    measuredTotal=" << seconds(measuredTotal) << "s\n"
+                      << "  counters:\n"
+                      << "    usedInodesSeen=" << counters.usedInodesSeen << "\n"
+                      << "    inodeStatsEntries=" << counters.inodeStatsEntries << "\n"
+                      << "    directoryInodes=" << counters.directoryInodes << "\n"
+                      << "    directoriesScanned=" << counters.directoriesScanned << "\n"
+                      << "    dirCallbackCalls=" << counters.dirCallbackCalls << "\n"
+                      << "    dirEntriesSeen=" << counters.dirEntriesSeen << "\n"
+                      << "    dirEntriesSkippedEmptyInode=" << counters.dirEntriesSkippedEmptyInode << "\n"
+                      << "    dirEntriesSkippedEmptyName=" << counters.dirEntriesSkippedEmptyName << "\n"
+                      << "    dirEntriesSkippedDot=" << counters.dirEntriesSkippedDot << "\n"
+                      << "    dirEntriesSkippedMissingStats=" << counters.dirEntriesSkippedMissingStats << "\n"
+                      << "    recordsEmitted=" << counters.recordsEmitted << "\n"
+                      << "    flushCalls=" << counters.flushCalls << "\n"
+                      << "    fileRecordChunks=" << counters.fileRecordChunks << "\n"
+                      << "    stringPoolChunks=" << counters.stringPoolChunks << "\n";
+        }
 
         [[nodiscard]] std::string makeExt2Error(const char* prefix, errcode_t code) {
             std::ostringstream out;
@@ -68,7 +152,8 @@ namespace Ext4ScannerEngine {
                                              uint64_t inodesInUse,
                                              const ScannerHelper::ErrorCallback& onError,
                                              const ScannerHelper::CancelCallback& shouldCancel,
-                                             const ScannerHelper::ProgressCallback& onProgress) {
+                                             const ScannerHelper::ProgressCallback& onProgress,
+                                             Ext4ScanCounters* counters) {
             ScopedTimer timer("[Ext4ScannerEngine] inode stats scan");
 
             ext2_inode_scan scan = nullptr;
@@ -140,6 +225,12 @@ namespace Ext4ScannerEngine {
 
             ext2fs_close_inode_scan(scan);
 
+            if (counters) {
+                counters->usedInodesSeen = usedInodesSeen;
+                counters->inodeStatsEntries = inodeStats.size();
+                counters->directoryInodes = directoryInodes.size();
+            }
+
             if (onProgress) {
                 onProgress(Protocol::ScanProgress{
                     .phase = QStringLiteral("Reading inodes"),
@@ -161,16 +252,33 @@ namespace Ext4ScannerEngine {
         const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk;
         const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk;
         const ScannerHelper::CancelCallback& shouldCancel;
+        Ext4ScanTimings* timings = nullptr;
+        Ext4ScanCounters* counters = nullptr;
         bool cancelled = false;
         bool failed = false;
     };
 
     bool Ext4StreamState::flush(const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
-                                const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk) {
+                                const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                                Ext4ScanTimings* timings,
+                                Ext4ScanCounters* counters) {
+        std::optional<ScopedAccumulatedTimer> flushTimer;
+        if (timings) {
+            flushTimer.emplace(timings->streamFlush);
+        }
+
+        if (counters) {
+            ++counters->flushCalls;
+        }
+
         if (!records.empty()) {
             std::vector<FileRecord> fileRecordChunk = std::move(records);
             records.clear();
             records.reserve(kRecordsPerIpcChunk);
+
+            if (counters) {
+                ++counters->fileRecordChunks;
+            }
 
             if (!onFileRecordChunk(fileRecordChunk)) {
                 std::cerr << "[Ext4ScannerEngine] scan aborted by file record receiver\n";
@@ -186,6 +294,10 @@ namespace Ext4ScannerEngine {
             stringPool.clear();
             stringPool.reserve(kMaxIpcBufferSizeBytes);
 
+            if (counters) {
+                ++counters->stringPoolChunks;
+            }
+
             if (!onStringPoolChunk(stringPoolChunk)) {
                 std::cerr << "[Ext4ScannerEngine] scan aborted by string pool receiver\n";
                 return false;
@@ -200,14 +312,16 @@ namespace Ext4ScannerEngine {
                                     std::string_view name,
                                     const FileStats& stats,
                                     const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
-                                    const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk) {
+                                    const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                                    Ext4ScanTimings* timings,
+                                    Ext4ScanCounters* counters) {
         if (name.size() > std::numeric_limits<uint16_t>::max()) {
             return true;
         }
 
         if (records.size() >= kRecordsPerIpcChunk ||
             stringPool.size() + name.size() >= kMaxIpcBufferSizeBytes) {
-            if (!flush(onFileRecordChunk, onStringPoolChunk)) {
+            if (!flush(onFileRecordChunk, onStringPoolChunk, timings, counters)) {
                 return false;
             }
         }
@@ -225,6 +339,10 @@ namespace Ext4ScannerEngine {
         records.push_back(record);
         stringPool.insert(stringPool.end(), name.begin(), name.end());
 
+        if (counters) {
+            ++counters->recordsEmitted;
+        }
+
         return true;
     }
 
@@ -241,6 +359,15 @@ namespace Ext4ScannerEngine {
             return 1;
         }
 
+        std::optional<ScopedAccumulatedTimer> callbackTimer;
+        if (ctx->timings) {
+            callbackTimer.emplace(ctx->timings->dirCallback);
+        }
+
+        if (ctx->counters) {
+            ++ctx->counters->dirCallbackCalls;
+        }
+
         if (ctx->shouldCancel && ctx->shouldCancel()) {
             ctx->cancelled = true;
             return 1;
@@ -248,26 +375,59 @@ namespace Ext4ScannerEngine {
 
         // Ignore invalid entries or empty inodes
         if (dirent->inode == 0) {
+            if (ctx->counters) {
+                ++ctx->counters->dirEntriesSkippedEmptyInode;
+            }
+
             return 0;
+        }
+
+        if (ctx->counters) {
+            ++ctx->counters->dirEntriesSeen;
         }
 
         // dirent->name_len is sometimes encoded with file type info in modern EXT4,
         // so we mask it with 0xFF to get the actual length.
         const uint16_t len = dirent->name_len & 0xFF;
         if (len == 0) {
+            if (ctx->counters) {
+                ++ctx->counters->dirEntriesSkippedEmptyName;
+            }
+
             return 0;
         }
 
         // Ignore '.' and '..'
         if (len == 1 && dirent->name[0] == '.') {
+            if (ctx->counters) {
+                ++ctx->counters->dirEntriesSkippedDot;
+            }
+
             return 0;
         }
         if (len == 2 && dirent->name[0] == '.' && dirent->name[1] == '.') {
+            if (ctx->counters) {
+                ++ctx->counters->dirEntriesSkippedDot;
+            }
+
             return 0;
         }
 
-        const auto* stats = findStatsByInode(ctx->inodeStats, dirent->inode);
+        const FileStats* stats = nullptr;
+        {
+            std::optional<ScopedAccumulatedTimer> lookupTimer;
+            if (ctx->timings) {
+                lookupTimer.emplace(ctx->timings->inodeStatsLookup);
+            }
+
+            stats = findStatsByInode(ctx->inodeStats, dirent->inode);
+        }
+
         if (!stats) {
+            if (ctx->counters) {
+                ++ctx->counters->dirEntriesSkippedMissingStats;
+            }
+
             return 0;
         }
 
@@ -278,7 +438,9 @@ namespace Ext4ScannerEngine {
                                    name,
                                    *stats,
                                    ctx->onFileRecordChunk,
-                                   ctx->onStringPoolChunk)) {
+                                   ctx->onStringPoolChunk,
+                                   ctx->timings,
+                                   ctx->counters)) {
             ctx->failed = true;
             return 1;
         }
@@ -294,10 +456,18 @@ namespace Ext4ScannerEngine {
                     const ScannerHelper::ProgressCallback& onProgress) {
         ScopedTimer totalTimer("[Ext4ScannerEngine] total ext4 scan");
 
+        Ext4ScanTimings timings;
+        Ext4ScanCounters counters;
+
         ext2_filsys fs = nullptr;
         const std::string devicePathStd = devicePath.toStdString();
 
-        errcode_t retval = ext2fs_open(devicePathStd.c_str(), 0, 0, 0, unix_io_manager, &fs);
+        errcode_t retval = 0;
+        {
+            ScopedAccumulatedTimer timer(timings.open);
+            retval = ext2fs_open(devicePathStd.c_str(), 0, 0, 0, unix_io_manager, &fs);
+        }
+
         if (retval) {
             reportError(onError, makeExt2Error("ext2fs_open failed", retval));
             return false;
@@ -318,19 +488,32 @@ namespace Ext4ScannerEngine {
         inodeStats.reserve(static_cast<size_t>(std::min<uint32_t>(inodesInUse, 1'000'000)));
         directoryInodes.reserve(65536);
 
-        if (!collectInodeStats(fs,
-                               inodeStats,
-                               directoryInodes,
-                               inodesInUse,
-                               onError,
-                               shouldCancel,
-                               onProgress)) {
-            ext2fs_close(fs);
+        bool inodeStatsCollected = false;
+        {
+            ScopedAccumulatedTimer timer(timings.inodeStatsScan);
+            inodeStatsCollected = collectInodeStats(fs,
+                                                    inodeStats,
+                                                    directoryInodes,
+                                                    inodesInUse,
+                                                    onError,
+                                                    shouldCancel,
+                                                    onProgress,
+                                                    &counters);
+        }
+
+        if (!inodeStatsCollected) {
+            {
+                ScopedAccumulatedTimer timer(timings.close);
+                ext2fs_close(fs);
+            }
+
+            logExt4ScanProfile(timings, counters);
             return false;
         }
 
         {
             ScopedTimer timer("[Ext4ScannerEngine] inode stats sort");
+            ScopedAccumulatedTimer profileTimer(timings.inodeStatsSort);
 
             if (!std::is_sorted(inodeStats.begin(),
                     inodeStats.end(),
@@ -351,16 +534,26 @@ namespace Ext4ScannerEngine {
 
         {
             ScopedTimer timer("[Ext4ScannerEngine] directory entry streaming");
+            ScopedAccumulatedTimer directoryStreamingTimer(timings.directoryStreaming);
 
             const FileStats* rootStats = findStatsByInode(inodeStats, EXT2_ROOT_INO);
             if (rootStats) {
+                ScopedAccumulatedTimer rootTimer(timings.rootRecordEmit);
+
                 if (!stream.addRecord(EXT2_ROOT_INO,
                                       EXT2_ROOT_INO,
                                       std::string_view{},
                                       *rootStats,
                                       onFileRecordChunk,
-                                      onStringPoolChunk)) {
-                    ext2fs_close(fs);
+                                      onStringPoolChunk,
+                                      &timings,
+                                      &counters)) {
+                    {
+                        ScopedAccumulatedTimer closeTimer(timings.close);
+                        ext2fs_close(fs);
+                    }
+
+                    logExt4ScanProfile(timings, counters);
                     return false;
                 }
             }
@@ -371,7 +564,9 @@ namespace Ext4ScannerEngine {
                 inodeStats,
                 onFileRecordChunk,
                 onStringPoolChunk,
-                shouldCancel
+                shouldCancel,
+                &timings,
+                &counters
             };
 
             uint64_t directoriesScanned = 0;
@@ -387,24 +582,42 @@ namespace Ext4ScannerEngine {
 
             for (const uint32_t dirInode : directoryInodes) {
                 if (shouldCancel && shouldCancel()) {
-                    ext2fs_close(fs);
+                    {
+                        ScopedAccumulatedTimer closeTimer(timings.close);
+                        ext2fs_close(fs);
+                    }
+
+                    logExt4ScanProfile(timings, counters);
                     return false;
                 }
 
-                retval = ext2fs_dir_iterate2(fs,
-                                             dirInode,
-                                             0,
-                                             nullptr,
-                                             dirCallback,
-                                             &ctx);
+                {
+                    ScopedAccumulatedTimer iterateTimer(timings.dirIterateCalls);
+                    retval = ext2fs_dir_iterate2(fs,
+                                                 dirInode,
+                                                 0,
+                                                 nullptr,
+                                                 dirCallback,
+                                                 &ctx);
+                }
 
                 if (ctx.cancelled) {
-                    ext2fs_close(fs);
+                    {
+                        ScopedAccumulatedTimer closeTimer(timings.close);
+                        ext2fs_close(fs);
+                    }
+
+                    logExt4ScanProfile(timings, counters);
                     return false;
                 }
 
                 if (ctx.failed) {
-                    ext2fs_close(fs);
+                    {
+                        ScopedAccumulatedTimer closeTimer(timings.close);
+                        ext2fs_close(fs);
+                    }
+
+                    logExt4ScanProfile(timings, counters);
                     return false;
                 }
 
@@ -418,6 +631,7 @@ namespace Ext4ScannerEngine {
                 }
 
                 ++directoriesScanned;
+                counters.directoriesScanned = directoriesScanned;
 
                 if (onProgress && ((directoriesScanned & (kProgressEvery - 1)) == 0)) {
                     onProgress(Protocol::ScanProgress{
@@ -430,12 +644,23 @@ namespace Ext4ScannerEngine {
             }
         }
 
-        if (!stream.flush(onFileRecordChunk, onStringPoolChunk)) {
-            ext2fs_close(fs);
-            return false;
+        {
+            ScopedAccumulatedTimer timer(timings.finalFlush);
+            if (!stream.flush(onFileRecordChunk, onStringPoolChunk, &timings, &counters)) {
+                {
+                    ScopedAccumulatedTimer closeTimer(timings.close);
+                    ext2fs_close(fs);
+                }
+
+                logExt4ScanProfile(timings, counters);
+                return false;
+            }
         }
 
-        ext2fs_close(fs);
+        {
+            ScopedAccumulatedTimer timer(timings.close);
+            ext2fs_close(fs);
+        }
 
         std::cerr << "[Ext4ScannerEngine] emitted stringPoolBytes="
                   << stream.totalStringPoolLength
@@ -453,6 +678,8 @@ namespace Ext4ScannerEngine {
                 .total = static_cast<quint64>(directoryInodes.size())
             });
         }
+
+        logExt4ScanProfile(timings, counters);
 
         return true;
     }

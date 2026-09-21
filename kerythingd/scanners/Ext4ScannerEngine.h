@@ -13,6 +13,9 @@
 
 namespace Ext4ScannerEngine {
 
+    struct Ext4ScanTimings;
+    struct Ext4ScanCounters;
+
     struct FileStats {
         uint64_t size = 0;
         uint64_t modificationTime = 0;
@@ -47,14 +50,18 @@ namespace Ext4ScannerEngine {
         static constexpr uint32_t kRecordsPerIpcChunk = kMaxIpcBufferSizeBytes / sizeof(FileRecord);
 
         bool flush(const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
-                   const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+                   const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                   struct Ext4ScanTimings* timings = nullptr,
+                   struct Ext4ScanCounters* counters = nullptr);
 
         bool addRecord(uint32_t inode,
                        uint32_t parentInode,
                        std::string_view name,
                        const FileStats& stats,
                        const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
-                       const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk);
+                       const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                       struct Ext4ScanTimings* timings = nullptr,
+                       struct Ext4ScanCounters* counters = nullptr);
     };
 
     /**

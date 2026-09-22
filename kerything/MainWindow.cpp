@@ -845,6 +845,11 @@ MainWindow::MainWindow(
                 this, [this](bool enabled) {
                     setFiltersDropdownVisible(enabled);
                 });
+
+        connect(controller_, &AppController::showPreviewPaneChanged,
+                this, [this](bool enabled) {
+                    setPreviewPaneVisible(enabled);
+                });
     }
 
     updateActionStates();
@@ -868,6 +873,10 @@ MainWindow::MainWindow(
 
         tableView_->horizontalHeader()->setSortIndicator(defaultSortColumn, defaultSortOrder);
         lastSortSection_ = defaultSortColumn;
+
+        const bool defaultPreviewVisible = controller_ && controller_->showPreviewPane();
+        setPreviewPaneVisible(defaultPreviewVisible);
+
         updateSearch(QString());
     }
 }
@@ -1899,14 +1908,26 @@ void MainWindow::setPreviewPaneVisible(bool visible)
         if (visible) {
             if (mainSplitter_) {
                 QList<int> sizes = mainSplitter_->sizes();
-                if (sizes.size() >= 2 && sizes[1] == 0) {
-                    const int total = sizes[0];
+                int total = 0;
+                if (sizes.size() >= 2) {
+                    total = sizes[0] + sizes[1];
+                }
+                if (total <= 0) {
+                    total = width() > 0 ? width() : 1200;
+                }
+
+                // If the pane was collapsed or uninitialized, assign proper width
+                if (sizes.size() < 2 || sizes[1] <= 0) {
                     const int previewWidth = std::max(280, total / 3);
                     mainSplitter_->setSizes({total - previewWidth, previewWidth});
                 }
             }
             updatePreview();
         }
+    }
+
+    if (controller_ && controller_->showPreviewPane() != visible) {
+        controller_->setShowPreviewPane(visible);
     }
 }
 

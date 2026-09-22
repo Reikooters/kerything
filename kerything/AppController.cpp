@@ -837,6 +837,9 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
     connect(dialog, &PreferencesDialog::showFiltersDropdownApplied,
         this, &AppController::setShowFiltersDropdown);
 
+    connect(dialog, &PreferencesDialog::showPreviewPaneApplied,
+        this, &AppController::setShowPreviewPane);
+
     connect(dialog, &PreferencesDialog::searchResultHighlightingApplied,
             this, [this](bool enabled) {
                 requestSearchHighlightRepaintAllWindows();
@@ -1108,19 +1111,15 @@ bool AppController::showFiltersDropdown() const
     return preferences_.showFiltersDropdown();
 }
 
-bool AppController::carryFilterToNewWindows() const
-{
-    return preferences_.carryFilterToNewWindows();
-}
-
 bool AppController::showPreviewPane() const
 {
     return preferences_.showPreviewPane();
 }
 
-void AppController::setShowPreviewPane(bool enabled)
+
+bool AppController::carryFilterToNewWindows() const
 {
-    preferences_.setShowPreviewPane(enabled);
+    return preferences_.carryFilterToNewWindows();
 }
 
 bool AppController::carrySearchOptionsToNewWindows() const
@@ -1164,6 +1163,22 @@ void AppController::setShowFiltersDropdown(bool enabled)
             : QStringLiteral("Filter dropdown hidden"),
         3000
     );
+}
+
+void AppController::setShowPreviewPane(bool enabled)
+{
+    const bool wasEnabled = preferences_.showPreviewPane();
+
+    if (wasEnabled == enabled) {
+        return;
+    }
+
+    preferences_.setShowPreviewPane(enabled);
+    Q_EMIT showPreviewPaneChanged(enabled);
+
+    if (preferencesDialog_) {
+        preferencesDialog_->setShowPreviewPane(enabled);
+    }
 }
 
 IndexController* AppController::indexController() const noexcept {

@@ -63,6 +63,7 @@ Q_SIGNALS:
     void searchFiltersChanged();
     void autoRefreshResultsForLiveUpdatesChanged(bool enabled);
     void showFiltersDropdownChanged(bool enabled);
+    void showPreviewPaneChanged(bool enabled);
 
 private Q_SLOTS:
     void onPrimaryRequestedOpenWindow();

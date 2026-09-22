@@ -40,6 +40,7 @@ public:
     void setCurrentPage(PreferencesDialogPage page);
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
     void setShowFiltersDropdown(bool enabled);
+    void setShowPreviewPane(bool enabled);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -50,6 +51,7 @@ Q_SIGNALS:
     void autoRefreshResultsForLiveUpdatesApplied(bool enabled);
     void searchResultHighlightingApplied(bool enabled);
     void showFiltersDropdownApplied(bool enabled);
+    void showPreviewPaneApplied(bool enabled);
 
 private:
     enum DeviceColumn {

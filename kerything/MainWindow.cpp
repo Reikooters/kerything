@@ -182,6 +182,9 @@ namespace {
 
                     if (const auto it = queryByMacro.constFind(macro); it != queryByMacro.constEnd()) {
                         if (expandingMacros.contains(macro)) {
+                            // Preferences validation should prevent circular macro references.
+                            // If a cycle still appears at runtime, keep the original token rather
+                            // than dropping it: dropping would silently broaden the search.
                             expandedTokens << token;
                             continue;
                         }
@@ -245,14 +248,18 @@ MainWindow::MainWindow(
       controller_(controller) {
     setWindowTitle("Kerything");
 
+    // Delete the QWidget object when the user closes the window.
     setAttribute(Qt::WA_DeleteOnClose);
 
+    // Central widget that holds the window's main UI.
     auto* centralWidget = new QWidget(this);
     auto* layout = new QVBoxLayout(centralWidget);
 
     searchLine_ = new QLineEdit(centralWidget);
     searchLine_->setPlaceholderText("Search...");
     searchLine_->setClearButtonEnabled(true);
+
+    // Add magnifying glass icon to the search bar
     searchLine_->addAction(QIcon::fromTheme("edit-find"), QLineEdit::LeadingPosition);
 
     filterDropdown_ = new QComboBox(centralWidget);
@@ -274,34 +281,54 @@ MainWindow::MainWindow(
     model_ = new FileModel(controller_, this);
     tableView_->setModel(model_);
 
+    // Enable Sorting
     tableView_->setSortingEnabled(true);
     tableView_->horizontalHeader()->setSortIndicatorShown(true);
 
     connect(tableView_->horizontalHeader(), &QHeaderView::sectionClicked,
             this, &MainWindow::handleSortSectionClicked);
 
+    // Table Styling
     tableView_->setAlternatingRowColors(true);
     tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView_->verticalHeader()->setVisible(false);
     tableView_->setWordWrap(false);
     installHoverRowHighlight(tableView_);
 
+    // Full-row hover
+    // tableView->setItemDelegate(new HoverRowDelegate(this));
     tableView_->setMouseTracking(true);
     tableView_->viewport()->setMouseTracking(true);
+    // connect(tableView, &QAbstractItemView::entered, this, &MainWindow::onTableHovered);
+    // connect(tableView, &QAbstractItemView::viewportEntered, this, &MainWindow::onTableViewportHovered);
     tableView_->viewport()->installEventFilter(this);
 
+    // --- Drag and Drop Configuration ---
+    // setDragEnabled(true) tells the view to start a drag if the user moves the
+    // mouse while pressing the left button on a selected item.
     tableView_->setDragEnabled(true);
-    tableView_->setDragDropMode(QAbstractItemView::DragOnly);
-    tableView_->setDefaultDropAction(Qt::CopyAction);
 
+    // DragOnly means we can drag items out, but the application doesn't accept drops.
+    tableView_->setDragDropMode(QAbstractItemView::DragOnly);
+
+    // Setting the default action to CopyAction signals to the OS
+    // that we want to share/copy the data, which helps the Portal
+    // decide to grant permission.
+    tableView_->setDefaultDropAction(Qt::CopyAction);
+    // ---------------------
+
+    // Allow resizing and horizontal scrolling
     tableView_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     tableView_->horizontalHeader()->setStretchLastSection(true);
     tableView_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
+    // Set reasonable default column widths
     tableView_->setColumnWidth(SearchResultColumn::Name, 375);
     tableView_->setColumnWidth(SearchResultColumn::Path, 525);
     tableView_->setColumnWidth(SearchResultColumn::Size, 100);
+    // Column 3 (Date) will take the remaining space due to stretchLastSection
 
+    // Use initial state to set column widths if provided
     if (initialState &&
         static_cast<int>(initialState->columnWidths.size()) == SearchResultColumn::Count) {
         for (int column = 0; column < SearchResultColumn::Count; ++column) {
@@ -331,6 +358,7 @@ MainWindow::MainWindow(
         const qsizetype mountedCount = model_ ? model_->mountedRowCount(selectedRows) : 0;
         const bool hasMountedSelection = mountedCount > 0;
 
+        // Open: enabled if at least one selected item is currently mounted.
         QAction* openAction = findChild<QAction*>("openAction");
         if (openAction) {
             openAction->setEnabled(hasMountedSelection);
@@ -348,6 +376,7 @@ MainWindow::MainWindow(
             );
         }
 
+        // Open Location & Terminal: only for single mounted selection.
         QAction* openLocAction = findChild<QAction*>("openLocationAction");
         if (openLocAction) {
             openLocAction->setEnabled(count == 1 && hasMountedSelection);
@@ -368,6 +397,7 @@ MainWindow::MainWindow(
             );
         }
 
+        // Copy Actions: Enabled if something is selected
         QAction* copyFilesAction = findChild<QAction*>("copyFilesAction");
         if (copyFilesAction) {
             copyFilesAction->setEnabled(hasMountedSelection);
@@ -408,11 +438,14 @@ MainWindow::MainWindow(
         }
     };
 
+    // Trigger update whenever selection changes
     connect(tableView_->selectionModel(), &QItemSelectionModel::selectionChanged, this, updateActionStates);
     connect(tableView_->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updatePreview);
 
+    // Also trigger it when the search results change (model reset)
     connect(tableView_->model(), &QAbstractItemModel::modelReset, this, updateActionStates);
     connect(tableView_->model(), &QAbstractItemModel::modelReset, this, &MainWindow::updatePreview);
+    // ---------------------
 
     // Status Bar
     statusLabel_ = new QLabel(this);
@@ -480,8 +513,10 @@ MainWindow::MainWindow(
         resize(initialState->windowSize);
     }
 
+    // Connect search bar to our search logic
     connect(searchLine_, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
 
+    // Connect filter dropdown to filter logic
     connect(filterDropdown_, &QComboBox::activated, this, [this](int index) {
         if (!filterDropdown_ || index < 0) {
             return;
@@ -510,7 +545,9 @@ MainWindow::MainWindow(
         applySearchFilter(filterId, filterName, queryFragment);
     });
 
-    // --- Keyboard Navigation ---
+    // --- Keyboard Navigation (Search Bar focus logic) ---
+    // Arrow Up/Down in search line moves focus to table
+    // We set the context to Qt::WidgetShortcut so it only triggers when the searchLine has focus
     auto *downToTable = new QShortcut(QKeySequence(Qt::Key_Down), searchLine_);
     auto *upToTable = new QShortcut(QKeySequence(Qt::Key_Up), searchLine_);
     downToTable->setContext(Qt::WidgetShortcut);
@@ -534,30 +571,38 @@ MainWindow::MainWindow(
         searchLine_->setFocus();
     };
 
+    // Escape in the search line clears the search.
     auto *clearSearch = new QShortcut(QKeySequence(Qt::Key_Escape), searchLine_);
     clearSearch->setContext(Qt::WidgetShortcut);
     connect(clearSearch, &QShortcut::activated, this, clearSearchOnly);
 
+    // Escape in the results list clears the search and returns focus to the search line.
     auto *clearSearchFromTable = new QShortcut(QKeySequence(Qt::Key_Escape), tableView_);
     clearSearchFromTable->setContext(Qt::WidgetShortcut);
     connect(clearSearchFromTable, &QShortcut::activated, this, clearSearchAndFocus);
+    // ---------------------
 
-    // --- Actions ---
+    // --- Global Window Actions (Shortcuts + Menu items) ---
+
+    // New Window
     auto *newWindowAct = new QAction(QIcon::fromTheme("window-new"), "New Window", this);
     newWindowAct->setShortcut(QKeySequence::New);
     connect(newWindowAct, &QAction::triggered, this, &MainWindow::openNewWindowFromThisWindow);
     addAction(newWindowAct);
 
+    // Close Window
     auto *closeWindowAct = new QAction(QIcon::fromTheme("window-close"), "Close Window", this);
     closeWindowAct->setShortcut(QKeySequence::Close);
     connect(closeWindowAct, &QAction::triggered, this, &QWidget::close);
     addAction(closeWindowAct);
 
+    // Quit Kerything
     auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit Kerything", this);
     quitAct->setShortcut(QKeySequence::Quit);
     connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
     addAction(quitAct);
 
+    // Configure Kerything
     auto* configureAct = new QAction(QIcon::fromTheme("configure"), QStringLiteral("Configure Kerything..."), this);
     configureAct->setShortcut(QKeySequence::Preferences);
     connect(configureAct, &QAction::triggered, this, [this]() {
@@ -567,6 +612,7 @@ MainWindow::MainWindow(
     });
     addAction(configureAct);
 
+    // Refresh Indexes
     auto* refreshIndexesAct = new QAction(QIcon::fromTheme(QStringLiteral("view-refresh")), QStringLiteral("Refresh Indexes"), this);
     refreshIndexesAct->setShortcut(QKeySequence(Qt::Key_F5));
     refreshIndexesAct->setStatusTip(QStringLiteral("Refresh indexes for all enabled devices"));
@@ -577,6 +623,7 @@ MainWindow::MainWindow(
     });
     addAction(refreshIndexesAct);
 
+    // Automatically Refresh Results for Live Updates
     autoRefreshLiveUpdatesAct_ = new QAction(
         QIcon::fromTheme(
             QStringLiteral("folder-sync"),
@@ -602,6 +649,7 @@ MainWindow::MainWindow(
     });
     addAction(autoRefreshLiveUpdatesAct_);
 
+    // Filter Dropdown
     showFiltersDropdownAct_ = new QAction(
         QIcon::fromTheme(
             QStringLiteral("view-filter"),
@@ -620,6 +668,7 @@ MainWindow::MainWindow(
     });
     addAction(showFiltersDropdownAct_);
 
+    // About Kerything
     auto *aboutAct = new QAction(QIcon::fromTheme("kerything"), "About Kerything", this);
     connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
 
@@ -633,6 +682,7 @@ MainWindow::MainWindow(
     connect(memoryStatsAct, &QAction::triggered, this, &MainWindow::showMemoryStats);
 #endif
 
+    // Ctrl+F, Ctrl+L and Alt+D: Focus Search
     auto *focusSearchAct = new QAction(this);
     focusSearchAct->setShortcuts({
         QKeySequence::Find,
@@ -645,6 +695,7 @@ MainWindow::MainWindow(
     });
     addAction(focusSearchAct);
 
+    // Reset Search
     auto* resetSearchAct = new QAction(
         QIcon::fromTheme(QStringLiteral("edit-clear")),
         QStringLiteral("Reset Search"),
@@ -660,6 +711,7 @@ MainWindow::MainWindow(
     connect(resetSearchAct, &QAction::triggered, this, &MainWindow::resetSearchStateAndFocus);
     addAction(resetSearchAct);
 
+    // Match Case
     matchCaseAct_ = new QAction(
         QIcon::fromTheme(
             QStringLiteral("format-text-uppercase"),
@@ -675,6 +727,7 @@ MainWindow::MainWindow(
     connect(matchCaseAct_, &QAction::toggled, this, &MainWindow::setMatchCaseEnabled);
     addAction(matchCaseAct_);
 
+    // Match Whole Word
     matchWholeWordAct_ = new QAction(
         QIcon::fromTheme(
             QStringLiteral("tools-check-spelling"),
@@ -690,6 +743,7 @@ MainWindow::MainWindow(
     connect(matchWholeWordAct_, &QAction::toggled, this, &MainWindow::setMatchWholeWordEnabled);
     addAction(matchWholeWordAct_);
 
+    // Regex
     regexAct_ = new QAction(
         QIcon::fromTheme(
             QStringLiteral("code-context"),
@@ -711,6 +765,7 @@ MainWindow::MainWindow(
     connect(regexAct_, &QAction::toggled, this, &MainWindow::setRegexEnabled);
     addAction(regexAct_);
 
+    // Enter: Open
     auto *openAct = new QAction(QIcon::fromTheme("system-run"), "Open", this);
     openAct->setShortcuts({
         QKeySequence(Qt::Key_Return),
@@ -720,35 +775,41 @@ MainWindow::MainWindow(
     connect(openAct, &QAction::triggered, this, &MainWindow::openSelectedFiles);
     addAction(openAct);
 
+    // Ctrl+Enter: Show in File Manager
     auto *showInFileManagerAct = new QAction(QIcon::fromTheme("folder-open"), "Show in File Manager", this);
     showInFileManagerAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
     showInFileManagerAct->setObjectName("openLocationAction");
     connect(showInFileManagerAct, &QAction::triggered, this, &MainWindow::openSelectedLocation);
     addAction(showInFileManagerAct);
 
+    // Ctrl+C: Copy Files
     auto *copyFilesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy File", this);
     copyFilesAct->setShortcut(QKeySequence::Copy);
     copyFilesAct->setObjectName("copyFilesAction");
     connect(copyFilesAct, &QAction::triggered, this, &MainWindow::copyFiles);
     addAction(copyFilesAct);
 
+    // Ctrl+Shift+C: Copy File Names
     auto *copyFileNamesAct = new QAction(QIcon::fromTheme("edit-copy"), "Copy File Name", this);
     copyFileNamesAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
     copyFileNamesAct->setObjectName("copyFileNamesAction");
     connect(copyFileNamesAct, &QAction::triggered, this, &MainWindow::copyFileNames);
     addAction(copyFileNamesAct);
 
+    // Ctrl+Alt+C: Copy Full Paths
     auto *copyPathsAct = new QAction(QIcon::fromTheme("edit-copy-path"), "Copy Full Path", this);
     copyPathsAct->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_C));
     copyPathsAct->setObjectName("copyPathsAction");
     connect(copyPathsAct, &QAction::triggered, this, &MainWindow::copyPaths);
     addAction(copyPathsAct);
 
+    // Copy Parent Paths
     auto *copyParentPathsAct = new QAction(QIcon::fromTheme("edit-copy-path"), "Copy Parent Path", this);
     copyParentPathsAct->setObjectName("copyParentPathsAction");
     connect(copyParentPathsAct, &QAction::triggered, this, &MainWindow::copyParentPaths);
     addAction(copyParentPathsAct);
 
+    // Alt+Shift+F4: Open Terminal
     auto *terminalAct = new QAction(QIcon::fromTheme("utilities-terminal"), "Open Terminal Here", this);
     terminalAct->setShortcut(QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_F4));
     terminalAct->setObjectName("openTerminalAction");
@@ -785,7 +846,7 @@ MainWindow::MainWindow(
         QStringLiteral("Preview Pane"),
         this
     );
-    togglePreviewAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_P));
+    togglePreviewAct_->setShortcut(QKeySequence(Qt::ALT | Qt::Key_P));
     togglePreviewAct_->setCheckable(true);
     togglePreviewAct_->setChecked(false);
     togglePreviewAct_->setStatusTip(QStringLiteral("Show or hide the preview pane"));
@@ -823,6 +884,7 @@ MainWindow::MainWindow(
     helpMenu->addSeparator();
 #endif
     helpMenu->addAction(aboutAct);
+    // ---------------------
 
     if (controller_) {
         connect(controller_, &AppController::searchFiltersChanged, this, [this]() {
@@ -854,8 +916,10 @@ MainWindow::MainWindow(
 
     updateActionStates();
 
+    // Handle double-click on item in table view to open file
     connect(tableView_, &SearchResultTableView::doubleClicked, this, &MainWindow::openFile);
 
+    // Initialize initial search chip/menu state
     rebuildFilterDropdown();
     updateSearchOptionChips();
     updateSearchMenuTitle();
@@ -1010,6 +1074,7 @@ void MainWindow::updateSearch(const QString &text) {
     std::chrono::duration<double> elapsed2 = end2 - start2;
     std::chrono::duration<double> elapsed = end2 - start1;
 
+    // Update status bar
     statusBar()->showMessage(QString("%L1 objects found in %2s (search: %3s, sort: %4s)")
         .arg(model_->rowCount())
         .arg(elapsed.count(), 0, 'f', 4)
@@ -1195,6 +1260,9 @@ void MainWindow::refreshLiveMetadata()
         const std::optional<IndexController::RecordHandle> currentHandle =
             captureCurrentRecordHandle();
 
+        // Metadata-only updates can affect Size and Modified Date ordering, but
+        // they do not affect search membership. Re-sort the existing result set
+        // instead of doing a full refresh/search.
         model_->sort(sortColumn, sortOrder);
         restoreSelectedRecordHandles(selectedHandles, currentHandle);
         return;
@@ -1994,6 +2062,13 @@ void MainWindow::handleSortSectionClicked(int section)
         return;
     }
 
+    /*
+     * Qt's default sorting makes the first click on a newly selected column
+     * ascending. For Size and Date Modified, descending is usually the desired
+     * initial direction, so correct only that first click after switching columns.
+     *
+     * Subsequent clicks on the same column are left alone so normal toggling works.
+     */
     if (header->sortIndicatorSection() == section &&
         header->sortIndicatorOrder() == Qt::AscendingOrder) {
         header->setSortIndicator(section, Qt::DescendingOrder);
@@ -2389,13 +2464,18 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event)
         return;
     }
 
+    // Map the position correctly to the viewport
+    // This ensures the row index is perfectly aligned with the mouse
     const QPoint viewportPos = tableView_->viewport()->mapFrom(this, event->pos());
     const QModelIndex clickIndex = tableView_->indexAt(viewportPos);
 
+    // If user clicks empty space, don't show the full file menu
     if (!clickIndex.isValid()) {
         return;
     }
 
+    // If the user right-clicks an item that ISN'T selected,
+    // select it and clear the old selection (standard file manager behavior).
     if (!tableView_->selectionModel()->isSelected(clickIndex)) {
         tableView_->setCurrentIndex(clickIndex);
         tableView_->selectionModel()->select(

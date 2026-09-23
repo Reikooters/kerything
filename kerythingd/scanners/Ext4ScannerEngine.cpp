@@ -58,6 +58,7 @@ namespace Ext4ScannerEngine {
 
         constexpr uint32_t kInvalidRecordIndex = 0xFFFFFFFF;
         constexpr uint64_t kProgressEvery = 4096; // must be power of two
+        constexpr uint32_t kInodeSlotProgressEvery = 262144; // must be power of two
         constexpr uint32_t kDirEntryCancelCheckEvery = 1024; // must be power of two
         constexpr uint32_t kDirectoryCancelCheckEvery = 256; // must be power of two
         constexpr uint32_t kParallelDirectoryChunkSize = 128;
@@ -349,7 +350,7 @@ namespace Ext4ScannerEngine {
         [[nodiscard]] bool collectInodeStats(ext2_filsys fs,
                                              std::vector<InodeStatsEntry>& inodeStats,
                                              std::vector<uint32_t>& directoryInodes,
-                                             uint64_t inodesInUse,
+                                             uint64_t totalInodes,
                                              const ScannerHelper::ErrorCallback& onError,
                                              const ScannerHelper::CancelCallback& shouldCancel,
                                              const ScannerHelper::ProgressCallback& onProgress,
@@ -371,13 +372,14 @@ namespace Ext4ScannerEngine {
             ext2_inode inode{};
 
             uint64_t usedInodesSeen = 0;
+            uint64_t lastProgressInode = 0;
 
             if (onProgress) {
                 onProgress(Protocol::ScanProgress{
-                    .phase = QStringLiteral("Reading inodes"),
-                    .unit = QStringLiteral("inodes"),
+                    .phase = QStringLiteral("Reading inode table"),
+                    .unit = QStringLiteral("slots"),
                     .processed = 0,
-                    .total = inodesInUse
+                    .total = totalInodes
                 });
             }
 
@@ -391,6 +393,18 @@ namespace Ext4ScannerEngine {
 
                 if (ino == 0) {
                     break;
+                }
+
+                if (onProgress &&
+                    static_cast<uint64_t>(ino) >= lastProgressInode + kInodeSlotProgressEvery) {
+                    lastProgressInode = static_cast<uint64_t>(ino);
+
+                    onProgress(Protocol::ScanProgress{
+                        .phase = QStringLiteral("Reading inode table"),
+                        .unit = QStringLiteral("slots"),
+                        .processed = std::min<uint64_t>(lastProgressInode, totalInodes),
+                        .total = totalInodes
+                    });
                 }
 
                 if (inode.i_links_count == 0) {
@@ -410,15 +424,6 @@ namespace Ext4ScannerEngine {
                     directoryInodes.push_back(static_cast<uint32_t>(ino));
                 }
 
-                if (onProgress && ((usedInodesSeen & (kProgressEvery - 1)) == 0)) {
-                    onProgress(Protocol::ScanProgress{
-                        .phase = QStringLiteral("Reading inodes"),
-                        .unit = QStringLiteral("inodes"),
-                        .processed = usedInodesSeen,
-                        .total = inodesInUse
-                    });
-                }
-
                 if (shouldCancel && shouldCancel()) {
                     ext2fs_close_inode_scan(scan);
                     return false;
@@ -435,10 +440,10 @@ namespace Ext4ScannerEngine {
 
             if (onProgress) {
                 onProgress(Protocol::ScanProgress{
-                    .phase = QStringLiteral("Reading inodes"),
-                    .unit = QStringLiteral("inodes"),
-                    .processed = usedInodesSeen,
-                    .total = inodesInUse
+                    .phase = QStringLiteral("Reading inode table"),
+                    .unit = QStringLiteral("slots"),
+                    .processed = totalInodes,
+                    .total = totalInodes
                 });
             }
 
@@ -932,7 +937,7 @@ namespace Ext4ScannerEngine {
             inodeStatsCollected = collectInodeStats(fs,
                                                     inodeStats,
                                                     directoryInodes,
-                                                    inodesInUse,
+                                                    totalInodes,
                                                     onError,
                                                     shouldCancel,
                                                     onProgress,

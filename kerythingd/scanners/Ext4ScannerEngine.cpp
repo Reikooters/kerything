@@ -64,6 +64,10 @@ namespace Ext4ScannerEngine {
         constexpr uint32_t kParallelDirectoryChunkSize = 128;
         constexpr uint32_t kMinDirectoriesForParallelScan = 1024;
         constexpr uint32_t kMaxParallelDirectoryWorkers = 16;
+        constexpr uint32_t kMinBlockGroupsForParallelInodeScan = 256;
+        constexpr uint32_t kMinInodeSlotsForParallelInodeScan = 1'000'000;
+        constexpr uint32_t kMinUsedInodesForParallelInodeScan = 100'000;
+        constexpr uint32_t kMaxParallelInodeWorkers = 8;
 
 #ifdef KERYTHING_ENABLE_LOGGING
         [[nodiscard]] double seconds(Nanoseconds value)
@@ -175,6 +179,15 @@ namespace Ext4ScannerEngine {
             const std::vector<InodeStatsEntry>* entries = nullptr;
             uint32_t inodeSpanPerBucket = 0;
             std::vector<InodeStatsBucket> buckets;
+        };
+
+        struct InodeStatsWorkerResult {
+            std::vector<InodeStatsEntry> inodeStats;
+            std::vector<uint32_t> directoryInodes;
+            uint64_t usedInodesSeen = 0;
+            bool failed = false;
+            bool cancelled = false;
+            std::string errorMessage;
         };
 
         [[nodiscard]] uint32_t inodeGroupForLookup(uint32_t inode, uint32_t inodeSpanPerBucket) noexcept
@@ -347,6 +360,42 @@ namespace Ext4ScannerEngine {
             return &it->stats;
         }
 
+        [[nodiscard]] uint32_t chooseInodeScanWorkerCount(ext2_filsys fs,
+                                                          uint32_t totalInodes,
+                                                          uint32_t inodesInUse,
+                                                          const ScanOptions& options) noexcept
+        {
+            if (!fs || !fs->super) {
+                return 1;
+            }
+
+            if (options.deviceIsRotational) {
+                return 1;
+            }
+
+            if (totalInodes < kMinInodeSlotsForParallelInodeScan ||
+                inodesInUse < kMinUsedInodesForParallelInodeScan) {
+                return 1;
+            }
+
+            const dgrp_t groupCount = fs->group_desc_count;
+
+            if (groupCount < kMinBlockGroupsForParallelInodeScan) {
+                return 1;
+            }
+
+            const uint32_t hardwareThreads =
+                std::max(1u, std::thread::hardware_concurrency());
+
+            return static_cast<uint32_t>(
+                std::clamp<std::size_t>(
+                    std::min<std::size_t>(groupCount, hardwareThreads),
+                    1,
+                    kMaxParallelInodeWorkers
+                )
+            );
+        }
+
         [[nodiscard]] bool collectInodeStats(ext2_filsys fs,
                                              std::vector<InodeStatsEntry>& inodeStats,
                                              std::vector<uint32_t>& directoryInodes,
@@ -434,6 +483,331 @@ namespace Ext4ScannerEngine {
 
             if (counters) {
                 counters->usedInodesSeen = usedInodesSeen;
+                counters->inodeStatsEntries = inodeStats.size();
+                counters->directoryInodes = directoryInodes.size();
+            }
+
+            if (onProgress) {
+                onProgress(Protocol::ScanProgress{
+                    .phase = QStringLiteral("Reading inode table"),
+                    .unit = QStringLiteral("slots"),
+                    .processed = totalInodes,
+                    .total = totalInodes
+                });
+            }
+
+            return true;
+        }
+
+        [[nodiscard]] bool collectInodeStatsParallelByGroup(const QString& devicePath,
+                                                            ext2_filsys fs,
+                                                            std::vector<InodeStatsEntry>& inodeStats,
+                                                            std::vector<uint32_t>& directoryInodes,
+                                                            uint64_t totalInodes,
+                                                            uint64_t inodesInUse,
+                                                            uint32_t workerCount,
+                                                            const ScannerHelper::ErrorCallback& onError,
+                                                            const ScannerHelper::CancelCallback& shouldCancel,
+                                                            const ScannerHelper::ProgressCallback& onProgress,
+                                                            Ext4ScanCounters* counters)
+        {
+#ifdef KERYTHING_ENABLE_LOGGING
+            ScopedTimer timer("[Ext4ScannerEngine] parallel inode stats scan");
+#endif
+
+            if (!fs || !fs->super || workerCount <= 1) {
+                return collectInodeStats(
+                    fs,
+                    inodeStats,
+                    directoryInodes,
+                    totalInodes,
+                    onError,
+                    shouldCancel,
+                    onProgress,
+                    counters
+                );
+            }
+
+            const dgrp_t groupCount = fs->group_desc_count;
+            const uint32_t inodesPerGroup = fs->super->s_inodes_per_group;
+
+            if (groupCount == 0 || inodesPerGroup == 0) {
+                return collectInodeStats(
+                    fs,
+                    inodeStats,
+                    directoryInodes,
+                    totalInodes,
+                    onError,
+                    shouldCancel,
+                    onProgress,
+                    counters
+                );
+            }
+
+            if (onProgress) {
+                onProgress(Protocol::ScanProgress{
+                    .phase = QStringLiteral("Reading inode table"),
+                    .unit = QStringLiteral("slots"),
+                    .processed = 0,
+                    .total = totalInodes
+                });
+            }
+
+            const std::string devicePathStd = devicePath.toStdString();
+
+            std::atomic_bool sharedAbort{false};
+            std::atomic_uint64_t completedGroups{0};
+
+            std::mutex progressMutex;
+            std::mutex errorMutex;
+
+            std::vector<InodeStatsWorkerResult> workerResults(workerCount);
+            std::vector<std::thread> workers;
+            workers.reserve(workerCount);
+
+            const dgrp_t groupsPerWorker =
+                static_cast<dgrp_t>((groupCount + workerCount - 1) / workerCount);
+
+            for (uint32_t workerIdx = 0; workerIdx < workerCount; ++workerIdx) {
+                const dgrp_t beginGroup =
+                    static_cast<dgrp_t>(workerIdx * groupsPerWorker);
+
+                if (beginGroup >= groupCount) {
+                    break;
+                }
+
+                const dgrp_t endGroup = std::min<dgrp_t>(
+                    groupCount,
+                    static_cast<dgrp_t>(beginGroup + groupsPerWorker)
+                );
+
+                workers.emplace_back([&, workerIdx, beginGroup, endGroup]() {
+                    InodeStatsWorkerResult& result = workerResults[workerIdx];
+
+                    ext2_filsys workerFs = nullptr;
+                    errcode_t retval = ext2fs_open(
+                        devicePathStd.c_str(),
+                        0,
+                        0,
+                        0,
+                        unix_io_manager,
+                        &workerFs
+                    );
+
+                    if (retval) {
+                        result.failed = true;
+                        result.errorMessage =
+                            makeExt2Error("ext2fs_open failed for ext4 inode scan worker", retval);
+                        sharedAbort.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+
+                    ext2_inode_scan scan = nullptr;
+                    constexpr int bufferBlocks = 4096;
+
+                    retval = ext2fs_open_inode_scan(workerFs, bufferBlocks, &scan);
+                    if (retval) {
+                        result.failed = true;
+                        result.errorMessage =
+                            makeExt2Error("ext2fs_open_inode_scan failed for ext4 inode scan worker", retval);
+                        sharedAbort.store(true, std::memory_order_relaxed);
+                        ext2fs_close(workerFs);
+                        return;
+                    }
+
+                    retval = ext2fs_inode_scan_goto_blockgroup(scan, beginGroup);
+                    if (retval) {
+                        result.failed = true;
+                        result.errorMessage =
+                            makeExt2Error("ext2fs_inode_scan_goto_blockgroup failed for ext4 inode scan worker", retval);
+                        sharedAbort.store(true, std::memory_order_relaxed);
+                        ext2fs_close_inode_scan(scan);
+                        ext2fs_close(workerFs);
+                        return;
+                    }
+
+                    const uint64_t beginInode =
+                        static_cast<uint64_t>(beginGroup) * inodesPerGroup + 1;
+
+                    const uint64_t endInodeExclusive = std::min<uint64_t>(
+                        totalInodes + 1,
+                        static_cast<uint64_t>(endGroup) * inodesPerGroup + 1
+                    );
+
+                    if (endInodeExclusive <= beginInode) {
+                        ext2fs_close_inode_scan(scan);
+                        ext2fs_close(workerFs);
+                        return;
+                    }
+
+                    const uint64_t workerInodeSlots = endInodeExclusive - beginInode;
+                    const uint64_t workerEstimatedUsedInodes =
+                        std::max<uint64_t>(
+                            1024,
+                            (inodesInUse * workerInodeSlots) / std::max<uint64_t>(totalInodes, 1)
+                        );
+
+                    result.inodeStats.reserve(static_cast<std::size_t>(workerEstimatedUsedInodes));
+                    result.directoryInodes.reserve(static_cast<std::size_t>(
+                        std::max<uint64_t>(256, workerEstimatedUsedInodes / 8)
+                    ));
+
+                    ext2_ino_t ino = 0;
+                    ext2_inode inode{};
+                    dgrp_t lastCompletedGroup = beginGroup;
+
+                    while (!sharedAbort.load(std::memory_order_relaxed)) {
+                        retval = ext2fs_get_next_inode(scan, &ino, &inode);
+                        if (retval) {
+                            result.failed = true;
+                            result.errorMessage =
+                                makeExt2Error("ext2fs_get_next_inode failed for ext4 inode scan worker", retval);
+                            sharedAbort.store(true, std::memory_order_relaxed);
+                            break;
+                        }
+
+                        if (ino == 0 || static_cast<uint64_t>(ino) >= endInodeExclusive) {
+                            break;
+                        }
+
+                        if (static_cast<uint64_t>(ino) < beginInode) {
+                            continue;
+                        }
+
+                        const dgrp_t currentGroup = static_cast<dgrp_t>(
+                            (static_cast<uint64_t>(ino) - 1) / inodesPerGroup
+                        );
+
+                        while (lastCompletedGroup < currentGroup &&
+                               lastCompletedGroup < endGroup) {
+                            const uint64_t groupsDone =
+                                completedGroups.fetch_add(1, std::memory_order_relaxed) + 1;
+
+                            ++lastCompletedGroup;
+
+                            if (onProgress && ((groupsDone & 31u) == 0)) {
+                                const quint64 processed = std::min<quint64>(
+                                    totalInodes,
+                                    groupsDone * static_cast<uint64_t>(inodesPerGroup)
+                                );
+
+                                std::lock_guard lock(progressMutex);
+                                onProgress(Protocol::ScanProgress{
+                                    .phase = QStringLiteral("Reading inode table"),
+                                    .unit = QStringLiteral("slots"),
+                                    .processed = processed,
+                                    .total = totalInodes
+                                });
+                            }
+                        }
+
+                        if (shouldCancel && shouldCancel()) {
+                            result.cancelled = true;
+                            sharedAbort.store(true, std::memory_order_relaxed);
+                            break;
+                        }
+
+                        if (inode.i_links_count == 0) {
+                            continue;
+                        }
+
+                        ++result.usedInodesSeen;
+
+                        const FileStats stats = makeFileStats(inode);
+
+                        result.inodeStats.push_back(InodeStatsEntry{
+                            static_cast<uint32_t>(ino),
+                            stats
+                        });
+
+                        if ((stats.flags & FileRecord_IsDir) != 0) {
+                            result.directoryInodes.push_back(static_cast<uint32_t>(ino));
+                        }
+                    }
+
+                    while (!result.failed &&
+                           !result.cancelled &&
+                           lastCompletedGroup < endGroup) {
+                        const uint64_t groupsDone =
+                            completedGroups.fetch_add(1, std::memory_order_relaxed) + 1;
+
+                        ++lastCompletedGroup;
+
+                        if (onProgress && ((groupsDone & 31u) == 0)) {
+                            const quint64 processed = std::min<quint64>(
+                                totalInodes,
+                                groupsDone * static_cast<uint64_t>(inodesPerGroup)
+                            );
+
+                            std::lock_guard lock(progressMutex);
+                            onProgress(Protocol::ScanProgress{
+                                .phase = QStringLiteral("Reading inode table"),
+                                .unit = QStringLiteral("slots"),
+                                .processed = processed,
+                                .total = totalInodes
+                            });
+                        }
+                    }
+
+                    ext2fs_close_inode_scan(scan);
+                    ext2fs_close(workerFs);
+                });
+            }
+
+            for (std::thread& worker : workers) {
+                if (worker.joinable()) {
+                    worker.join();
+                }
+            }
+
+            for (const InodeStatsWorkerResult& result : workerResults) {
+                if (result.failed) {
+                    reportError(
+                        onError,
+                        result.errorMessage.empty()
+                            ? std::string("parallel ext4 inode scan worker failed")
+                            : result.errorMessage
+                    );
+                    return false;
+                }
+
+                if (result.cancelled) {
+                    return false;
+                }
+            }
+
+            std::size_t totalStats = 0;
+            std::size_t totalDirectories = 0;
+            uint64_t totalUsedInodesSeen = 0;
+
+            for (const InodeStatsWorkerResult& result : workerResults) {
+                totalStats += result.inodeStats.size();
+                totalDirectories += result.directoryInodes.size();
+                totalUsedInodesSeen += result.usedInodesSeen;
+            }
+
+            inodeStats.clear();
+            directoryInodes.clear();
+
+            inodeStats.reserve(totalStats);
+            directoryInodes.reserve(totalDirectories);
+
+            for (InodeStatsWorkerResult& result : workerResults) {
+                inodeStats.insert(
+                    inodeStats.end(),
+                    std::make_move_iterator(result.inodeStats.begin()),
+                    std::make_move_iterator(result.inodeStats.end())
+                );
+
+                directoryInodes.insert(
+                    directoryInodes.end(),
+                    std::make_move_iterator(result.directoryInodes.begin()),
+                    std::make_move_iterator(result.directoryInodes.end())
+                );
+            }
+
+            if (counters) {
+                counters->usedInodesSeen = totalUsedInodesSeen;
                 counters->inodeStatsEntries = inodeStats.size();
                 counters->directoryInodes = directoryInodes.size();
             }
@@ -929,19 +1303,49 @@ namespace Ext4ScannerEngine {
 
         directoryInodes.reserve(estimatedDirectoryInodes);
 
+        const uint32_t inodeScanWorkerCount =
+            chooseInodeScanWorkerCount(fs, totalInodes, inodesInUse, options);
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cerr << "[Ext4ScannerEngine] inode scan workers="
+                  << inodeScanWorkerCount
+                  << " deviceIsRotational="
+                  << (options.deviceIsRotational ? "true" : "false")
+                  << "\n";
+#endif
+
         bool inodeStatsCollected = false;
         {
 #ifdef KERYTHING_ENABLE_LOGGING
             ScopedAccumulatedTimer timer(profileTimings->inodeStatsScan);
 #endif
-            inodeStatsCollected = collectInodeStats(fs,
-                                                    inodeStats,
-                                                    directoryInodes,
-                                                    totalInodes,
-                                                    onError,
-                                                    shouldCancel,
-                                                    onProgress,
-                                                    profileCounters);
+
+            if (inodeScanWorkerCount > 1) {
+                inodeStatsCollected = collectInodeStatsParallelByGroup(
+                    devicePath,
+                    fs,
+                    inodeStats,
+                    directoryInodes,
+                    totalInodes,
+                    inodesInUse,
+                    inodeScanWorkerCount,
+                    onError,
+                    shouldCancel,
+                    onProgress,
+                    profileCounters
+                );
+            } else {
+                inodeStatsCollected = collectInodeStats(
+                    fs,
+                    inodeStats,
+                    directoryInodes,
+                    totalInodes,
+                    onError,
+                    shouldCancel,
+                    onProgress,
+                    profileCounters
+                );
+            }
         }
 
         if (!inodeStatsCollected) {
@@ -974,6 +1378,10 @@ namespace Ext4ScannerEngine {
                           [](const InodeStatsEntry& lhs, const InodeStatsEntry& rhs) {
                               return lhs.inode < rhs.inode;
                           });
+            }
+
+            if (!std::is_sorted(directoryInodes.begin(), directoryInodes.end())) {
+                std::sort(directoryInodes.begin(), directoryInodes.end());
             }
         }
 

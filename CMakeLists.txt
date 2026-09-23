@@ -103,6 +103,8 @@ add_executable(kerything
         kerything/PreferencesDialog.cpp
         kerything/PreferencesDialog.h
         kerything/PreferencesDialogPage.h
+        kerything/PreviewPane.cpp
+        kerything/PreviewPane.h
         kerything/SearchResultColumns.h
         kerything/SearchResultTableView.cpp
         kerything/SearchResultTableView.h

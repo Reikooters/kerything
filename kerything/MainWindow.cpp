@@ -3,6 +3,7 @@
 
 #include "MainWindow.h"
 #include "SearchResultTableView.h"
+#include "PreviewPane.h"
 
 #include <algorithm>
 #include <iostream>
@@ -27,6 +28,7 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QShortcut>
+#include <QSplitter>
 #include <QActionGroup>
 #include <QSignalBlocker>
 #include <QStatusBar>
@@ -336,7 +338,18 @@ MainWindow::MainWindow(
         }
     }
 
-    layout->addWidget(tableView_);
+    // Splitter hosting the search results table and the collapsible preview pane
+    previewPane_ = new PreviewPane(centralWidget);
+    previewPane_->setVisible(false);
+
+    mainSplitter_ = new QSplitter(Qt::Horizontal, centralWidget);
+    mainSplitter_->addWidget(tableView_);
+    mainSplitter_->addWidget(previewPane_);
+    mainSplitter_->setStretchFactor(0, 1);
+    mainSplitter_->setStretchFactor(1, 0);
+    mainSplitter_->setCollapsible(0, false);
+    mainSplitter_->setCollapsible(1, true);
+    layout->addWidget(mainSplitter_);
 
     // --- Action State Management ---
     auto updateActionStates = [this]() {
@@ -427,9 +440,11 @@ MainWindow::MainWindow(
 
     // Trigger update whenever selection changes
     connect(tableView_->selectionModel(), &QItemSelectionModel::selectionChanged, this, updateActionStates);
+    connect(tableView_->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::updatePreview);
 
     // Also trigger it when the search results change (model reset)
     connect(tableView_->model(), &QAbstractItemModel::modelReset, this, updateActionStates);
+    connect(tableView_->model(), &QAbstractItemModel::modelReset, this, &MainWindow::updatePreview);
     // ---------------------
 
     // Status Bar
@@ -440,7 +455,6 @@ MainWindow::MainWindow(
         "}"
     ));
     statusBar()->addPermanentWidget(statusLabel_);
-
     statusBar()->setSizeGripEnabled(false);
 
     filterChip_ = new QToolButton(this);
@@ -824,6 +838,22 @@ MainWindow::MainWindow(
     auto* viewMenu = menuBar()->addMenu(QStringLiteral("View"));
     viewMenu->addAction(showFiltersDropdownAct_);
 
+    togglePreviewAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("view-preview"),
+            QIcon::fromTheme(QStringLiteral("document-preview"))
+        ),
+        QStringLiteral("Preview Pane"),
+        this
+    );
+    togglePreviewAct_->setShortcut(QKeySequence(Qt::ALT | Qt::Key_P));
+    togglePreviewAct_->setCheckable(true);
+    togglePreviewAct_->setChecked(false);
+    togglePreviewAct_->setStatusTip(QStringLiteral("Show or hide the preview pane"));
+    connect(togglePreviewAct_, &QAction::toggled, this, &MainWindow::setPreviewPaneVisible);
+    addAction(togglePreviewAct_);
+    viewMenu->addAction(togglePreviewAct_);
+
     // Search Menu
     searchMenu_ = menuBar()->addMenu(QStringLiteral("Search"));
     searchMenu_->addAction(matchCaseAct_);
@@ -877,6 +907,11 @@ MainWindow::MainWindow(
                 this, [this](bool enabled) {
                     setFiltersDropdownVisible(enabled);
                 });
+
+        connect(controller_, &AppController::showPreviewPaneChanged,
+                this, [this](bool enabled) {
+                    setPreviewPaneVisible(enabled);
+                });
     }
 
     updateActionStates();
@@ -902,6 +937,10 @@ MainWindow::MainWindow(
 
         tableView_->horizontalHeader()->setSortIndicator(defaultSortColumn, defaultSortOrder);
         lastSortSection_ = defaultSortColumn;
+
+        const bool defaultPreviewVisible = controller_ && controller_->showPreviewPane();
+        setPreviewPaneVisible(defaultPreviewVisible);
+
         updateSearch(QString());
     }
 }
@@ -1070,11 +1109,13 @@ MainWindow::NewWindowState MainWindow::newWindowState() const
         .searchText = searchLine_ ? searchLine_->text() : QString(),
         .windowSize = size(),
         .columnWidths = std::move(columnWidths),
+        .splitterSizes = mainSplitter_ ? mainSplitter_->sizes() : QList<int>{},
         .sortColumn = header ? header->sortIndicatorSection() : SearchResultColumn::Name,
         .sortOrder = header ? header->sortIndicatorOrder() : Qt::AscendingOrder,
         .matchCaseEnabled = matchCaseEnabled_,
         .matchWholeWordEnabled = matchWholeWordEnabled_,
         .regexEnabled = regexEnabled_,
+        .previewPaneVisible = previewPane_ != nullptr && previewPane_->isVisible(),
     };
 }
 
@@ -1087,6 +1128,11 @@ void MainWindow::applyNewWindowState(const NewWindowState& state)
     matchCaseEnabled_ = state.matchCaseEnabled;
     matchWholeWordEnabled_ = state.matchWholeWordEnabled;
     regexEnabled_ = state.regexEnabled;
+
+    setPreviewPaneVisible(state.previewPaneVisible);
+    if (state.previewPaneVisible && !state.splitterSizes.isEmpty() && mainSplitter_) {
+        mainSplitter_->setSizes(state.splitterSizes);
+    }
 
     if (matchCaseAct_) {
         const QSignalBlocker blocker(matchCaseAct_);
@@ -1161,7 +1207,7 @@ bool MainWindow::shouldDeferLiveRefresh() const
         isMinimized() ||
         windowState().testFlag(Qt::WindowMinimized)) {
         return true;
-        }
+    }
 
     const QWindow* nativeWindow = windowHandle();
 
@@ -1174,7 +1220,7 @@ bool MainWindow::shouldDeferLiveRefresh() const
     if (visibility == QWindow::Hidden ||
         visibility == QWindow::Minimized) {
         return true;
-        }
+    }
 
     return !nativeWindow->isExposed();
 }
@@ -1918,6 +1964,78 @@ void MainWindow::refreshDirtyLiveUpdatesIfNeeded()
     }
 }
 
+void MainWindow::setPreviewPaneVisible(bool visible)
+{
+    if (togglePreviewAct_ && togglePreviewAct_->isChecked() != visible) {
+        const QSignalBlocker blocker(togglePreviewAct_);
+        togglePreviewAct_->setChecked(visible);
+    }
+
+    if (previewPane_) {
+        previewPane_->setVisible(visible);
+        if (visible) {
+            if (mainSplitter_) {
+                QList<int> sizes = mainSplitter_->sizes();
+                int total = 0;
+                if (sizes.size() >= 2) {
+                    total = sizes[0] + sizes[1];
+                }
+                if (total <= 0) {
+                    total = width() > 0 ? width() : 1200;
+                }
+
+                // If the pane was collapsed or uninitialized, assign proper width
+                if (sizes.size() < 2 || sizes[1] <= 0) {
+                    const int previewWidth = std::max(280, total / 3);
+                    mainSplitter_->setSizes({total - previewWidth, previewWidth});
+                }
+            }
+            updatePreview();
+        }
+    }
+
+    if (controller_ && controller_->showPreviewPane() != visible) {
+        controller_->setShowPreviewPane(visible);
+    }
+}
+
+void MainWindow::updatePreview()
+{
+    if (!previewPane_ || !previewPane_->isVisible()) {
+        return;
+    }
+
+    if (!tableView_ || !tableView_->selectionModel() || !model_) {
+        previewPane_->clearPreview(QStringLiteral("No item selected"));
+        return;
+    }
+
+    const QModelIndexList selectedRows = tableView_->selectionModel()->selectedRows();
+    if (selectedRows.isEmpty()) {
+        previewPane_->clearPreview(QStringLiteral("No item selected"));
+        return;
+    }
+
+    if (selectedRows.size() > 1) {
+        previewPane_->clearPreview(QStringLiteral("Multiple items selected"));
+        return;
+    }
+
+    const int row = selectedRows.first().row();
+    if (!model_->isMountedRow(row)) {
+        previewPane_->showUnmounted();
+        return;
+    }
+
+    const std::optional<QUrl> url = model_->localUrlForRow(row);
+    if (!url || !url->isValid()) {
+        previewPane_->clearPreview(QStringLiteral("Unable to locate file"));
+        return;
+    }
+
+    previewPane_->previewUrl(*url);
+}
+
 void MainWindow::handleSortSectionClicked(int section)
 {
     if (!tableView_ || !model_ || !controller_) {
@@ -2221,6 +2339,8 @@ void MainWindow::restoreSelectedRecordHandles(
     if (tableView_->horizontalScrollBar()) {
         tableView_->horizontalScrollBar()->setValue(horizontalScrollValue);
     }
+
+    updatePreview();
 }
 
 #ifdef KERYTHING_ENABLE_MEMORY_STATS

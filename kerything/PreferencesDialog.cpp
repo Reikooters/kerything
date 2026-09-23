@@ -244,6 +244,17 @@ void PreferencesDialog::setShowFiltersDropdown(bool enabled)
     updateApplyButtonEnabled();
 }
 
+void PreferencesDialog::setShowPreviewPane(bool enabled)
+{
+    if (!showPreviewPaneCheckBox_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(showPreviewPaneCheckBox_);
+    showPreviewPaneCheckBox_->setChecked(enabled);
+    updateApplyButtonEnabled();
+}
+
 void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDevices)
 {
     QString selectedDeviceId;
@@ -1236,6 +1247,20 @@ QWidget* PreferencesDialog::createUiPage()
     filtersLayout->addWidget(filtersDescription);
 
     layout->addWidget(filtersGroup);
+
+    // --- Preview Pane Group ---
+    auto* previewGroup = new QGroupBox(QStringLiteral("Preview Pane"), content);
+    auto* previewLayout = new QVBoxLayout(previewGroup);
+
+    showPreviewPaneCheckBox_ = new QCheckBox(
+        QStringLiteral("Show preview pane by default"),
+        previewGroup
+    );
+    showPreviewPaneCheckBox_->setChecked(preferences_.showPreviewPane());
+
+    previewLayout->addWidget(showPreviewPaneCheckBox_);
+
+    layout->addWidget(previewGroup);
 
     auto* sortingGroup = new QGroupBox(QStringLiteral("Sorting"), content);
     auto* sortingLayout = new QVBoxLayout(sortingGroup);
@@ -2799,6 +2824,12 @@ bool PreferencesDialog::hasUIChanges() const
             preferences_.showFiltersDropdown();
     }
 
+    if (showPreviewPaneCheckBox_) {
+        changed = changed ||
+            showPreviewPaneCheckBox_->isChecked() !=
+            preferences_.showPreviewPane();
+    }
+
     return changed;
 }
 
@@ -2841,6 +2872,10 @@ bool PreferencesDialog::applyChanges()
         populateFilterTable();
     }
 
+    if (showPreviewPaneCheckBox_) {
+        preferences_.setShowPreviewPane(showPreviewPaneCheckBox_->isChecked());
+    }
+
     const bool uiChanged = hasUIChanges();
     const bool windowChanged = hasWindowChanges();
 
@@ -2863,6 +2898,16 @@ bool PreferencesDialog::applyChanges()
         showFiltersDropdownCheckBox_
             ? showFiltersDropdownCheckBox_->isChecked()
             : preferences_.showFiltersDropdown();
+
+    const bool showPreviewPaneChanged =
+        showPreviewPaneCheckBox_ &&
+        showPreviewPaneCheckBox_->isChecked() !=
+        preferences_.showPreviewPane();
+
+    const bool showPreviewPaneEnabled =
+        showPreviewPaneCheckBox_
+            ? showPreviewPaneCheckBox_->isChecked()
+            : preferences_.showPreviewPane();
 
     /*
      * NOTE: The following preferences are only written to in AppController, NOT from here:
@@ -2969,6 +3014,10 @@ bool PreferencesDialog::applyChanges()
 
         if (showFiltersDropdownChanged) {
             Q_EMIT showFiltersDropdownApplied(showFiltersDropdownEnabled);
+        }
+
+        if (showPreviewPaneChanged) {
+            Q_EMIT showPreviewPaneApplied(showPreviewPaneEnabled);
         }
 
         updateApplyButtonEnabled();

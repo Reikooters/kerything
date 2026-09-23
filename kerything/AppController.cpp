@@ -708,12 +708,7 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
 
     std::optional<MainWindow::NewWindowState> stateToCarry;
 
-    if (sourceWindow &&
-        (preferences_.carryFilterToNewWindows() ||
-         preferences_.carrySearchOptionsToNewWindows() ||
-         preferences_.carrySearchTextToNewWindows() ||
-         preferences_.carryResultSortingToNewWindows() ||
-         preferences_.carryWindowSizeAndColumnWidthsToNewWindows())) {
+    if (sourceWindow) {
         MainWindow::NewWindowState state = sourceWindow->newWindowState();
 
         if (!preferences_.carryFilterToNewWindows()) {
@@ -740,6 +735,7 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
         if (!preferences_.carryWindowSizeAndColumnWidthsToNewWindows()) {
             state.windowSize = QSize();
             state.columnWidths.clear();
+            state.splitterSizes.clear();
         }
 
         stateToCarry = std::move(state);
@@ -840,6 +836,9 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
 
     connect(dialog, &PreferencesDialog::showFiltersDropdownApplied,
         this, &AppController::setShowFiltersDropdown);
+
+    connect(dialog, &PreferencesDialog::showPreviewPaneApplied,
+        this, &AppController::setShowPreviewPane);
 
     connect(dialog, &PreferencesDialog::searchResultHighlightingApplied,
             this, [this](bool enabled) {
@@ -1112,6 +1111,12 @@ bool AppController::showFiltersDropdown() const
     return preferences_.showFiltersDropdown();
 }
 
+bool AppController::showPreviewPane() const
+{
+    return preferences_.showPreviewPane();
+}
+
+
 bool AppController::carryFilterToNewWindows() const
 {
     return preferences_.carryFilterToNewWindows();
@@ -1158,6 +1163,22 @@ void AppController::setShowFiltersDropdown(bool enabled)
             : QStringLiteral("Filter dropdown hidden"),
         3000
     );
+}
+
+void AppController::setShowPreviewPane(bool enabled)
+{
+    const bool wasEnabled = preferences_.showPreviewPane();
+
+    if (wasEnabled == enabled) {
+        return;
+    }
+
+    preferences_.setShowPreviewPane(enabled);
+    Q_EMIT showPreviewPaneChanged(enabled);
+
+    if (preferencesDialog_) {
+        preferencesDialog_->setShowPreviewPane(enabled);
+    }
 }
 
 IndexController* AppController::indexController() const noexcept {

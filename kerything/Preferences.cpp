@@ -126,6 +126,17 @@ void Preferences::setShowFiltersDropdown(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showPreviewPane() const
+{
+    return settings_.value(QStringLiteral("ui/showPreviewPane"), false).toBool();
+}
+
+void Preferences::setShowPreviewPane(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/showPreviewPane"), enabled);
+    settings_.sync();
+}
+
 int Preferences::defaultSortColumn() const
 {
     const int column = settings_.value(

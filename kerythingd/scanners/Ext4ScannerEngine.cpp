@@ -4,9 +4,12 @@
 #include "Ext4ScannerEngine.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <mutex>
 #include <optional>
 #include <string_view>
+#include <thread>
 
 #ifdef KERYTHING_ENABLE_LOGGING
 #include "ScopedAccumulatedTimer.h"
@@ -57,6 +60,9 @@ namespace Ext4ScannerEngine {
         constexpr uint64_t kProgressEvery = 4096; // must be power of two
         constexpr uint32_t kDirEntryCancelCheckEvery = 1024; // must be power of two
         constexpr uint32_t kDirectoryCancelCheckEvery = 256; // must be power of two
+        constexpr uint32_t kParallelDirectoryChunkSize = 128;
+        constexpr uint32_t kMinDirectoriesForParallelScan = 1024;
+        constexpr uint32_t kMaxParallelDirectoryWorkers = 16;
 
 #ifdef KERYTHING_ENABLE_LOGGING
         [[nodiscard]] double seconds(Nanoseconds value)
@@ -439,6 +445,168 @@ namespace Ext4ScannerEngine {
             return true;
         }
 
+        [[nodiscard]] uint32_t chooseDirectoryScanWorkerCount(std::size_t directoryCount) noexcept
+        {
+            if (directoryCount < kMinDirectoriesForParallelScan) {
+                return 1;
+            }
+
+            const uint32_t hardwareThreads =
+                std::max(1u, std::thread::hardware_concurrency());
+
+            return static_cast<uint32_t>(
+                std::clamp<std::size_t>(
+                    std::min<std::size_t>(directoryCount, hardwareThreads),
+                    1,
+                    kMaxParallelDirectoryWorkers
+                )
+            );
+        }
+
+        void mergeCounters(Ext4ScanCounters& target, const Ext4ScanCounters& source)
+        {
+            target.directoriesScanned += source.directoriesScanned;
+            target.dirCallbackCalls += source.dirCallbackCalls;
+            target.dirEntriesSeen += source.dirEntriesSeen;
+            target.dirEntriesSkippedEmptyInode += source.dirEntriesSkippedEmptyInode;
+            target.dirEntriesSkippedEmptyName += source.dirEntriesSkippedEmptyName;
+            target.dirEntriesSkippedDot += source.dirEntriesSkippedDot;
+            target.dirEntriesSkippedMissingStats += source.dirEntriesSkippedMissingStats;
+            target.recordsEmitted += source.recordsEmitted;
+            target.flushCalls += source.flushCalls;
+            target.fileRecordChunks += source.fileRecordChunks;
+            target.stringPoolChunks += source.stringPoolChunks;
+        }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        void mergeTimings(Ext4ScanTimings& target, const Ext4ScanTimings& source)
+        {
+            target.dirIterateCalls += source.dirIterateCalls;
+            target.dirCallback += source.dirCallback;
+            target.inodeStatsLookup += source.inodeStatsLookup;
+            target.streamFlush += source.streamFlush;
+        }
+#endif
+
+        bool flushWorkerStream(Ext4StreamState& stream,
+                               std::mutex& emitMutex,
+                               uint32_t& globalStringPoolLength,
+                               const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                               const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                               Ext4ScanTimings* timings,
+                               Ext4ScanCounters* counters)
+        {
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::optional<ScopedAccumulatedTimer> flushTimer;
+            if (timings) {
+                flushTimer.emplace(timings->streamFlush);
+            }
+#else
+            Q_UNUSED(timings);
+#endif
+
+            if (stream.records.empty() && stream.stringPool.empty()) {
+                return true;
+            }
+
+            if (counters) {
+                ++counters->flushCalls;
+            }
+
+            std::vector<FileRecord> fileRecordChunk = std::move(stream.records);
+            std::vector<char> stringPoolChunk = std::move(stream.stringPool);
+
+            stream.records.clear();
+            stream.records.reserve(Ext4StreamState::kRecordsPerIpcChunk);
+
+            stream.stringPool.clear();
+            stream.stringPool.reserve(Ext4StreamState::kMaxIpcBufferSizeBytes);
+
+            std::lock_guard lock(emitMutex);
+
+            const uint32_t globalBase = globalStringPoolLength;
+            globalStringPoolLength += static_cast<uint32_t>(stringPoolChunk.size());
+
+            for (FileRecord& record : fileRecordChunk) {
+                record.nameOffset += globalBase;
+            }
+
+            if (!fileRecordChunk.empty()) {
+                if (counters) {
+                    ++counters->fileRecordChunks;
+                }
+
+                if (!onFileRecordChunk(fileRecordChunk)) {
+                    std::cerr << "[Ext4ScannerEngine] scan aborted by file record receiver\n";
+                    return false;
+                }
+            }
+
+            if (!stringPoolChunk.empty()) {
+                if (counters) {
+                    ++counters->stringPoolChunks;
+                }
+
+                if (!onStringPoolChunk(stringPoolChunk)) {
+                    std::cerr << "[Ext4ScannerEngine] scan aborted by string pool receiver\n";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        bool addRecordToWorkerStream(Ext4StreamState& stream,
+                                     uint32_t inode,
+                                     uint32_t parentInode,
+                                     std::string_view name,
+                                     const FileStats& stats,
+                                     std::mutex& emitMutex,
+                                     uint32_t& globalStringPoolLength,
+                                     const ScannerHelper::FileRecordChunkCallback& onFileRecordChunk,
+                                     const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
+                                     Ext4ScanTimings* timings,
+                                     Ext4ScanCounters* counters)
+        {
+            if (name.size() > std::numeric_limits<uint16_t>::max()) {
+                return true;
+            }
+
+            if (stream.records.size() >= Ext4StreamState::kRecordsPerIpcChunk ||
+                stream.stringPool.size() + name.size() >= Ext4StreamState::kMaxIpcBufferSizeBytes) {
+                if (!flushWorkerStream(
+                        stream,
+                        emitMutex,
+                        globalStringPoolLength,
+                        onFileRecordChunk,
+                        onStringPoolChunk,
+                        timings,
+                        counters
+                    )) {
+                    return false;
+                }
+            }
+
+            FileRecord record{};
+            record.fsIndex = inode;
+            record.parentFsIndex = parentInode;
+            record.parentRecordIdx = kInvalidRecordIndex;
+            record.size = stats.size;
+            record.modificationTime = stats.modificationTime;
+            record.nameOffset = stream.totalStringPoolLength + static_cast<uint32_t>(stream.stringPool.size());
+            record.nameLen = static_cast<uint16_t>(name.size());
+            record.flags = stats.flags;
+
+            stream.records.push_back(record);
+            stream.stringPool.insert(stream.stringPool.end(), name.begin(), name.end());
+
+            if (counters) {
+                ++counters->recordsEmitted;
+            }
+
+            return true;
+        }
+
     } // namespace
 
     struct DirCallbackContext {
@@ -450,6 +618,9 @@ namespace Ext4ScannerEngine {
         const ScannerHelper::CancelCallback& shouldCancel;
         Ext4ScanTimings* timings = nullptr;
         Ext4ScanCounters* counters = nullptr;
+        std::mutex* emitMutex = nullptr;
+        uint32_t* globalStringPoolLength = nullptr;
+        std::atomic_bool* sharedAbort = nullptr;
         uint32_t entriesSinceCancelCheck = 0;
         bool cancelled = false;
         bool failed = false;
@@ -556,7 +727,8 @@ namespace Ext4ScannerEngine {
 
         auto* ctx = static_cast<DirCallbackContext*>(priv_data);
 
-        if (!ctx || ctx->failed || ctx->cancelled) {
+        if (!ctx || ctx->failed || ctx->cancelled ||
+            (ctx->sharedAbort && ctx->sharedAbort->load(std::memory_order_relaxed))) {
             return 1;
         }
 
@@ -573,8 +745,14 @@ namespace Ext4ScannerEngine {
 
         ++ctx->entriesSinceCancelCheck;
         if ((ctx->entriesSinceCancelCheck & (kDirEntryCancelCheckEvery - 1)) == 0) {
-            if (ctx->shouldCancel && ctx->shouldCancel()) {
+            if ((ctx->sharedAbort && ctx->sharedAbort->load(std::memory_order_relaxed)) ||
+                (ctx->shouldCancel && ctx->shouldCancel())) {
                 ctx->cancelled = true;
+
+                if (ctx->sharedAbort) {
+                    ctx->sharedAbort->store(true, std::memory_order_relaxed);
+                }
+
                 return 1;
             }
         }
@@ -641,15 +819,38 @@ namespace Ext4ScannerEngine {
 
         const std::string_view name(dirent->name, len);
 
-        if (!ctx->stream.addRecord(static_cast<uint32_t>(dirent->inode),
-                                   static_cast<uint32_t>(dir_ino),
-                                   name,
-                                   *stats,
-                                   ctx->onFileRecordChunk,
-                                   ctx->onStringPoolChunk,
-                                   ctx->timings,
-                                   ctx->counters)) {
+        bool added = false;
+
+        if (ctx->emitMutex && ctx->globalStringPoolLength) {
+            added = addRecordToWorkerStream(ctx->stream,
+                                            static_cast<uint32_t>(dirent->inode),
+                                            static_cast<uint32_t>(dir_ino),
+                                            name,
+                                            *stats,
+                                            *ctx->emitMutex,
+                                            *ctx->globalStringPoolLength,
+                                            ctx->onFileRecordChunk,
+                                            ctx->onStringPoolChunk,
+                                            ctx->timings,
+                                            ctx->counters);
+        } else {
+            added = ctx->stream.addRecord(static_cast<uint32_t>(dirent->inode),
+                                          static_cast<uint32_t>(dir_ino),
+                                          name,
+                                          *stats,
+                                          ctx->onFileRecordChunk,
+                                          ctx->onStringPoolChunk,
+                                          ctx->timings,
+                                          ctx->counters);
+        }
+
+        if (!added) {
             ctx->failed = true;
+
+            if (ctx->sharedAbort) {
+                ctx->sharedAbort->store(true, std::memory_order_relaxed);
+            }
+
             return 1;
         }
 
@@ -706,10 +907,12 @@ namespace Ext4ScannerEngine {
 
         inodeStats.reserve(static_cast<std::size_t>(inodesInUse));
 
-        const std::size_t estimatedDirectoryInodes = std::clamp<std::size_t>(
-            static_cast<std::size_t>(inodesInUse) / 8,
-            4096,
-            static_cast<std::size_t>(inodesInUse)
+        const std::size_t estimatedDirectoryInodes = std::min<std::size_t>(
+            static_cast<std::size_t>(inodesInUse),
+            std::max<std::size_t>(
+                static_cast<std::size_t>(inodesInUse) / 8,
+                4096
+            )
         );
 
         directoryInodes.reserve(estimatedDirectoryInodes);
@@ -817,20 +1020,26 @@ namespace Ext4ScannerEngine {
 #endif
                     return false;
                 }
+
+                if (!stream.flush(
+                        onFileRecordChunk,
+                        onStringPoolChunk,
+                        profileTimings,
+                        profileCounters
+                    )) {
+                    {
+#ifdef KERYTHING_ENABLE_LOGGING
+                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
+                        ext2fs_close(fs);
+                    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                    logExt4ScanProfile(timings, counters);
+#endif
+                    return false;
+                }
             }
-
-            DirCallbackContext ctx{
-                fs,
-                stream,
-                inodeStatsLookup,
-                onFileRecordChunk,
-                onStringPoolChunk,
-                shouldCancel,
-                profileTimings,
-                profileCounters
-            };
-
-            uint64_t directoriesScanned = 0;
 
             if (onProgress) {
                 onProgress(Protocol::ScanProgress{
@@ -841,9 +1050,61 @@ namespace Ext4ScannerEngine {
                 });
             }
 
-            for (const uint32_t dirInode : directoryInodes) {
-                if ((directoriesScanned & (kDirectoryCancelCheckEvery - 1)) == 0) {
-                    if (shouldCancel && shouldCancel()) {
+            const uint32_t workerCount =
+                chooseDirectoryScanWorkerCount(directoryInodes.size());
+
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "[Ext4ScannerEngine] directory scan workers="
+                      << workerCount
+                      << " directories="
+                      << directoryInodes.size()
+                      << "\n";
+#endif
+
+            if (workerCount <= 1) {
+                DirCallbackContext ctx{
+                    fs,
+                    stream,
+                    inodeStatsLookup,
+                    onFileRecordChunk,
+                    onStringPoolChunk,
+                    shouldCancel,
+                    profileTimings,
+                    profileCounters
+                };
+
+                uint64_t directoriesScanned = 0;
+
+                for (const uint32_t dirInode : directoryInodes) {
+                    if ((directoriesScanned & (kDirectoryCancelCheckEvery - 1)) == 0) {
+                        if (shouldCancel && shouldCancel()) {
+                            {
+#ifdef KERYTHING_ENABLE_LOGGING
+                                ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
+                                ext2fs_close(fs);
+                            }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                            logExt4ScanProfile(timings, counters);
+#endif
+                            return false;
+                        }
+                    }
+
+                    {
+#ifdef KERYTHING_ENABLE_LOGGING
+                        ScopedAccumulatedTimer iterateTimer(profileTimings->dirIterateCalls);
+#endif
+                        retval = ext2fs_dir_iterate2(fs,
+                                                     dirInode,
+                                                     0,
+                                                     nullptr,
+                                                     dirCallback,
+                                                     &ctx);
+                    }
+
+                    if (ctx.cancelled || ctx.failed) {
                         {
 #ifdef KERYTHING_ENABLE_LOGGING
                             ScopedAccumulatedTimer closeTimer(profileTimings->close);
@@ -856,69 +1117,221 @@ namespace Ext4ScannerEngine {
 #endif
                         return false;
                     }
-                }
 
-                {
-#ifdef KERYTHING_ENABLE_LOGGING
-                    ScopedAccumulatedTimer iterateTimer(profileTimings->dirIterateCalls);
-#endif
-                    retval = ext2fs_dir_iterate2(fs,
-                                                 dirInode,
-                                                 0,
-                                                 nullptr,
-                                                 dirCallback,
-                                                 &ctx);
-                }
-
-                if (ctx.cancelled) {
-                    {
-#ifdef KERYTHING_ENABLE_LOGGING
-                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
-#endif
-                        ext2fs_close(fs);
+                    if (retval) {
+                        // Some directories may be unreadable/corrupt. Report it, but continue.
+                        std::cerr << "[Ext4ScannerEngine] ext2fs_dir_iterate2 failed for inode="
+                                  << dirInode
+                                  << ": "
+                                  << error_message(retval)
+                                  << "\n";
                     }
 
+                    ++directoriesScanned;
 #ifdef KERYTHING_ENABLE_LOGGING
-                    logExt4ScanProfile(timings, counters);
+                    counters.directoriesScanned = directoriesScanned;
 #endif
-                    return false;
-                }
 
-                if (ctx.failed) {
-                    {
-#ifdef KERYTHING_ENABLE_LOGGING
-                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
-#endif
-                        ext2fs_close(fs);
+                    if (onProgress && ((directoriesScanned & (kProgressEvery - 1)) == 0)) {
+                        onProgress(Protocol::ScanProgress{
+                            .phase = QStringLiteral("Scanning directories"),
+                            .unit = QStringLiteral("directories"),
+                            .processed = directoriesScanned,
+                            .total = static_cast<quint64>(directoryInodes.size())
+                        });
                     }
-
-#ifdef KERYTHING_ENABLE_LOGGING
-                    logExt4ScanProfile(timings, counters);
-#endif
-                    return false;
                 }
+            } else {
+                std::atomic_size_t nextDirectoryIndex{0};
+                std::atomic_uint64_t directoriesScanned{0};
+                std::atomic_bool sharedAbort{false};
 
-                if (retval) {
-                    // Some directories may be unreadable/corrupt. Report it, but continue.
-                    std::cerr << "[Ext4ScannerEngine] ext2fs_dir_iterate2 failed for inode="
-                              << dirInode
-                              << ": "
-                              << error_message(retval)
-                              << "\n";
-                }
+                std::mutex emitMutex;
+                std::mutex progressMutex;
 
-                ++directoriesScanned;
+                uint32_t globalStringPoolLength = stream.totalStringPoolLength;
+
+                std::vector<Ext4ScanCounters> workerCounters(workerCount);
 #ifdef KERYTHING_ENABLE_LOGGING
-                counters.directoriesScanned = directoriesScanned;
+                std::vector<Ext4ScanTimings> workerTimings(workerCount);
+#endif
+                std::vector<std::thread> workers;
+                workers.reserve(workerCount);
+
+                for (uint32_t workerIdx = 0; workerIdx < workerCount; ++workerIdx) {
+                    workers.emplace_back([&, workerIdx]() {
+                        ext2_filsys workerFs = nullptr;
+                        errcode_t workerOpenResult =
+                            ext2fs_open(devicePathStd.c_str(), 0, 0, 0, unix_io_manager, &workerFs);
+
+                        if (workerOpenResult) {
+                            {
+                                std::lock_guard lock(progressMutex);
+                                reportError(
+                                    onError,
+                                    makeExt2Error("ext2fs_open failed for ext4 directory scan worker", workerOpenResult)
+                                );
+                            }
+
+                            sharedAbort.store(true, std::memory_order_relaxed);
+                            return;
+                        }
+
+                        Ext4StreamState workerStream{};
+                        workerStream.records.reserve(Ext4StreamState::kRecordsPerIpcChunk);
+                        workerStream.stringPool.reserve(Ext4StreamState::kMaxIpcBufferSizeBytes);
+
+                        Ext4ScanCounters* workerCounter = &workerCounters[workerIdx];
+#ifdef KERYTHING_ENABLE_LOGGING
+                        Ext4ScanTimings* workerTiming = &workerTimings[workerIdx];
+#else
+                        Ext4ScanTimings* workerTiming = nullptr;
 #endif
 
-                if (onProgress && ((directoriesScanned & (kProgressEvery - 1)) == 0)) {
-                    onProgress(Protocol::ScanProgress{
-                        .phase = QStringLiteral("Scanning directories"),
-                        .unit = QStringLiteral("directories"),
-                        .processed = directoriesScanned,
-                        .total = static_cast<quint64>(directoryInodes.size())
+                        DirCallbackContext ctx{
+                            workerFs,
+                            workerStream,
+                            inodeStatsLookup,
+                            onFileRecordChunk,
+                            onStringPoolChunk,
+                            shouldCancel,
+                            workerTiming,
+                            workerCounter,
+                            &emitMutex,
+                            &globalStringPoolLength,
+                            &sharedAbort
+                        };
+
+                        while (!sharedAbort.load(std::memory_order_relaxed)) {
+                            const std::size_t begin =
+                                nextDirectoryIndex.fetch_add(
+                                    kParallelDirectoryChunkSize,
+                                    std::memory_order_relaxed
+                                );
+
+                            if (begin >= directoryInodes.size()) {
+                                break;
+                            }
+
+                            const std::size_t end = std::min<std::size_t>(
+                                begin + kParallelDirectoryChunkSize,
+                                directoryInodes.size()
+                            );
+
+                            for (std::size_t i = begin; i < end; ++i) {
+                                if (sharedAbort.load(std::memory_order_relaxed)) {
+                                    break;
+                                }
+
+                                if (((directoriesScanned.load(std::memory_order_relaxed) &
+                                      (kDirectoryCancelCheckEvery - 1)) == 0) &&
+                                    shouldCancel &&
+                                    shouldCancel()) {
+                                    sharedAbort.store(true, std::memory_order_relaxed);
+                                    ctx.cancelled = true;
+                                    break;
+                                }
+
+                                errcode_t iterateResult = 0;
+
+                                {
+#ifdef KERYTHING_ENABLE_LOGGING
+                                    ScopedAccumulatedTimer iterateTimer(workerTiming->dirIterateCalls);
+#endif
+                                    iterateResult = ext2fs_dir_iterate2(workerFs,
+                                                                       directoryInodes[i],
+                                                                       0,
+                                                                       nullptr,
+                                                                       dirCallback,
+                                                                       &ctx);
+                                }
+
+                                if (ctx.cancelled || ctx.failed) {
+                                    sharedAbort.store(true, std::memory_order_relaxed);
+                                    break;
+                                }
+
+                                if (iterateResult) {
+                                    // Some directories may be unreadable/corrupt. Report it, but continue.
+                                    std::lock_guard lock(progressMutex);
+                                    std::cerr << "[Ext4ScannerEngine] ext2fs_dir_iterate2 failed for inode="
+                                              << directoryInodes[i]
+                                              << ": "
+                                              << error_message(iterateResult)
+                                              << "\n";
+                                }
+
+                                const uint64_t scanned =
+                                    directoriesScanned.fetch_add(1, std::memory_order_relaxed) + 1;
+
+                                ++workerCounter->directoriesScanned;
+
+                                if (onProgress && ((scanned & (kProgressEvery - 1)) == 0)) {
+                                    std::lock_guard lock(progressMutex);
+                                    onProgress(Protocol::ScanProgress{
+                                        .phase = QStringLiteral("Scanning directories"),
+                                        .unit = QStringLiteral("directories"),
+                                        .processed = scanned,
+                                        .total = static_cast<quint64>(directoryInodes.size())
+                                    });
+                                }
+                            }
+                        }
+
+                        if (!sharedAbort.load(std::memory_order_relaxed)) {
+                            if (!flushWorkerStream(
+                                    workerStream,
+                                    emitMutex,
+                                    globalStringPoolLength,
+                                    onFileRecordChunk,
+                                    onStringPoolChunk,
+                                    workerTiming,
+                                    workerCounter
+                                )) {
+                                sharedAbort.store(true, std::memory_order_relaxed);
+                            }
+                        }
+
+                        ext2fs_close(workerFs);
                     });
+                }
+
+                for (std::thread& worker : workers) {
+                    if (worker.joinable()) {
+                        worker.join();
+                    }
+                }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                counters.directoriesScanned = 0;
+#endif
+
+                for (const Ext4ScanCounters& workerCounter : workerCounters) {
+                    if (profileCounters) {
+                        mergeCounters(*profileCounters, workerCounter);
+                    }
+                }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                for (const Ext4ScanTimings& workerTiming : workerTimings) {
+                    mergeTimings(*profileTimings, workerTiming);
+                }
+#endif
+
+                stream.totalStringPoolLength = globalStringPoolLength;
+
+                if (sharedAbort.load(std::memory_order_relaxed)) {
+                    {
+#ifdef KERYTHING_ENABLE_LOGGING
+                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+#endif
+                        ext2fs_close(fs);
+                    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+                    logExt4ScanProfile(timings, counters);
+#endif
+                    return false;
                 }
             }
         }

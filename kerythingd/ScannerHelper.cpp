@@ -7,7 +7,9 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <linux/limits.h>
+#include <optional>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -47,6 +49,65 @@ namespace {
 
         ordered.removeDuplicates();
         return ordered;
+    }
+
+    std::optional<QString> diskNameForDevNode(const QString& devNode)
+    {
+        namespace fs = std::filesystem;
+
+        const fs::path blockName = fs::path(devNode.toStdString()).filename();
+        if (blockName.empty()) {
+            return std::nullopt;
+        }
+
+        std::error_code ec;
+        fs::path sysBlockPath = fs::canonical(fs::path("/sys/class/block") / blockName, ec);
+        if (ec) {
+            return std::nullopt;
+        }
+
+        if (fs::exists(sysBlockPath / "partition")) {
+            sysBlockPath = sysBlockPath.parent_path();
+        }
+
+        const std::string diskName = sysBlockPath.filename().string();
+        if (diskName.empty()) {
+            return std::nullopt;
+        }
+
+        return QString::fromStdString(diskName);
+    }
+
+    std::optional<bool> isRotationalBlockDevice(const QString& devNode)
+    {
+        const std::optional<QString> diskName = diskNameForDevNode(devNode);
+        if (!diskName || diskName->isEmpty()) {
+            return std::nullopt;
+        }
+
+        const std::filesystem::path rotationalPath =
+            std::filesystem::path("/sys/class/block") /
+            diskName->toStdString() /
+            "queue" /
+            "rotational";
+
+        std::ifstream in(rotationalPath);
+        if (!in) {
+            return std::nullopt;
+        }
+
+        std::string value;
+        std::getline(in, value);
+
+        if (value == "0") {
+            return false;
+        }
+
+        if (value == "1") {
+            return true;
+        }
+
+        return std::nullopt;
     }
 
     bool syncMountedFilesystem(
@@ -246,13 +307,33 @@ bool scanDevice(const QString& devNode,
     if (normalizedFsType == QStringLiteral("ext4")) {
         syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
 
+        const std::optional<bool> rotational = isRotationalBlockDevice(resolvedPath);
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        if (rotational) {
+            std::cerr << "[ScannerHelper] block device rotational="
+                      << (*rotational ? "true" : "false")
+                      << " devNode="
+                      << resolvedPath.toStdString()
+                      << "\n";
+        } else {
+            std::cerr << "[ScannerHelper] block device rotational=unknown devNode="
+                      << resolvedPath.toStdString()
+                      << "\n";
+        }
+#endif
+
         return Ext4ScannerEngine::scanDevice(
             resolvedPath,
             onFileRecordChunk,
             onStringPoolChunk,
             onError,
             shouldCancel,
-            onProgress
+            onProgress,
+            Ext4ScannerEngine::ScanOptions{
+                // if rotational is unknown, assume it is not rotational
+                .deviceIsRotational = rotational.value_or(false)
+            }
         );
     }
 

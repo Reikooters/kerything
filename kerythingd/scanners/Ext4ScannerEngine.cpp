@@ -445,9 +445,15 @@ namespace Ext4ScannerEngine {
             return true;
         }
 
-        [[nodiscard]] uint32_t chooseDirectoryScanWorkerCount(std::size_t directoryCount) noexcept
-        {
+        [[nodiscard]] uint32_t chooseDirectoryScanWorkerCount(
+            std::size_t directoryCount,
+            const ScanOptions& options
+        ) noexcept {
             if (directoryCount < kMinDirectoriesForParallelScan) {
+                return 1;
+            }
+
+            if (options.deviceIsRotational) {
                 return 1;
             }
 
@@ -862,7 +868,8 @@ namespace Ext4ScannerEngine {
                     const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
                     const ScannerHelper::ErrorCallback& onError,
                     const ScannerHelper::CancelCallback& shouldCancel,
-                    const ScannerHelper::ProgressCallback& onProgress) {
+                    const ScannerHelper::ProgressCallback& onProgress,
+                    const ScanOptions& options) {
 #ifdef KERYTHING_ENABLE_LOGGING
         ScopedTimer totalTimer("[Ext4ScannerEngine] total ext4 scan");
 
@@ -1051,13 +1058,15 @@ namespace Ext4ScannerEngine {
             }
 
             const uint32_t workerCount =
-                chooseDirectoryScanWorkerCount(directoryInodes.size());
+                chooseDirectoryScanWorkerCount(directoryInodes.size(), options);
 
 #ifdef KERYTHING_ENABLE_LOGGING
             std::cerr << "[Ext4ScannerEngine] directory scan workers="
                       << workerCount
                       << " directories="
                       << directoryInodes.size()
+                      << " deviceIsRotational="
+                      << (options.deviceIsRotational ? "true" : "false")
                       << "\n";
 #endif
 

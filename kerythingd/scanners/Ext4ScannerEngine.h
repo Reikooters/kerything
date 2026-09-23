@@ -16,6 +16,10 @@ namespace Ext4ScannerEngine {
     struct Ext4ScanTimings;
     struct Ext4ScanCounters;
 
+    struct ScanOptions {
+        bool deviceIsRotational = false;
+    };
+
     struct FileStats {
         uint64_t size = 0;
         uint64_t modificationTime = 0;
@@ -80,6 +84,7 @@ namespace Ext4ScannerEngine {
      *                     The function terminates early if this callback returns true.
      * @param onProgress Callback for reporting scan progress, typically represented as a percentage
      *                   indicating how many of the inodes have been processed.
+     * @param options Additional options for the scan.
      * @return Returns true if the scan completes successfully; otherwise, returns false if an error occurs
      *         or if the device is not a valid EXT4 partition.
      */
@@ -88,7 +93,8 @@ namespace Ext4ScannerEngine {
                     const ScannerHelper::StringPoolChunkCallback& onStringPoolChunk,
                     const ScannerHelper::ErrorCallback& onError,
                     const ScannerHelper::CancelCallback& shouldCancel,
-                    const ScannerHelper::ProgressCallback& onProgress);
+                    const ScannerHelper::ProgressCallback& onProgress,
+                    const ScanOptions& options = {});
 
     /**
      * Callback function invoked for each directory entry during a directory iteration in the Ext4 filesystem.

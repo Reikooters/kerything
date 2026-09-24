@@ -433,6 +433,12 @@ void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta)
         if (currentUrl_ == url) {
             setPreviewContent(pixmap, meta);
         }
+        return;
+    }
+
+    if (currentUrl_ == url) {
+        previewImageWidget_->setText(QStringLiteral("No preview available"));
+        metadataLabel_->setText(meta);
     }
 }
 

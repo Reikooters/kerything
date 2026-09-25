@@ -366,9 +366,6 @@ void PreferencesDialog::populateNavigation()
     pages_->addWidget(createUiPage());
     navigation_->addItem(QStringLiteral("UI"));
 
-    // pages_->addWidget(createIndexingPage());
-    // navigation_->addItem(QStringLiteral("Indexing"));
-
     pages_->addWidget(createAdvancedPage());
     navigation_->addItem(QStringLiteral("Advanced"));
 
@@ -1007,26 +1004,6 @@ QWidget* PreferencesDialog::createFiltersPage()
     });
 
     updateFilterButtonStates();
-
-    return page;
-}
-
-QWidget* PreferencesDialog::createIndexingPage()
-{
-    auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
-
-    auto* label = new QLabel(
-        QStringLiteral(
-            "<h2>Indexing</h2>"
-            "<p>Indexing-wide preferences can go here later, such as refresh intervals, ignored paths, or filesystem filters.</p>"
-        ),
-        page
-    );
-    label->setWordWrap(true);
-
-    layout->addWidget(label);
-    layout->addStretch();
 
     return page;
 }

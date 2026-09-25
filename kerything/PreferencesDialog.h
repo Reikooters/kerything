@@ -76,7 +76,6 @@ private:
     QWidget* createFiltersPage();
     QWidget* createWindowsPage();
     QWidget* createUiPage();
-    QWidget* createIndexingPage();
     QWidget* createAdvancedPage();
 
     void populateNavigation();

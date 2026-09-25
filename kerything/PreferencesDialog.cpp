@@ -30,6 +30,7 @@
 #include <QSize>
 #include <QSizePolicy>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTextBrowser>
@@ -1879,10 +1880,14 @@ void PreferencesDialog::populateDeviceTable()
 
         if (blockDevice.mounted &&
             blockDevice.mountedFsType.trimmed().toLower() == QStringLiteral("fuseblk")) {
-            statusItem->setIcon(QIcon::fromTheme(
-                QStringLiteral("dialog-warning"),
-                QIcon::fromTheme(QStringLiteral("emblem-warning"))
-            ));
+            if (deviceTable_ && deviceTable_->style()) {
+                statusItem->setData(
+                    Qt::DecorationRole,
+                    deviceTable_->style()
+                        ->standardIcon(QStyle::SP_MessageBoxWarning)
+                        .pixmap(16, 16)
+                );
+            }
             statusItem->setToolTip(
                 QStringLiteral(
                     "This device is mounted as fuseblk, which usually means it is using a FUSE driver such as ntfs-3g.\n\n"
@@ -1981,10 +1986,15 @@ void PreferencesDialog::populateIndexTable()
 
         auto* statusItem = new QTableWidgetItem(status);
         if (!knownDevice) {
-            statusItem->setIcon(QIcon::fromTheme(
-                QStringLiteral("dialog-warning"),
-                QIcon::fromTheme(QStringLiteral("emblem-warning"))
-            ));
+            if (indexTable_ && indexTable_->style()) {
+                statusItem->setData(
+                    Qt::DecorationRole,
+                    indexTable_->style()
+                        ->standardIcon(QStyle::SP_MessageBoxWarning)
+                        .pixmap(16, 16)
+                );
+            }
+
             statusItem->setToolTip(
                 QStringLiteral(
                     "The indexed device is no longer visible in the current device list. "

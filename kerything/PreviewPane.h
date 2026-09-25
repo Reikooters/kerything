@@ -7,6 +7,7 @@
 #include <QCache>
 #include <QFileInfo>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QLabel>
 #include <QPixmap>
 #include <QPointer>
@@ -54,19 +55,38 @@ private Q_SLOTS:
 private:
     struct PreviewCacheEntry {
         QPixmap pixmap;
-        QString metadataText;
+        QSize dimensions;
         bool isIcon = false;
     };
 
-    void setPreviewContent(const QPixmap& pixmap, const QString& metadataText);
+    struct ImageLoadResult {
+        QUrl url;
+        QString cacheKey;
+        QString metadataText;
+        QImage image;
+        QSize dimensions;
+        quint64 generation = 0;
+    };
+
+    void setPreviewContent(const QPixmap& pixmap, const QString& metadataText, bool isIcon);
     QString generateMetadataHtml(const QFileInfo& fileInfo) const;
-    void generateFallbackOrIcon(const QUrl& url, const QString& meta);
-    void generateVideoThumbnail(const QUrl& url, const QString& meta);
-    void showThemeIcon(const QUrl& url, const QString& meta);
+    static QString metadataHtmlWithDimensions(const QString& metadataText, const QSize& dimensions);
+    static QString metadataHtmlWithDimensionsPlaceholder(const QString& metadataText);
+    static QString metadataHtmlWithDimensionsUnknown(const QString& metadataText);
+    static QString metadataHtmlWithDimensionsText(const QString& metadataText, const QString& dimensionsText);
+    void generateFallbackOrIcon(const QUrl& url, const QString& meta, quint64 generation);
+    void generateVideoThumbnail(const QUrl& url, const QString& meta, quint64 generation);
+    void showThemeIcon(const QUrl& url, const QString& meta, quint64 generation);
     void cancelCurrentJob();
+    void cancelImageLoad();
+    void cachePreview(const QString& cacheKey, const QPixmap& pixmap, bool isIcon, const QSize& dimensions = {});
+    QString previewCacheKey(const QUrl& url) const;
+    int previewTargetWidth() const;
+    static int pixmapCacheCostKiB(const QPixmap& pixmap);
+    static QSize imageDimensions(const QUrl& url);
+    static bool isImageUrl(const QUrl& url);
     static bool isImageFile(const QFileInfo& fileInfo);
     static bool isVideoFile(const QFileInfo& fileInfo);
-    static bool userWantsFilmstrip();
 
     QLabel* titleLabel_ = nullptr;
     PreviewImageWidget* previewImageWidget_ = nullptr;
@@ -75,7 +95,7 @@ private:
     QTimer debounceTimer_;
     QUrl currentUrl_;
     QString currentMetadataText_;
-    bool isThemeIcon_ = false;
+    quint64 previewGeneration_ = 0;
 
     QCache<QString, PreviewCacheEntry> memoryCache_;
 
@@ -83,6 +103,7 @@ private:
     QPointer<KIO::PreviewJob> currentJob_;
 #endif
     QPointer<QProcess> currentProcess_;
+    QPointer<QFutureWatcher<ImageLoadResult>> imageLoadWatcher_;
 };
 
 #endif // KERYTHING_PREVIEWPANE_H

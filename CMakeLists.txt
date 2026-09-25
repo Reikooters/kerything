@@ -36,6 +36,7 @@ find_package(Qt6 REQUIRED COMPONENTS
         Widgets
         Core
         Network
+        Concurrent
 )
 
 option(KERYTHING_WITH_KF6 "Use KDE Frameworks 6, including KDE KIO for opening files" ON)
@@ -190,6 +191,7 @@ target_link_libraries(kerything
         TBB::tbb # Parallelism
         Qt6::Widgets
         Qt6::Network
+        Qt6::Concurrent
         ${RE2_LIBRARIES}
 )
 

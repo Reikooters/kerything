@@ -3,8 +3,10 @@
 
 #include "PreviewPane.h"
 
+#include <algorithm>
+#include <memory>
+
 #include <QDateTime>
-#include <QDir>
 #include <QFileInfo>
 #include <QIcon>
 #include <QImage>
@@ -14,15 +16,13 @@
 #include <QMimeType>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
+#include <QSizePolicy>
 #include <QStandardPaths>
+#include <QtConcurrent>
 #include <QVBoxLayout>
-
-#ifdef KERYTHING_WITH_KF6
-#include <KConfigGroup>
-#include <KSharedConfig>
-#endif
 
 // --- PreviewImageWidget (Dolphin-style custom paint viewer) ---
 
@@ -100,17 +100,6 @@ void PreviewImageWidget::paintEvent(QPaintEvent* event)
 
 // --- PreviewPane ---
 
-bool PreviewPane::userWantsFilmstrip()
-{
-#ifdef KERYTHING_WITH_KF6
-    KConfigGroup config(KSharedConfig::openConfig(QStringLiteral("ffmpegthumbsrc")), QStringLiteral("General"));
-    return config.readEntry("filmstrip", true);
-#else
-    QSettings config(QDir::homePath() + QStringLiteral("/.config/ffmpegthumbsrc"), QSettings::IniFormat);
-    return config.value(QStringLiteral("General/filmstrip"), true).toBool();
-#endif
-}
-
 bool PreviewPane::isImageFile(const QFileInfo& fileInfo)
 {
     static const QSet<QString> imageExtensions = {
@@ -124,7 +113,12 @@ bool PreviewPane::isImageFile(const QFileInfo& fileInfo)
         QStringLiteral("dng")
     };
 
-    return imageExtensions.contains(fileInfo.suffix().toLower());
+    if (imageExtensions.contains(fileInfo.suffix().toLower())) {
+        return true;
+    }
+
+    const QMimeType mime = QMimeDatabase().mimeTypeForFile(fileInfo);
+    return mime.name().startsWith(QStringLiteral("image/"));
 }
 
 bool PreviewPane::isVideoFile(const QFileInfo& fileInfo)
@@ -138,7 +132,12 @@ bool PreviewPane::isVideoFile(const QFileInfo& fileInfo)
         QStringLiteral("m2ts"), QStringLiteral("ogv"), QStringLiteral("vob")
     };
 
-    return videoExtensions.contains(fileInfo.suffix().toLower());
+    if (videoExtensions.contains(fileInfo.suffix().toLower())) {
+        return true;
+    }
+
+    const QMimeType mime = QMimeDatabase().mimeTypeForFile(fileInfo);
+    return mime.name().startsWith(QStringLiteral("video/"));
 }
 
 PreviewPane::PreviewPane(QWidget* parent)
@@ -147,10 +146,10 @@ PreviewPane::PreviewPane(QWidget* parent)
     setFrameStyle(QFrame::NoFrame);
     setMinimumWidth(220);
 
-    memoryCache_.setMaxCost(100);
+    memoryCache_.setMaxCost(64 * 1024);
 
     debounceTimer_.setSingleShot(true);
-    debounceTimer_.setInterval(50);
+    debounceTimer_.setInterval(150);
     connect(&debounceTimer_, &QTimer::timeout, this, &PreviewPane::onDebounceTimeout);
 
     auto* rootLayout = new QVBoxLayout(this);
@@ -191,17 +190,20 @@ PreviewPane::PreviewPane(QWidget* parent)
 PreviewPane::~PreviewPane()
 {
     cancelCurrentJob();
+    cancelImageLoad();
     debounceTimer_.stop();
     memoryCache_.clear();
 }
 
 void PreviewPane::clearPreview(const QString& placeholder)
 {
+    ++previewGeneration_;
+
     cancelCurrentJob();
+    cancelImageLoad();
     debounceTimer_.stop();
     currentUrl_.clear();
     currentMetadataText_.clear();
-    isThemeIcon_ = false;
 
     titleLabel_->setText(QStringLiteral("<span style='word-break: break-all;'>Preview</span>"));
     titleLabel_->setToolTip(QString());
@@ -212,11 +214,13 @@ void PreviewPane::clearPreview(const QString& placeholder)
 
 void PreviewPane::showUnmounted()
 {
+    ++previewGeneration_;
+
     cancelCurrentJob();
+    cancelImageLoad();
     debounceTimer_.stop();
     currentUrl_.clear();
     currentMetadataText_.clear();
-    isThemeIcon_ = false;
 
     titleLabel_->setText(QStringLiteral("<span style='word-break: break-all;'>Preview (Unmounted)</span>"));
     titleLabel_->setToolTip(QString());
@@ -229,15 +233,17 @@ void PreviewPane::showUnmounted()
 
 void PreviewPane::previewUrl(const QUrl& url)
 {
-    if (currentUrl_ == url && (debounceTimer_.isActive() || currentProcess_)) {
+    if (currentUrl_ == url && (debounceTimer_.isActive() || currentProcess_ || imageLoadWatcher_)) {
         return;
     }
 
+    ++previewGeneration_;
+
     cancelCurrentJob();
+    cancelImageLoad();
     debounceTimer_.stop();
 
     currentUrl_ = url;
-    isThemeIcon_ = false;
 
     const QString localFilePath = url.toLocalFile();
     const QFileInfo fileInfo(localFilePath);
@@ -246,14 +252,23 @@ void PreviewPane::previewUrl(const QUrl& url)
         .arg(fileInfo.fileName().toHtmlEscaped()));
     titleLabel_->setToolTip(fileInfo.absoluteFilePath());
 
-    const QString metaText = generateMetadataHtml(fileInfo);
+    QString metaText = generateMetadataHtml(fileInfo);
+    if (fileInfo.isFile() && isImageFile(fileInfo)) {
+        metaText = metadataHtmlWithDimensionsPlaceholder(metaText);
+    }
+
     currentMetadataText_ = metaText;
     metadataLabel_->setText(metaText);
 
+    const QString cacheKey = previewCacheKey(url);
+
     // Fast in-memory cache hit
-    if (PreviewCacheEntry* cached = memoryCache_.object(url.toString())) {
-        isThemeIcon_ = cached->isIcon;
-        setPreviewContent(cached->pixmap, cached->metadataText);
+    if (PreviewCacheEntry* cached = memoryCache_.object(cacheKey)) {
+        const QString cachedMetadataText = isImageUrl(url)
+            ? metadataHtmlWithDimensions(metaText, cached->dimensions)
+            : metaText;
+
+        setPreviewContent(cached->pixmap, cachedMetadataText, cached->isIcon);
         return;
     }
 
@@ -268,6 +283,8 @@ void PreviewPane::onDebounceTimeout()
         return;
     }
 
+    const quint64 generation = previewGeneration_;
+
 #ifdef KERYTHING_WITH_KF6
     cancelCurrentJob();
 
@@ -277,7 +294,7 @@ void PreviewPane::onDebounceTimeout()
     const QStringList plugins = KIO::PreviewJob::availablePlugins();
 
     // Request high-resolution preview matching pane width and screen DPI
-    const int reqWidth = std::max(1024, static_cast<int>(previewImageWidget_->width() * devicePixelRatioF()));
+    const int reqWidth = previewTargetWidth();
     const QSize targetSize(reqWidth, reqWidth);
 
     auto* job = KIO::filePreview(items, targetSize, &plugins);
@@ -286,64 +303,124 @@ void PreviewPane::onDebounceTimeout()
     currentJob_ = job;
 
     connect(job, &KIO::PreviewJob::gotPreview, this,
-            [this, url = currentUrl_, meta = currentMetadataText_](const KFileItem& /*item*/, const QPixmap& preview) {
+            [this, url = currentUrl_, meta = currentMetadataText_, generation](const KFileItem& /*item*/, const QPixmap& preview) {
+                if (generation != previewGeneration_ || currentUrl_ != url) {
+                    return;
+                }
+
                 if (!preview.isNull()) {
-                    isThemeIcon_ = false;
-                    memoryCache_.insert(url.toString(), new PreviewCacheEntry{preview, meta, false});
-                    if (currentUrl_ == url) {
-                        setPreviewContent(preview, meta);
-                    }
+                    const bool sourceIsImage = isImageUrl(url);
+                    const QSize dimensions = sourceIsImage ? imageDimensions(url) : QSize();
+                    const QString metadataText = sourceIsImage
+                        ? metadataHtmlWithDimensions(meta, dimensions)
+                        : meta;
+                    const QString cacheKey = previewCacheKey(url);
+
+                    cachePreview(cacheKey, preview, false, dimensions);
+                    setPreviewContent(preview, metadataText, false);
                 }
             });
 
     connect(job, &KIO::PreviewJob::failed, this,
-            [this, url = currentUrl_, meta = currentMetadataText_](const KFileItem& /*item*/) {
-                generateFallbackOrIcon(url, meta);
+            [this, url = currentUrl_, meta = currentMetadataText_, generation](const KFileItem& /*item*/) {
+                if (generation != previewGeneration_ || currentUrl_ != url) {
+                    return;
+                }
+
+                generateFallbackOrIcon(url, meta, generation);
             });
 #else
-    generateFallbackOrIcon(currentUrl_, currentMetadataText_);
+    generateFallbackOrIcon(currentUrl_, currentMetadataText_, generation);
 #endif
 }
 
-void PreviewPane::generateFallbackOrIcon(const QUrl& url, const QString& meta)
+void PreviewPane::generateFallbackOrIcon(const QUrl& url, const QString& meta, quint64 generation)
 {
+    if (generation != previewGeneration_ || currentUrl_ != url) {
+        return;
+    }
+
     const QString localPath = url.toLocalFile();
     const QFileInfo fileInfo(localPath);
 
+    if (fileInfo.isDir()) {
+        showThemeIcon(url, meta, generation);
+        return;
+    }
+
     if (isVideoFile(fileInfo)) {
-        generateVideoThumbnail(url, meta);
+        generateVideoThumbnail(url, meta, generation);
         return;
     }
 
     if (isImageFile(fileInfo)) {
-        QImageReader reader(localPath);
-        reader.setAutoTransform(true);
-        const QSize origSize = reader.size();
-        if (origSize.isValid()) {
-            const int targetW = std::max(1024, static_cast<int>(previewImageWidget_->width() * devicePixelRatioF()));
-            reader.setScaledSize(origSize.scaled(QSize(targetW, targetW), Qt::KeepAspectRatio));
-        }
+        cancelImageLoad();
 
-        const QImage img = reader.read();
-        if (!img.isNull()) {
-            const QPixmap pixmap = QPixmap::fromImage(img);
-            isThemeIcon_ = false;
-            memoryCache_.insert(url.toString(), new PreviewCacheEntry{pixmap, meta, false});
-            if (currentUrl_ == url) {
-                setPreviewContent(pixmap, meta);
+        const QString cacheKey = previewCacheKey(url);
+        const int targetW = previewTargetWidth();
+
+        auto* watcher = new QFutureWatcher<ImageLoadResult>(this);
+        imageLoadWatcher_ = watcher;
+
+        connect(watcher, &QFutureWatcher<ImageLoadResult>::finished, this, [this, watcher]() {
+            const ImageLoadResult result = watcher->result();
+
+            if (imageLoadWatcher_ == watcher) {
+                imageLoadWatcher_ = nullptr;
             }
-            return;
-        }
+
+            watcher->deleteLater();
+
+            if (result.generation != previewGeneration_ || currentUrl_ != result.url) {
+                return;
+            }
+
+            if (!result.image.isNull()) {
+                const QPixmap pixmap = QPixmap::fromImage(result.image);
+                const QString metadataText = metadataHtmlWithDimensions(result.metadataText, result.dimensions);
+
+                cachePreview(result.cacheKey, pixmap, false, result.dimensions);
+                setPreviewContent(pixmap, metadataText, false);
+                return;
+            }
+
+            showThemeIcon(result.url, metadataHtmlWithDimensionsUnknown(result.metadataText), result.generation);
+        });
+
+        watcher->setFuture(QtConcurrent::run([url, localPath, cacheKey, meta, targetW, generation]() {
+            QImageReader reader(localPath);
+            reader.setAutoTransform(true);
+            reader.setDecideFormatFromContent(true);
+
+            const QSize origSize = reader.size();
+            if (origSize.isValid()) {
+                reader.setScaledSize(origSize.scaled(QSize(targetW, targetW), Qt::KeepAspectRatio));
+            }
+
+            return ImageLoadResult{
+                .url = url,
+                .cacheKey = cacheKey,
+                .metadataText = meta,
+                .image = reader.read(),
+                .dimensions = origSize,
+                .generation = generation
+            };
+        }));
+
+        return;
     }
 
-    showThemeIcon(url, meta);
+    showThemeIcon(url, meta, generation);
 }
 
-void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta)
+void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, quint64 generation)
 {
+    if (generation != previewGeneration_ || currentUrl_ != url) {
+        return;
+    }
+
     const QString localPath = url.toLocalFile();
-    const bool showFilmstrip = userWantsFilmstrip();
-    const int thumbRes = std::max(1024, static_cast<int>(previewImageWidget_->width() * devicePixelRatioF()));
+    const int thumbRes = previewTargetWidth();
 
     QString program = QStandardPaths::findExecutable(QStringLiteral("ffmpegthumbnailer"));
     QStringList args;
@@ -353,10 +430,6 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta)
              << QStringLiteral("-o") << QStringLiteral("/dev/stdout")
              << QStringLiteral("-s") << QString::number(thumbRes)
              << QStringLiteral("-c") << QStringLiteral("png");
-
-        if (showFilmstrip) {
-            args << QStringLiteral("-f");
-        }
     } else {
         program = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
         if (!program.isEmpty()) {
@@ -372,7 +445,7 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta)
     }
 
     if (program.isEmpty()) {
-        showThemeIcon(url, meta);
+        showThemeIcon(url, meta, generation);
         return;
     }
 
@@ -381,38 +454,102 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta)
     auto* proc = new QProcess(this);
     currentProcess_ = proc;
 
-    connect(proc, &QProcess::finished, this,
-            [this, proc, url, meta](int exitCode, QProcess::ExitStatus exitStatus) {
-                const QByteArray data = proc->readAllStandardOutput();
-                proc->deleteLater();
+    auto* timeout = new QTimer(proc);
+    timeout->setSingleShot(true);
+    timeout->setInterval(10000);
 
-                if (currentProcess_ == proc) {
-                    currentProcess_ = nullptr;
+    auto cleanedUp = std::make_shared<bool>(false);
+    auto stderrTail = std::make_shared<QByteArray>();
+
+    auto cleanupProcess = [this, proc, timeout, cleanedUp]() {
+        if (*cleanedUp) {
+            return;
+        }
+
+        *cleanedUp = true;
+
+        timeout->stop();
+
+        if (currentProcess_ == proc) {
+            currentProcess_ = nullptr;
+        }
+
+        proc->deleteLater();
+    };
+
+    auto drainStderr = [proc, stderrTail]() {
+        stderrTail->append(proc->readAllStandardError());
+
+        static constexpr qsizetype MaxStderrBytes = 16 * 1024;
+        if (stderrTail->size() > MaxStderrBytes) {
+            stderrTail->remove(0, stderrTail->size() - MaxStderrBytes);
+        }
+    };
+
+    connect(timeout, &QTimer::timeout, this,
+            [this, proc, url, meta, generation, cleanupProcess, drainStderr]() {
+                if (currentProcess_ != proc) {
+                    return;
+                }
+
+                drainStderr();
+                proc->kill();
+                cleanupProcess();
+
+                if (generation == previewGeneration_ && currentUrl_ == url) {
+                    showThemeIcon(url, meta, generation);
+                }
+            });
+
+    connect(proc, &QProcess::readyReadStandardError, this, drainStderr);
+
+    connect(proc, &QProcess::finished, this,
+            [this, proc, url, meta, generation, cleanupProcess, drainStderr](int exitCode, QProcess::ExitStatus exitStatus) {
+                const QByteArray data = proc->readAllStandardOutput();
+                drainStderr();
+                cleanupProcess();
+
+                if (generation != previewGeneration_ || currentUrl_ != url) {
+                    return;
                 }
 
                 if (exitCode == 0 && exitStatus == QProcess::NormalExit && !data.isEmpty()) {
                     QImage img;
                     if (img.loadFromData(data, "PNG")) {
                         const QPixmap pixmap = QPixmap::fromImage(img);
-                        isThemeIcon_ = false;
-                        memoryCache_.insert(url.toString(), new PreviewCacheEntry{pixmap, meta, false});
-                        if (currentUrl_ == url) {
-                            setPreviewContent(pixmap, meta);
-                        }
+                        cachePreview(previewCacheKey(url), pixmap, false);
+                        setPreviewContent(pixmap, meta, false);
                         return;
                     }
                 }
 
-                if (currentUrl_ == url) {
-                    showThemeIcon(url, meta);
+                showThemeIcon(url, meta, generation);
+            });
+
+    connect(proc, &QProcess::errorOccurred, this,
+            [this, proc, url, meta, generation, cleanupProcess, drainStderr](QProcess::ProcessError) {
+                if (currentProcess_ != proc) {
+                    return;
+                }
+
+                drainStderr();
+                cleanupProcess();
+
+                if (generation == previewGeneration_ && currentUrl_ == url) {
+                    showThemeIcon(url, meta, generation);
                 }
             });
 
     proc->start(program, args);
+    timeout->start();
 }
 
-void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta)
+void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta, quint64 generation)
 {
+    if (generation != previewGeneration_ || currentUrl_ != url) {
+        return;
+    }
+
     const QString localPath = url.toLocalFile();
     const QFileInfo fileInfo(localPath);
 
@@ -428,18 +565,13 @@ void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta)
 
     const QPixmap pixmap = icon.pixmap(128, 128);
     if (!pixmap.isNull()) {
-        isThemeIcon_ = true;
-        memoryCache_.insert(url.toString(), new PreviewCacheEntry{pixmap, meta, true});
-        if (currentUrl_ == url) {
-            setPreviewContent(pixmap, meta);
-        }
+        cachePreview(previewCacheKey(url), pixmap, true);
+        setPreviewContent(pixmap, meta, true);
         return;
     }
 
-    if (currentUrl_ == url) {
-        previewImageWidget_->setText(QStringLiteral("No preview available"));
-        metadataLabel_->setText(meta);
-    }
+    previewImageWidget_->setText(QStringLiteral("No preview available"));
+    metadataLabel_->setText(meta);
 }
 
 QString PreviewPane::generateMetadataHtml(const QFileInfo& fileInfo) const
@@ -457,39 +589,96 @@ QString PreviewPane::generateMetadataHtml(const QFileInfo& fileInfo) const
         ? fileInfo.lastModified().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"))
         : QStringLiteral("Unknown");
 
-    QString dimensionsRow;
-    QImageReader reader(fileInfo.absoluteFilePath());
-    if (reader.canRead()) {
-        const QSize dims = reader.size();
-        if (dims.isValid()) {
-            dimensionsRow = QStringLiteral(
-                "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Dimensions:</td>"
-                "<td>%1 × %2</td></tr>"
-            ).arg(dims.width()).arg(dims.height());
-        }
-    }
-
     return QStringLiteral(
         "<table cellspacing='0' cellpadding='2' style='font-size: 9pt;'>"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Type:</td><td>%1</td></tr>"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Size:</td><td>%2</td></tr>"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Modified:</td><td>%3</td></tr>"
-        "%4"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); vertical-align: top; white-space: nowrap;'>Path:</td>"
-        "<td style='word-break: break-all;'>%5</td></tr>"
+        "<td style='word-break: break-all;'>%4</td></tr>"
         "</table>"
     ).arg(
         typeStr.toHtmlEscaped(),
         sizeStr.toHtmlEscaped(),
         dateStr.toHtmlEscaped(),
-        dimensionsRow,
         fileInfo.absoluteFilePath().toHtmlEscaped()
     );
 }
 
-void PreviewPane::setPreviewContent(const QPixmap& pixmap, const QString& metadataText)
+QString PreviewPane::metadataHtmlWithDimensions(const QString& metadataText, const QSize& dimensions)
 {
-    previewImageWidget_->setPixmap(pixmap, isThemeIcon_);
+    if (!dimensions.isValid()) {
+        return metadataHtmlWithDimensionsUnknown(metadataText);
+    }
+
+    return metadataHtmlWithDimensionsText(
+        metadataText,
+        QStringLiteral("%1 × %2").arg(dimensions.width()).arg(dimensions.height())
+    );
+}
+
+QString PreviewPane::metadataHtmlWithDimensionsPlaceholder(const QString& metadataText)
+{
+    return metadataHtmlWithDimensionsText(
+        metadataText,
+        QStringLiteral("Loading…")
+    );
+}
+
+QString PreviewPane::metadataHtmlWithDimensionsUnknown(const QString& metadataText)
+{
+    return metadataHtmlWithDimensionsText(
+        metadataText,
+        QStringLiteral("Unknown")
+    );
+}
+
+QString PreviewPane::metadataHtmlWithDimensionsText(const QString& metadataText, const QString& dimensionsText)
+{
+    const QString dimensionsRow = QStringLiteral(
+        "<tr data-kerything-dimensions='1'>"
+        "<td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Dimensions:</td>"
+        "<td>%1</td></tr>"
+    ).arg(dimensionsText.toHtmlEscaped());
+
+    QString html = metadataText;
+
+    static const QRegularExpression existingDimensionsRow(
+        QStringLiteral("<tr\\s+data-kerything-dimensions=['\"]1['\"][^>]*>.*?</tr>"),
+        QRegularExpression::DotMatchesEverythingOption
+    );
+
+    const QRegularExpressionMatch match = existingDimensionsRow.match(html);
+    if (match.hasMatch()) {
+        html.replace(match.capturedStart(), match.capturedLength(), dimensionsRow);
+        return html;
+    }
+
+    /*
+     * Insert before the path row when possible. Matching only the semantic
+     * beginning of the row is less fragile than matching the whole styled cell.
+     */
+    const qsizetype pathLabelIndex = html.indexOf(QStringLiteral(">Path:</td>"));
+    if (pathLabelIndex >= 0) {
+        const qsizetype pathRowIndex = html.lastIndexOf(QStringLiteral("<tr>"), pathLabelIndex);
+        if (pathRowIndex >= 0) {
+            html.insert(pathRowIndex, dimensionsRow);
+            return html;
+        }
+    }
+
+    const qsizetype tableEndIndex = html.lastIndexOf(QStringLiteral("</table>"));
+    if (tableEndIndex >= 0) {
+        html.insert(tableEndIndex, dimensionsRow);
+        return html;
+    }
+
+    return metadataText;
+}
+
+void PreviewPane::setPreviewContent(const QPixmap& pixmap, const QString& metadataText, bool isIcon)
+{
+    previewImageWidget_->setPixmap(pixmap, isIcon);
     metadataLabel_->setText(metadataText);
 }
 
@@ -502,8 +691,114 @@ void PreviewPane::cancelCurrentJob()
     }
 #endif
     if (currentProcess_) {
-        currentProcess_->kill();
-        currentProcess_->deleteLater();
+        QProcess* process = currentProcess_;
         currentProcess_ = nullptr;
+
+        process->disconnect(this);
+        process->kill();
+        process->deleteLater();
     }
+}
+
+void PreviewPane::cancelImageLoad()
+{
+    if (!imageLoadWatcher_) {
+        return;
+    }
+
+    auto* watcher = imageLoadWatcher_.data();
+    imageLoadWatcher_ = nullptr;
+
+    disconnect(watcher, nullptr, this, nullptr);
+
+    connect(watcher, &QFutureWatcher<ImageLoadResult>::finished,
+            watcher, &QObject::deleteLater);
+}
+
+void PreviewPane::cachePreview(const QString& cacheKey, const QPixmap& pixmap, bool isIcon, const QSize& dimensions)
+{
+    if (cacheKey.isEmpty() || pixmap.isNull()) {
+        return;
+    }
+
+    memoryCache_.insert(
+        cacheKey,
+        new PreviewCacheEntry{
+            .pixmap = pixmap,
+            .dimensions = dimensions,
+            .isIcon = isIcon
+        },
+        pixmapCacheCostKiB(pixmap)
+    );
+}
+
+QString PreviewPane::previewCacheKey(const QUrl& url) const
+{
+    if (!url.isLocalFile()) {
+        return url.toString();
+    }
+
+    const QFileInfo fileInfo(url.toLocalFile());
+
+    return QStringLiteral("%1|%2|%3|%4")
+        .arg(
+            fileInfo.absoluteFilePath(),
+            QString::number(fileInfo.size()),
+            QString::number(fileInfo.lastModified().toMSecsSinceEpoch()),
+            QString::number(previewTargetWidth())
+        );
+}
+
+int PreviewPane::previewTargetWidth() const
+{
+    return std::clamp(
+        static_cast<int>(previewImageWidget_->width() * devicePixelRatioF()),
+        512,
+        2048
+    );
+}
+
+int PreviewPane::pixmapCacheCostKiB(const QPixmap& pixmap)
+{
+    if (pixmap.isNull()) {
+        return 1;
+    }
+
+    const qint64 bytes =
+        static_cast<qint64>(pixmap.width()) *
+        static_cast<qint64>(pixmap.height()) *
+        std::max(1, pixmap.depth()) /
+        8;
+
+    return static_cast<int>(std::max<qint64>(1, bytes / 1024));
+}
+
+bool PreviewPane::isImageUrl(const QUrl& url)
+{
+    if (!url.isLocalFile()) {
+        return false;
+    }
+
+    const QFileInfo fileInfo(url.toLocalFile());
+    return fileInfo.isFile() && isImageFile(fileInfo);
+}
+
+QSize PreviewPane::imageDimensions(const QUrl& url)
+{
+    if (!url.isLocalFile()) {
+        return {};
+    }
+
+    const QString localPath = url.toLocalFile();
+    const QFileInfo fileInfo(localPath);
+
+    if (!fileInfo.isFile() || !isImageFile(fileInfo)) {
+        return {};
+    }
+
+    QImageReader reader(localPath);
+    reader.setAutoTransform(true);
+    reader.setDecideFormatFromContent(true);
+
+    return reader.size();
 }

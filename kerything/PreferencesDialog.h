@@ -12,6 +12,7 @@
 
 #include "BlockDevice.h"
 #include "DevicePreferenceChange.h"
+#include "IndexController.h"
 #include "Preferences.h"
 
 enum class PreferencesDialogPage;
@@ -33,10 +34,12 @@ public:
     explicit PreferencesDialog(
         Preferences& preferences,
         const std::vector<BlockDevice>& knownDevices,
+        const std::vector<IndexController::IndexSummary>& indexSummaries,
         QWidget* parent = nullptr
     );
 
     void setKnownDevices(const std::vector<BlockDevice>& knownDevices);
+    void setIndexSummaries(const std::vector<IndexController::IndexSummary>& indexSummaries);
     void setCurrentPage(PreferencesDialogPage page);
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
     void setShowFiltersDropdown(bool enabled);
@@ -47,6 +50,8 @@ protected:
 
 Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);
+    void refreshIndexRequested(const QString& deviceId);
+    void forgetIndexRequested(const QString& deviceId);
     void searchFiltersApplied();
     void autoRefreshResultsForLiveUpdatesApplied(bool enabled);
     void searchResultHighlightingApplied(bool enabled);
@@ -65,6 +70,17 @@ private:
         DeviceColumnCount
     };
 
+    enum IndexColumn {
+        IndexNameColumn = 0,
+        IndexStatusColumn,
+        IndexRecordsColumn,
+        IndexFilesystemColumn,
+        IndexMountPointColumn,
+        IndexDeviceColumn,
+        IndexLastIndexedColumn,
+        IndexColumnCount
+    };
+
     enum FilterColumn {
         FilterNameColumn = 0,
         FilterMacroColumn,
@@ -73,6 +89,7 @@ private:
     };
 
     QWidget* createDevicesPage();
+    QWidget* createIndexesPage();
     QWidget* createFiltersPage();
     QWidget* createWindowsPage();
     QWidget* createUiPage();
@@ -80,6 +97,7 @@ private:
 
     void populateNavigation();
     void populateDeviceTable();
+    void populateIndexTable();
     void populateFilterTable();
     void populateFilterTable(const std::vector<SearchFilterPreference>& filters);
     void updateApplyButtonEnabled();
@@ -121,6 +139,7 @@ private:
 
     Preferences& preferences_;
     std::vector<BlockDevice> knownDevices_;
+    std::vector<IndexController::IndexSummary> indexSummaries_;
 
     QHash<QString, BlockDevice> knownDeviceById_;
     QHash<QString, IndexedDevicePreference> originalPreferencesByDeviceId_;
@@ -132,11 +151,16 @@ private:
     QPushButton* applyButton_ = nullptr;
 
     QTableWidget* deviceTable_ = nullptr;
+    QPushButton* refreshSelectedDeviceIndexButton_ = nullptr;
     QCheckBox* scanWhenUnmountedCheckBox_ = nullptr;
     QCheckBox* showOfflineResultsCheckBox_ = nullptr;
     QLabel* liveUpdatesWarningIconLabel_ = nullptr;
     QCheckBox* liveUpdatesEnabledCheckBox_ = nullptr;
     QTextBrowser* selectedDeviceDetailsText_ = nullptr;
+
+    QTableWidget* indexTable_ = nullptr;
+    QPushButton* refreshIndexButton_ = nullptr;
+    QPushButton* forgetIndexButton_ = nullptr;
 
     QTableWidget* filterTable_ = nullptr;
     QPushButton* addFilterButton_ = nullptr;

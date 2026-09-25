@@ -2323,6 +2323,24 @@ public:
         qsizetype ignoredUnindexedNamespace = 0;
     };
 
+    struct IndexSummary {
+        quint64 indexId = 0;
+        QString deviceId;
+        QString displayName;
+        QString label;
+        QString devNode;
+        QString fsType;
+        QString primaryMountPoint;
+        QStringList mountPoints;
+        qint64 lastIndexedTime = 0;
+        qsizetype recordCount = 0;
+        qsizetype deletedRecordCount = 0;
+        bool ready = false;
+        bool mounted = false;
+        bool searchable = false;
+        bool showOfflineResults = true;
+    };
+
     const DeviceIndex* deviceIndex(quint64 indexId) const;
 
     quint64 addDevice(
@@ -2383,6 +2401,7 @@ public:
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
     [[nodiscard]] QString memoryStatsText() const;
+    [[nodiscard]] std::vector<IndexSummary> indexSummaries() const;
     LiveUpdateApplyResult applyLiveUpdateOperations(
         const QString& deviceId,
         const std::vector<LiveUpdateOperation>& operations

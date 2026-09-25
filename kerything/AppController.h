@@ -34,6 +34,8 @@ public:
     void presentExistingWindow();
     void showPreferencesDialog(PreferencesDialogPage initialPage = PreferencesDialogPage::Devices);
     void refreshIndexes();
+    void refreshIndex(const QString& deviceId);
+    void forgetIndex(const QString& deviceId);
     void requestRefreshAllWindows();
     void requestSearchHighlightRepaintAllWindows();
     void requestWindowStatusMessage(const QString& message, int timeoutMs);
@@ -55,12 +57,14 @@ public:
     [[nodiscard]] bool carrySearchTextToNewWindows() const;
     [[nodiscard]] bool carryResultSortingToNewWindows() const;
     [[nodiscard]] bool carryWindowSizeAndColumnWidthsToNewWindows() const;
+    [[nodiscard]] std::vector<IndexController::IndexSummary> indexSummaries() const;
     void setShowFiltersDropdown(bool enabled);
     void setShowPreviewPane(bool enabled);
     IndexController* indexController() const noexcept;
 
 Q_SIGNALS:
     void searchFiltersChanged();
+    void indexesChanged();
     void autoRefreshResultsForLiveUpdatesChanged(bool enabled);
     void showFiltersDropdownChanged(bool enabled);
     void showPreviewPaneChanged(bool enabled);

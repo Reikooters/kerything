@@ -866,6 +866,22 @@ MainWindow::MainWindow(
     });
     addAction(refreshIndexesAct);
 
+    auto* manageIndexesAct = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("folder-database"),
+            QIcon::fromTheme(QStringLiteral("database"))
+        ),
+        QStringLiteral("Manage Indexes..."),
+        this
+    );
+    manageIndexesAct->setStatusTip(QStringLiteral("View, refresh, or forget individual indexes"));
+    connect(manageIndexesAct, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->showPreferencesDialog(PreferencesDialogPage::Indexes);
+        }
+    });
+    addAction(manageIndexesAct);
+
     // Automatically Refresh Results for Live Updates
     autoRefreshLiveUpdatesAct_ = new QAction(
         QIcon::fromTheme(
@@ -1124,6 +1140,7 @@ MainWindow::MainWindow(
     // Index Menu
     auto* indexMenu = menuBar()->addMenu(QStringLiteral("Index"));
     indexMenu->addAction(refreshIndexesAct);
+    indexMenu->addAction(manageIndexesAct);
     indexMenu->addSeparator();
     indexMenu->addAction(autoRefreshLiveUpdatesAct_);
 

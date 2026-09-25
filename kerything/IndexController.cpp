@@ -17,6 +17,7 @@
 #include <malloc.h>
 #endif
 
+#include <QDateTime>
 #include <QFile>
 #include <QHash>
 #include <QIODevice>
@@ -3669,6 +3670,7 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
         deviceIndex.isReady = isReady;
 
         if (becameReady) {
+            deviceIndex.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
             deviceIndex.compactDeletedRecordBits();
             deviceIndex.fileRecordNamespaces.shrink_to_fit();
             deviceIndex.namespacedDirectoryFsIndexRecordRefs.shrink_to_fit();
@@ -4762,6 +4764,74 @@ QString IndexController::memoryStatsText() const
         << " at current size)\n";
 
     return text;
+}
+
+std::vector<IndexController::IndexSummary> IndexController::indexSummaries() const
+{
+    std::shared_lock lock(indexMutex_);
+
+    std::vector<IndexSummary> summaries;
+    summaries.reserve(indexByIndexId_.size());
+
+    for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndexPtr) {
+            continue;
+        }
+
+        const DeviceIndex& device = *deviceIndexPtr;
+
+        qsizetype deletedRecordCount = 0;
+        for (uint32_t recordIdx = 0;
+             recordIdx < static_cast<uint32_t>(device.fileRecords.size());
+             ++recordIdx) {
+            if (device.isDeletedRecord(recordIdx)) {
+                ++deletedRecordCount;
+            }
+        }
+
+        QString displayName = device.primaryMountPoint.trimmed();
+
+        if (displayName.isEmpty()) {
+            displayName = device.label.trimmed();
+        }
+
+        if (displayName.isEmpty()) {
+            displayName = device.devNode.trimmed();
+        }
+
+        if (displayName.isEmpty()) {
+            displayName = device.deviceId.trimmed();
+        }
+
+        summaries.push_back(IndexSummary{
+            .indexId = device.indexId,
+            .deviceId = device.deviceId,
+            .displayName = displayName,
+            .label = device.label,
+            .devNode = device.devNode,
+            .fsType = device.fsType,
+            .primaryMountPoint = device.primaryMountPoint,
+            .mountPoints = device.mountPoints,
+            .lastIndexedTime = device.lastIndexedTime,
+            .recordCount = static_cast<qsizetype>(device.fileRecords.size()),
+            .deletedRecordCount = deletedRecordCount,
+            .ready = device.isReady,
+            .mounted = device.mounted,
+            .searchable = device.isSearchable(),
+            .showOfflineResults = device.showOfflineResults,
+        });
+    }
+
+    std::ranges::sort(
+        summaries,
+        [](const IndexSummary& lhs, const IndexSummary& rhs) {
+            return lhs.displayName.localeAwareCompare(rhs.displayName) < 0;
+        }
+    );
+
+    return summaries;
 }
 
 bool IndexController::contains(std::string_view haystack, std::string_view needle) {

@@ -35,6 +35,7 @@
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QTextOption>
+#include <QTimeZone>
 #include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -51,7 +52,10 @@ namespace {
     constexpr int ShowOfflineResultsRole = Qt::UserRole + 4;
     constexpr int LiveUpdatesEnabledRole = Qt::UserRole + 5;
 
-    constexpr int FilterIdRole = Qt::UserRole + 20;
+    constexpr int IndexDeviceIdRole = Qt::UserRole + 20;
+    constexpr int IndexIdRole = Qt::UserRole + 21;
+
+    constexpr int FilterIdRole = Qt::UserRole + 40;
 
     QIcon themedIcon(const QString& iconName, const QString& fallbackIconName)
     {
@@ -98,11 +102,13 @@ namespace {
 PreferencesDialog::PreferencesDialog(
     Preferences& preferences,
     const std::vector<BlockDevice>& knownDevices,
+    const std::vector<IndexController::IndexSummary>& indexSummaries,
     QWidget* parent
 )
     : QDialog(parent),
       preferences_(preferences),
-      knownDevices_(knownDevices)
+      knownDevices_(knownDevices),
+      indexSummaries_(indexSummaries)
 {
     setWindowTitle(QStringLiteral("Configure Kerything"));
     resize(980, 700);
@@ -203,17 +209,20 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
         case PreferencesDialogPage::Devices:
             row = 0;
             break;
-        case PreferencesDialogPage::Filters:
+        case PreferencesDialogPage::Indexes:
             row = 1;
             break;
-        case PreferencesDialogPage::Windows:
+        case PreferencesDialogPage::Filters:
             row = 2;
             break;
-        case PreferencesDialogPage::UI:
+        case PreferencesDialogPage::Windows:
             row = 3;
             break;
-        case PreferencesDialogPage::Advanced:
+        case PreferencesDialogPage::UI:
             row = 4;
+            break;
+        case PreferencesDialogPage::Advanced:
+            row = 5;
             break;
     }
 
@@ -352,10 +361,54 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
     updateApplyButtonEnabled();
 }
 
+void PreferencesDialog::setIndexSummaries(const std::vector<IndexController::IndexSummary>& indexSummaries)
+{
+    QString selectedDeviceId;
+
+    if (indexTable_) {
+        const int currentRow = indexTable_->currentRow();
+        if (currentRow >= 0 && currentRow < indexTable_->rowCount()) {
+            if (const auto* item = indexTable_->item(currentRow, IndexNameColumn)) {
+                selectedDeviceId = item->data(IndexDeviceIdRole).toString();
+            }
+        }
+    }
+
+    indexSummaries_ = indexSummaries;
+
+    if (!indexTable_) {
+        return;
+    }
+
+    populateIndexTable();
+
+    int rowToSelect = -1;
+    if (!selectedDeviceId.isEmpty()) {
+        for (int row = 0; row < indexTable_->rowCount(); ++row) {
+            const auto* item = indexTable_->item(row, IndexNameColumn);
+            if (item && item->data(IndexDeviceIdRole).toString() == selectedDeviceId) {
+                rowToSelect = row;
+                break;
+            }
+        }
+    }
+
+    if (rowToSelect < 0 && indexTable_->rowCount() > 0) {
+        rowToSelect = 0;
+    }
+
+    if (rowToSelect >= 0) {
+        indexTable_->setCurrentCell(rowToSelect, IndexNameColumn);
+    }
+}
+
 void PreferencesDialog::populateNavigation()
 {
     pages_->addWidget(createDevicesPage());
     navigation_->addItem(QStringLiteral("Devices"));
+
+    pages_->addWidget(createIndexesPage());
+    navigation_->addItem(QStringLiteral("Indexes"));
 
     pages_->addWidget(createFiltersPage());
     navigation_->addItem(QStringLiteral("Filters"));
@@ -483,6 +536,25 @@ QWidget* PreferencesDialog::createDevicesPage()
 
     optionsLayout->addWidget(liveUpdatesRow);
 
+    auto* selectedDeviceActionsRow = new QWidget(optionsGroup);
+    auto* selectedDeviceActionsLayout = new QHBoxLayout(selectedDeviceActionsRow);
+    selectedDeviceActionsLayout->setContentsMargins(0, 3, 0, 0);
+
+    refreshSelectedDeviceIndexButton_ = new QPushButton(
+        QStringLiteral("Refresh Selected Device Index"),
+        selectedDeviceActionsRow
+    );
+    setButtonIcon(
+        refreshSelectedDeviceIndexButton_,
+        QStringLiteral("view-refresh"),
+        QStringLiteral("reload")
+    );
+
+    selectedDeviceActionsLayout->addWidget(refreshSelectedDeviceIndexButton_);
+    selectedDeviceActionsLayout->addStretch();
+
+    optionsLayout->addWidget(selectedDeviceActionsRow);
+
     layout->addWidget(optionsGroup);
 
     auto updateSelectedDeviceOptions = [this]() {
@@ -541,12 +613,18 @@ QWidget* PreferencesDialog::createDevicesPage()
         if (deviceId.isEmpty()) {
             selectedDeviceDetailsText_->setHtml(QStringLiteral("No device selected."));
             updateDetailsAreaHeight();
+
             scanWhenUnmountedCheckBox_->setEnabled(false);
-            showOfflineResultsCheckBox_->setEnabled(false);
-            liveUpdatesEnabledCheckBox_->setEnabled(false);
             scanWhenUnmountedCheckBox_->setChecked(false);
+            showOfflineResultsCheckBox_->setEnabled(false);
             showOfflineResultsCheckBox_->setChecked(false);
+            liveUpdatesEnabledCheckBox_->setEnabled(false);
             liveUpdatesEnabledCheckBox_->setChecked(false);
+
+            if (refreshSelectedDeviceIndexButton_) {
+                refreshSelectedDeviceIndexButton_->setEnabled(false);
+                refreshSelectedDeviceIndexButton_->setToolTip(QStringLiteral("No device selected."));
+            }
             return;
         }
 
@@ -573,6 +651,21 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         scanWhenUnmountedCheckBox_->setEnabled(true);
         showOfflineResultsCheckBox_->setEnabled(true);
+
+        const bool deviceEnabled =
+            enabledItem && enabledItem->checkState() == Qt::Checked;
+
+        const bool deviceKnown =
+            knownDeviceIt != knownDeviceById_.constEnd();
+
+        if (refreshSelectedDeviceIndexButton_) {
+            refreshSelectedDeviceIndexButton_->setEnabled(deviceKnown && deviceEnabled);
+            refreshSelectedDeviceIndexButton_->setToolTip(
+                deviceKnown && deviceEnabled
+                    ? QStringLiteral("Refresh this device's index by rescanning it.")
+                    : QStringLiteral("Enable this known device before refreshing its index.")
+            );
+        }
 
         const bool unmountedScanningSupported = unmountedScanningSupportedForDevice(deviceId);
         const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
@@ -732,12 +825,184 @@ QWidget* PreferencesDialog::createDevicesPage()
         updateApplyButtonEnabled();
     });
 
+    connect(refreshSelectedDeviceIndexButton_, &QPushButton::clicked, this, [this]() {
+        const int row = deviceTable_ ? deviceTable_->currentRow() : -1;
+        auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
+
+        if (!item || item->checkState() != Qt::Checked) {
+            return;
+        }
+
+        const QString deviceId = item->data(DeviceIdRole).toString();
+        if (!deviceId.isEmpty()) {
+            Q_EMIT refreshIndexRequested(deviceId);
+        }
+    });
+
     if (deviceTable_->rowCount() > 0) {
         deviceTable_->setCurrentCell(0, DeviceNameColumn);
     }
 
     // Do first update using a timer, as this will ensure that the device table has been populated
     QTimer::singleShot(0, this, updateSelectedDeviceOptions);
+
+    return page;
+}
+
+QWidget* PreferencesDialog::createIndexesPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+
+    auto* title = new QLabel(
+        QStringLiteral(
+            "<h2>Indexes</h2>"
+            "<p>View the in-memory search indexes currently held by Kerything. "
+            "You can refresh a single available index, or forget an index so its files no longer appear in search results.</p>"
+        ),
+        page
+    );
+    title->setWordWrap(true);
+    layout->addWidget(title);
+
+    indexTable_ = new QTableWidget(page);
+    indexTable_->setColumnCount(IndexColumnCount);
+    indexTable_->setHorizontalHeaderLabels({
+        QStringLiteral("Name"),
+        QStringLiteral("Status"),
+        QStringLiteral("Records"),
+        QStringLiteral("Filesystem"),
+        QStringLiteral("Mount point"),
+        QStringLiteral("Device"),
+        QStringLiteral("Last indexed"),
+    });
+
+    indexTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    indexTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    indexTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    indexTable_->setAlternatingRowColors(true);
+    indexTable_->setShowGrid(false);
+    indexTable_->setWordWrap(false);
+    indexTable_->verticalHeader()->setVisible(false);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexNameColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexStatusColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexRecordsColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexFilesystemColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexMountPointColumn, QHeaderView::Stretch);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexDeviceColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexLastIndexedColumn, QHeaderView::ResizeToContents);
+    installHoverRowHighlight(indexTable_);
+
+    populateIndexTable();
+
+    layout->addWidget(indexTable_, 1);
+
+    auto* buttonLayout = new QHBoxLayout();
+
+    refreshIndexButton_ = new QPushButton(QStringLiteral("Refresh Index"), page);
+    forgetIndexButton_ = new QPushButton(QStringLiteral("Forget Index"), page);
+
+    setButtonIcon(refreshIndexButton_, QStringLiteral("view-refresh"), QStringLiteral("reload"));
+    setButtonIcon(forgetIndexButton_, QStringLiteral("edit-delete"), QStringLiteral("list-remove"));
+
+    refreshIndexButton_->setEnabled(false);
+    forgetIndexButton_->setEnabled(false);
+
+    buttonLayout->addWidget(refreshIndexButton_);
+    buttonLayout->addWidget(forgetIndexButton_);
+    buttonLayout->addStretch();
+
+    layout->addLayout(buttonLayout);
+
+    auto updateIndexButtonStates = [this]() {
+        const int row = indexTable_ ? indexTable_->currentRow() : -1;
+        const bool hasSelection = row >= 0 && row < indexTable_->rowCount();
+
+        QString deviceId;
+        if (hasSelection) {
+            if (const auto* item = indexTable_->item(row, IndexNameColumn)) {
+                deviceId = item->data(IndexDeviceIdRole).toString();
+            }
+        }
+
+        const bool knownDeviceAvailable =
+            !deviceId.isEmpty() &&
+            knownDeviceById_.contains(deviceId);
+
+        if (refreshIndexButton_) {
+            refreshIndexButton_->setEnabled(knownDeviceAvailable);
+            refreshIndexButton_->setToolTip(
+                knownDeviceAvailable
+                    ? QStringLiteral("Refresh this index by rescanning its device.")
+                    : QStringLiteral("This index cannot be refreshed because its device is no longer available.")
+            );
+        }
+
+        if (forgetIndexButton_) {
+            forgetIndexButton_->setEnabled(hasSelection && !deviceId.isEmpty());
+            forgetIndexButton_->setToolTip(
+                QStringLiteral("Forget this in-memory index and remove its files from search results.")
+            );
+        }
+    };
+
+    connect(indexTable_, &QTableWidget::currentCellChanged, this, updateIndexButtonStates);
+
+    connect(refreshIndexButton_, &QPushButton::clicked, this, [this]() {
+        if (!indexTable_) {
+            return;
+        }
+
+        const int row = indexTable_->currentRow();
+        const auto* item = row >= 0 ? indexTable_->item(row, IndexNameColumn) : nullptr;
+        const QString deviceId = item ? item->data(IndexDeviceIdRole).toString() : QString();
+
+        if (!deviceId.isEmpty()) {
+            Q_EMIT refreshIndexRequested(deviceId);
+        }
+    });
+
+    connect(forgetIndexButton_, &QPushButton::clicked, this, [this]() {
+        if (!indexTable_) {
+            return;
+        }
+
+        const int row = indexTable_->currentRow();
+        const auto* item = row >= 0 ? indexTable_->item(row, IndexNameColumn) : nullptr;
+        const QString deviceId = item ? item->data(IndexDeviceIdRole).toString() : QString();
+        const QString name = item ? item->text() : QStringLiteral("this index");
+
+        if (deviceId.isEmpty()) {
+            return;
+        }
+
+        QMessageBox confirmBox(this);
+        confirmBox.setIcon(QMessageBox::Question);
+        confirmBox.setWindowTitle(QStringLiteral("Forget Index?"));
+        confirmBox.setText(
+            QStringLiteral(
+                "Forget the index for %1?\n\n"
+                "Its files will be removed from search results. "
+                "This does not delete files from disk and does not change device preferences.\n\n"
+                "You can rescan the device later from the Devices page, or by pressing F5."
+            ).arg(name)
+        );
+        confirmBox.setStandardButtons(QMessageBox::Discard | QMessageBox::Cancel);
+        confirmBox.setDefaultButton(QMessageBox::Cancel);
+        confirmBox.button(QMessageBox::Discard)->setText(QStringLiteral("Forget"));
+
+        if (confirmBox.exec() != QMessageBox::Discard) {
+            return;
+        }
+
+        Q_EMIT forgetIndexRequested(deviceId);
+    });
+
+    if (indexTable_->rowCount() > 0) {
+        indexTable_->setCurrentCell(0, IndexNameColumn);
+    }
+
+    QTimer::singleShot(0, this, updateIndexButtonStates);
 
     return page;
 }
@@ -1528,6 +1793,10 @@ QWidget* PreferencesDialog::createAdvancedPage()
 
 void PreferencesDialog::populateDeviceTable()
 {
+    if (!deviceTable_) {
+        return;
+    }
+
     const QSignalBlocker blocker(deviceTable_);
 
     std::vector<BlockDevice> sortedDevices = knownDevices_;
@@ -1622,6 +1891,130 @@ void PreferencesDialog::populateDeviceTable()
             for (int column = 0; column < DeviceColumnCount; ++column) {
                 if (auto* item = deviceTable_->item(row, column)) {
                     item->setForeground(unmountedForeground);
+                }
+            }
+        }
+
+        ++row;
+    }
+}
+
+void PreferencesDialog::populateIndexTable()
+{
+    if (!indexTable_) {
+        return;
+    }
+
+    const QSignalBlocker blocker(indexTable_);
+
+    indexTable_->clearContents();
+    indexTable_->setRowCount(static_cast<int>(indexSummaries_.size()));
+
+    const QLocale locale;
+    const QPalette palette = indexTable_->palette();
+    const QBrush unavailableForeground = palette.brush(QPalette::PlaceholderText);
+
+    int row = 0;
+    for (const IndexController::IndexSummary& summary : indexSummaries_) {
+        const bool knownDevice = !summary.deviceId.isEmpty() && knownDeviceById_.contains(summary.deviceId);
+
+        QString status;
+        if (!summary.ready) {
+            status = QStringLiteral("Indexing");
+        }
+        else if (!knownDevice) {
+            status = summary.searchable
+                ? QStringLiteral("Device unavailable")
+                : QStringLiteral("Unavailable");
+        }
+        else if (!summary.mounted && summary.searchable) {
+            status = QStringLiteral("Ready, offline");
+        }
+        else if (!summary.searchable) {
+            status = QStringLiteral("Hidden offline");
+        }
+        else {
+            status = QStringLiteral("Ready");
+        }
+
+        auto* nameItem = new QTableWidgetItem(summary.displayName);
+        nameItem->setData(IndexDeviceIdRole, summary.deviceId);
+        nameItem->setData(IndexIdRole, summary.indexId);
+        nameItem->setToolTip(summary.deviceId);
+        indexTable_->setItem(row, IndexNameColumn, nameItem);
+
+        auto* statusItem = new QTableWidgetItem(status);
+        if (!knownDevice) {
+            statusItem->setIcon(QIcon::fromTheme(
+                QStringLiteral("dialog-warning"),
+                QIcon::fromTheme(QStringLiteral("emblem-warning"))
+            ));
+            statusItem->setToolTip(
+                QStringLiteral(
+                    "The indexed device is no longer visible in the current device list. "
+                    "You can keep using offline results or forget this index."
+                )
+            );
+        }
+        indexTable_->setItem(row, IndexStatusColumn, statusItem);
+
+        const qsizetype liveRecords = std::max<qsizetype>(
+            0,
+            summary.recordCount - summary.deletedRecordCount
+        );
+
+        auto* recordsItem = new QTableWidgetItem(locale.toString(liveRecords));
+        recordsItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        recordsItem->setToolTip(
+            summary.deletedRecordCount > 0
+                ? QStringLiteral("%1 live records, %2 deleted/tombstoned records")
+                    .arg(locale.toString(liveRecords))
+                    .arg(locale.toString(summary.deletedRecordCount))
+                : QStringLiteral("%1 records").arg(locale.toString(liveRecords))
+        );
+        indexTable_->setItem(row, IndexRecordsColumn, recordsItem);
+
+        indexTable_->setItem(
+            row,
+            IndexFilesystemColumn,
+            new QTableWidgetItem(summary.fsType.trimmed().isEmpty() ? QStringLiteral("—") : summary.fsType)
+        );
+
+        const QString mountPoint = summary.primaryMountPoint.trimmed().isEmpty()
+            ? QStringLiteral("—")
+            : summary.primaryMountPoint.trimmed();
+
+        auto* mountPointItem = new QTableWidgetItem(mountPoint);
+        if (!summary.mountPoints.isEmpty()) {
+            mountPointItem->setToolTip(summary.mountPoints.join(QLatin1Char('\n')));
+        }
+        indexTable_->setItem(row, IndexMountPointColumn, mountPointItem);
+
+        indexTable_->setItem(
+            row,
+            IndexDeviceColumn,
+            new QTableWidgetItem(summary.devNode.trimmed().isEmpty() ? QStringLiteral("—") : summary.devNode)
+        );
+
+        QString lastIndexedText = QStringLiteral("—");
+        if (summary.lastIndexedTime > 0) {
+            const QDateTime lastIndexedDateTime = QDateTime::fromSecsSinceEpoch(
+                summary.lastIndexedTime,
+                QTimeZone::UTC
+            ).toLocalTime();
+
+            lastIndexedText = locale.toString(
+                lastIndexedDateTime,
+                QLocale::ShortFormat
+            );
+        }
+
+        indexTable_->setItem(row, IndexLastIndexedColumn, new QTableWidgetItem(lastIndexedText));
+
+        if (!knownDevice) {
+            for (int column = 0; column < IndexColumnCount; ++column) {
+                if (auto* item = indexTable_->item(row, column)) {
+                    item->setForeground(unavailableForeground);
                 }
             }
         }

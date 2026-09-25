@@ -151,6 +151,8 @@ bool AppController::start() {
         this, [this](quint64 indexId) {
             Q_UNUSED(indexId);
             trimSortScratchAllWindows();
+            updateOpenPreferencesDialog();
+            Q_EMIT indexesChanged();
             requestRefreshAllWindows();
         });
 
@@ -237,6 +239,9 @@ bool AppController::start() {
                     mounts,
                     requestId
                 );
+
+                updateOpenPreferencesDialog();
+                Q_EMIT indexesChanged();
 
                 const auto preference = preferences_.indexedDevicePreference(deviceId);
                 indexController_->updateDeviceRuntimeStateByDeviceId(
@@ -431,6 +436,9 @@ bool AppController::start() {
 
                 // Clean up the requestId as the scan has completed successfully
                 indexController_->removeRequestId(requestId);
+
+                updateOpenPreferencesDialog();
+                Q_EMIT indexesChanged();
 
                 requestRefreshAllWindows();
             });
@@ -815,7 +823,7 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
         return;
     }
 
-    auto* dialog = new PreferencesDialog(preferences_, knownDevices_, nullptr);
+    auto* dialog = new PreferencesDialog(preferences_, knownDevices_, indexSummaries(), nullptr);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setCurrentPage(initialPage);
 
@@ -827,6 +835,12 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
 
     connect(dialog, &PreferencesDialog::preferencesApplied,
             this, &AppController::applyDevicePreferenceChanges);
+
+    connect(dialog, &PreferencesDialog::refreshIndexRequested,
+        this, &AppController::refreshIndex);
+
+    connect(dialog, &PreferencesDialog::forgetIndexRequested,
+            this, &AppController::forgetIndex);
 
     connect(dialog, &PreferencesDialog::searchFiltersApplied,
             this, [this]() {
@@ -887,6 +901,45 @@ void AppController::refreshIndexes()
         QStringLiteral("Refreshing device list before indexing…"),
         3000
     );
+}
+
+void AppController::refreshIndex(const QString& deviceId)
+{
+    if (requestScanForDeviceId(deviceId)) {
+        requestWindowStatusMessage(
+            QStringLiteral("Refreshing selected index…"),
+            3000
+        );
+    }
+}
+
+void AppController::forgetIndex(const QString& deviceId)
+{
+    if (deviceId.isEmpty() || !indexController_) {
+        return;
+    }
+
+    cancelActiveScansForDevice(deviceId, false);
+    removeLiveUpdateIndexedDevice(deviceId);
+
+    if (!indexController_->removeDeviceByDeviceId(deviceId)) {
+        requestWindowStatusMessage(
+            QStringLiteral("Index was already removed."),
+            3000
+        );
+        return;
+    }
+
+    trimSortScratchAllWindows();
+    updateOpenPreferencesDialog();
+    Q_EMIT indexesChanged();
+
+    requestWindowStatusMessage(
+        QStringLiteral("Index forgotten."),
+        3000
+    );
+
+    requestRefreshAllWindows();
 }
 
 void AppController::requestWindowStatusMessage(const QString& message, const int timeoutMs) {
@@ -1145,6 +1198,11 @@ bool AppController::carryWindowSizeAndColumnWidthsToNewWindows() const
     return preferences_.carryWindowSizeAndColumnWidthsToNewWindows();
 }
 
+std::vector<IndexController::IndexSummary> AppController::indexSummaries() const
+{
+    return indexController_ ? indexController_->indexSummaries() : std::vector<IndexController::IndexSummary>{};
+}
+
 void AppController::setShowFiltersDropdown(bool enabled)
 {
     const bool wasEnabled = preferences_.showFiltersDropdown();
@@ -1226,6 +1284,7 @@ void AppController::updateOpenPreferencesDialog()
 {
     if (preferencesDialog_) {
         preferencesDialog_->setKnownDevices(knownDevices_);
+        preferencesDialog_->setIndexSummaries(indexSummaries());
     }
 }
 

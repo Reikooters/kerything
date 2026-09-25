@@ -100,6 +100,8 @@ private:
     void populateIndexTable();
     void populateFilterTable();
     void populateFilterTable(const std::vector<SearchFilterPreference>& filters);
+    void updateSelectedDeviceDetailsHeight();
+    void scheduleSelectedDeviceDetailsHeightUpdate();
     void updateApplyButtonEnabled();
     bool applyChanges();
     bool hasChanges() const;

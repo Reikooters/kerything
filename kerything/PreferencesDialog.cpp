@@ -229,6 +229,10 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
     if (row >= 0 && row < navigation_->count()) {
         navigation_->setCurrentRow(row);
     }
+
+    if (page == PreferencesDialogPage::Devices) {
+        scheduleSelectedDeviceDetailsHeightUpdate();
+    }
 }
 
 void PreferencesDialog::setAutoRefreshResultsForLiveUpdates(bool enabled)
@@ -402,6 +406,57 @@ void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& index
     }
 }
 
+void PreferencesDialog::updateSelectedDeviceDetailsHeight()
+{
+    if (!selectedDeviceDetailsText_) {
+        return;
+    }
+
+    static constexpr int MaxDetailsHeight = 190;
+
+    QTextDocument* document = selectedDeviceDetailsText_->document();
+    if (!document) {
+        return;
+    }
+
+    document->setDocumentMargin(0);
+
+    QTextOption textOption = document->defaultTextOption();
+    textOption.setWrapMode(QTextOption::WordWrap);
+    document->setDefaultTextOption(textOption);
+
+    const int viewportWidth = selectedDeviceDetailsText_->viewport()
+        ? selectedDeviceDetailsText_->viewport()->width()
+        : selectedDeviceDetailsText_->width();
+
+    if (viewportWidth > 0) {
+        document->setTextWidth(viewportWidth);
+    }
+
+    const int contentHeight =
+        std::max(1, static_cast<int>(std::ceil(document->size().height())));
+
+    const int detailsHeight = std::min(contentHeight, MaxDetailsHeight);
+
+    selectedDeviceDetailsText_->setMinimumHeight(detailsHeight);
+    selectedDeviceDetailsText_->setMaximumHeight(detailsHeight);
+
+    if (selectedDeviceDetailsText_->verticalScrollBar()) {
+        selectedDeviceDetailsText_->verticalScrollBar()->setValue(0);
+    }
+}
+
+void PreferencesDialog::scheduleSelectedDeviceDetailsHeightUpdate()
+{
+    if (!selectedDeviceDetailsText_) {
+        return;
+    }
+
+    QTimer::singleShot(0, this, [this]() {
+        updateSelectedDeviceDetailsHeight();
+    });
+}
+
 void PreferencesDialog::populateNavigation()
 {
     pages_->addWidget(createDevicesPage());
@@ -423,6 +478,12 @@ void PreferencesDialog::populateNavigation()
     navigation_->addItem(QStringLiteral("Advanced"));
 
     connect(navigation_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
+
+    connect(pages_, &QStackedWidget::currentChanged, this, [this](int index) {
+        if (index == static_cast<int>(PreferencesDialogPage::Devices)) {
+            scheduleSelectedDeviceDetailsHeightUpdate();
+        }
+    });
 }
 
 QWidget* PreferencesDialog::createDevicesPage()
@@ -565,42 +626,6 @@ QWidget* PreferencesDialog::createDevicesPage()
             return;
         }
 
-        auto updateDetailsAreaHeight = [this]() {
-            if (!selectedDeviceDetailsText_) {
-                return;
-            }
-
-            static constexpr int MaxDetailsHeight = 190;
-
-            QTextDocument* document = selectedDeviceDetailsText_->document();
-            if (!document) {
-                return;
-            }
-
-            document->setDocumentMargin(0);
-
-            QTextOption textOption = document->defaultTextOption();
-            textOption.setWrapMode(QTextOption::WordWrap);
-            document->setDefaultTextOption(textOption);
-
-            const int viewportWidth = selectedDeviceDetailsText_->viewport()
-                ? selectedDeviceDetailsText_->viewport()->width()
-                : selectedDeviceDetailsText_->width();
-
-            if (viewportWidth > 0) {
-                document->setTextWidth(viewportWidth);
-            }
-
-            const int contentHeight =
-                std::max(1, static_cast<int>(std::ceil(document->size().height())));
-
-            const int detailsHeight = std::min(contentHeight, MaxDetailsHeight);
-
-            selectedDeviceDetailsText_->setMinimumHeight(detailsHeight);
-            selectedDeviceDetailsText_->setMaximumHeight(detailsHeight);
-            selectedDeviceDetailsText_->verticalScrollBar()->setValue(0);
-        };
-
         const int row = deviceTable_->currentRow();
         const bool validRow = row >= 0 && row < deviceTable_->rowCount();
         auto* enabledItem = validRow ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
@@ -612,7 +637,6 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         if (deviceId.isEmpty()) {
             selectedDeviceDetailsText_->setHtml(QStringLiteral("No device selected."));
-            updateDetailsAreaHeight();
 
             scanWhenUnmountedCheckBox_->setEnabled(false);
             scanWhenUnmountedCheckBox_->setChecked(false);
@@ -625,6 +649,8 @@ QWidget* PreferencesDialog::createDevicesPage()
                 refreshSelectedDeviceIndexButton_->setEnabled(false);
                 refreshSelectedDeviceIndexButton_->setToolTip(QStringLiteral("No device selected."));
             }
+
+            scheduleSelectedDeviceDetailsHeightUpdate();
             return;
         }
 
@@ -634,7 +660,7 @@ QWidget* PreferencesDialog::createDevicesPage()
             selectedDeviceDetailsText_->setHtml(
                 BlockDeviceDisplayUtils::selectedDeviceDetailsHtml(knownDeviceIt.value())
             );
-            updateDetailsAreaHeight();
+            scheduleSelectedDeviceDetailsHeightUpdate();
         }
         else {
             QString deviceName = deviceTable_->item(row, DeviceNameColumn)->text().toHtmlEscaped();
@@ -646,7 +672,7 @@ QWidget* PreferencesDialog::createDevicesPage()
                 deviceName,
                 deviceId.toHtmlEscaped()
             ));
-            updateDetailsAreaHeight();
+            scheduleSelectedDeviceDetailsHeightUpdate();
         }
 
         scanWhenUnmountedCheckBox_->setEnabled(true);
@@ -843,8 +869,8 @@ QWidget* PreferencesDialog::createDevicesPage()
         deviceTable_->setCurrentCell(0, DeviceNameColumn);
     }
 
-    // Do first update using a timer, as this will ensure that the device table has been populated
-    QTimer::singleShot(0, this, updateSelectedDeviceOptions);
+    updateSelectedDeviceOptions();
+    scheduleSelectedDeviceDetailsHeightUpdate();
 
     return page;
 }

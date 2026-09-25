@@ -1007,10 +1007,11 @@ QWidget* PreferencesDialog::createIndexesPage()
 
         const QString rescanText = knownDevice
             ? QStringLiteral(
-                "You can rescan this device later from the Devices page, from the Indexes page, or by pressing F5."
+                "You can rescan this device later from the Devices page, or by pressing F5."
             )
             : QStringLiteral(
-                "This device is not currently available. If you reconnect or mount it again, Kerything can index it again once the device is discovered."
+                "This device is not currently available. If you reconnect or mount it again, "
+                "Kerything can index it again once the device is discovered."
             );
 
         QMessageBox confirmBox(this);

@@ -209,6 +209,18 @@ namespace {
         std::size_t postingCount = 0;
     };
 
+    enum class CandidateSourceKind : uint8_t {
+        Bigram,
+        Trigram,
+        Extension
+    };
+
+    struct CandidateSource {
+        CandidateSourceKind kind = CandidateSourceKind::Trigram;
+        uint32_t gram = 0;
+        std::size_t estimatedCount = 0;
+    };
+
     bool isAsciiWordCharacter(unsigned char c) noexcept
     {
         return std::isalnum(c) || c == '_';
@@ -736,6 +748,22 @@ namespace {
         return candidates;
     }
 
+    std::size_t estimateExtensionCandidateCountBeforeDedup(
+        const IndexController::DeviceIndex& index,
+        const IndexController::ExtensionSet& extensions
+    ) {
+        std::size_t count = 0;
+
+        for (const std::string& extension : extensions) {
+            if (const std::vector<uint32_t>* records =
+                    index.recordIndicesForExtension(extension)) {
+                count += records->size();
+            }
+        }
+
+        return count;
+    }
+
     template <typename AppendResultFn>
     void collectRecordsMatchingNonKeywordFilters(
         const IndexController::DeviceIndex& index,
@@ -1032,6 +1060,161 @@ namespace {
         return grams;
     }
 
+    std::vector<CandidateSource> candidateSourcesForDevice(
+        const IndexController::DeviceIndex& index,
+        const std::vector<QueryKeyword>& queryKeywords,
+        const IndexController::ExtensionSet& extensionFilter,
+        IndexController::SearchDiagnostics* diagnostics
+    ) {
+        std::vector<CandidateSource> sources;
+        std::size_t bestGramEstimate = std::numeric_limits<std::size_t>::max();
+
+        for (const QueryKeyword& queryKeyword : queryKeywords) {
+            const std::vector<QueryGram> grams =
+                gramsForKeyword(index, queryKeyword.lowercaseText);
+
+            sources.reserve(sources.size() + grams.size());
+
+            for (const QueryGram& gram : grams) {
+                bestGramEstimate = std::min(bestGramEstimate, gram.postingCount);
+
+                sources.push_back({
+                    gram.kind == QueryGramKind::Bigram
+                        ? CandidateSourceKind::Bigram
+                        : CandidateSourceKind::Trigram,
+                    gram.gram,
+                    gram.postingCount
+                });
+            }
+        }
+
+        if (!extensionFilter.empty()) {
+            const std::size_t extensionEstimate =
+                estimateExtensionCandidateCountBeforeDedup(index, extensionFilter);
+
+            /*
+             * Extension candidates have a higher materialization cost than a compact
+             * n-gram posting list because collecting them may need to concatenate and
+             * deduplicate large extension vectors. Use extension as a first-class
+             * candidate source only when it is absolutely small, or when it is close
+             * enough to the best n-gram estimate that ranking it can still pay off.
+             *
+             * If this skips the extension source, extension filtering still happens
+             * during refinement, so correctness is unchanged.
+             */
+            static constexpr std::size_t MaxAlwaysMaterializeExtensionCandidates = 100'000;
+            static constexpr std::size_t ExtensionVsGramRatioLimit = 2;
+
+            const bool noGramSource =
+                bestGramEstimate == std::numeric_limits<std::size_t>::max();
+
+            const bool shouldUseExtensionSource =
+                extensionEstimate == 0 ||
+                extensionEstimate <= MaxAlwaysMaterializeExtensionCandidates ||
+                noGramSource ||
+                extensionEstimate <= bestGramEstimate * ExtensionVsGramRatioLimit;
+
+            if (shouldUseExtensionSource) {
+                sources.push_back({
+                    CandidateSourceKind::Extension,
+                    0,
+                    extensionEstimate
+                });
+            } else if (diagnostics) {
+                ++diagnostics->extensionSourcesSkipped;
+                diagnostics->extensionSourceSkippedRawCandidateCount += extensionEstimate;
+            }
+        }
+
+        std::sort(
+            sources.begin(),
+            sources.end(),
+            [](const CandidateSource& lhs, const CandidateSource& rhs) {
+                if (lhs.kind != rhs.kind) {
+                    return lhs.kind < rhs.kind;
+                }
+
+                if (lhs.gram != rhs.gram) {
+                    return lhs.gram < rhs.gram;
+                }
+
+                return lhs.estimatedCount < rhs.estimatedCount;
+            }
+        );
+
+        sources.erase(
+            std::unique(
+                sources.begin(),
+                sources.end(),
+                [](const CandidateSource& lhs, const CandidateSource& rhs) {
+                    return lhs.kind == rhs.kind && lhs.gram == rhs.gram;
+                }
+            ),
+            sources.end()
+        );
+
+        std::sort(
+            sources.begin(),
+            sources.end(),
+            [](const CandidateSource& lhs, const CandidateSource& rhs) {
+                if (lhs.estimatedCount != rhs.estimatedCount) {
+                    return lhs.estimatedCount < rhs.estimatedCount;
+                }
+
+                if (lhs.kind != rhs.kind) {
+                    return lhs.kind < rhs.kind;
+                }
+
+                return lhs.gram < rhs.gram;
+            }
+        );
+
+        return sources;
+    }
+
+    bool intersectCandidateSetWithExtensionCandidates(
+        const IndexController::DeviceIndex& index,
+        const IndexController::ExtensionSet& extensionFilter,
+        std::vector<uint32_t>& candidates,
+        bool& firstSource,
+        IndexController::SearchDiagnostics* diagnostics
+    ) {
+        const std::size_t estimatedCount =
+            estimateExtensionCandidateCountBeforeDedup(index, extensionFilter);
+
+        if (diagnostics) {
+            diagnostics->hasExtensionFilter = true;
+            ++diagnostics->extensionSourcesUsed;
+            diagnostics->extensionSourceRawCandidateCount += estimatedCount;
+        }
+
+        if (estimatedCount == 0) {
+            candidates.clear();
+            return false;
+        }
+
+        std::vector<uint32_t> extensionCandidates =
+            collectExtensionCandidates(index, extensionFilter);
+
+        if (diagnostics) {
+            diagnostics->extensionSourceDedupCandidateCount += extensionCandidates.size();
+        }
+
+        if (extensionCandidates.empty()) {
+            candidates.clear();
+            return false;
+        }
+
+        if (firstSource) {
+            candidates = std::move(extensionCandidates);
+            firstSource = false;
+            return !candidates.empty();
+        }
+
+        intersectSortedUniqueCandidates(candidates, extensionCandidates);
+        return !candidates.empty();
+    }
+
     bool intersectCandidateSetWithTrigram(
         const IndexController::DeviceIndex& index,
         uint32_t trigram,
@@ -1211,6 +1394,55 @@ namespace {
             candidates,
             firstGram
         );
+    }
+
+    bool intersectCandidateSetWithSource(
+        const IndexController::DeviceIndex& index,
+        const CandidateSource& source,
+        const IndexController::ExtensionSet& extensionFilter,
+        std::vector<uint32_t>& candidates,
+        bool& firstSource,
+        IndexController::SearchDiagnostics* diagnostics
+    ) {
+        switch (source.kind) {
+            case CandidateSourceKind::Bigram:
+                if (diagnostics) {
+                    ++diagnostics->bigramSourcesUsed;
+                }
+
+                return intersectCandidateSetWithBigram(
+                    index,
+                    source.gram,
+                    source.estimatedCount,
+                    candidates,
+                    firstSource
+                );
+
+            case CandidateSourceKind::Trigram:
+                if (diagnostics) {
+                    ++diagnostics->trigramSourcesUsed;
+                }
+
+                return intersectCandidateSetWithTrigram(
+                    index,
+                    source.gram,
+                    source.estimatedCount,
+                    candidates,
+                    firstSource
+                );
+
+            case CandidateSourceKind::Extension:
+                return intersectCandidateSetWithExtensionCandidates(
+                    index,
+                    extensionFilter,
+                    candidates,
+                    firstSource,
+                    diagnostics
+                );
+        }
+
+        candidates.clear();
+        return false;
     }
 
     // Overload using TrigramEntry
@@ -6130,13 +6362,18 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
 
 std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch(
     const std::string& query,
-    SearchOptions options
+    SearchOptions options,
+    SearchDiagnostics* diagnostics
 ) {
     const auto searchStart = Clock::now();
 
+    if (diagnostics) {
+        *diagnostics = {};
+    }
+
     qint64 parseAndSetupMs = 0;
     qint64 emptyQueryReserveMs = 0;
-    qint64 trigramCandidateMs = 0;
+    qint64 candidateSourceMs = 0;
     qint64 refinementMs = 0;
     qint64 emptyQueryCollectMs = 0;
 
@@ -6145,15 +6382,24 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     std::size_t debugCandidateCountBeforeRefine = 0;
     std::size_t debugRefinementChecks = 0;
     std::size_t debugDevicesSearched = 0;
-    std::size_t debugBigramFiltersUsed = 0;
-    std::size_t debugTrigramFiltersUsed = 0;
 
     std::shared_lock lock(indexMutex_);
 
-    // 1. Tokenize query: "valley dragonforce" -> ["valley", "dragonforce"]
-    // 2. For each word >= 3 chars, get candidate IDs from trigramIndex
-    // 3. Intersect the ID lists (Candidate Filtering)
-    // 4. For remaining candidates, do a case-insensitive sub-string check (Refinement)
+    /*
+     * Search pipeline:
+     *
+     * 1. Parse the query into keyword and non-keyword filters.
+     * 2. Build ranked candidate sources from available indexes:
+     *      - bigrams for 2-byte keywords,
+     *      - trigrams for longer keywords,
+     *      - extension buckets when they are estimated to be worthwhile.
+     * 3. Intersect candidate sources from smallest estimated source upward.
+     * 4. Refine remaining candidates with the full query semantics.
+     *
+     * The indexed candidate phase is only a prefilter. Correctness comes from
+     * refinement, which checks keywords, match-case, whole-word, file/folder
+     * filters, extension filters, deleted records, and mount visibility.
+     */
 
     std::vector<RecordHandle> results;
 
@@ -6304,6 +6550,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         return results;
     }
 
+    if (diagnostics && hasExtensionFilter) {
+        diagnostics->hasExtensionFilter = true;
+    }
+
     std::vector<QueryKeyword> queryKeywords;
     queryKeywords.reserve(keywords.size());
 
@@ -6396,6 +6646,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
             ++debugDevicesSearched;
 
+            if (diagnostics) {
+                ++diagnostics->devicesSearched;
+            }
+
             if (!hasExtensionFilter && !foldersOnly && !filesOnly) {
                 appendAllVisibleResultsNoFilter(*indexPtr);
                 continue;
@@ -6412,6 +6666,11 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
         emptyQueryCollectMs = elapsedMsSince(emptyQueryCollectStart);
         debugResultCount = results.size();
+
+        if (diagnostics) {
+            diagnostics->resultCount = results.size();
+            diagnostics->refinementChecks = debugRefinementChecks;
+        }
 
 #ifdef KERYTHING_ENABLE_LOGGING
         const qint64 totalMs = elapsedMsSince(searchStart);
@@ -6439,91 +6698,56 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
         ++debugDevicesSearched;
 
-        const auto trigramCandidateStart = Clock::now();
-
-        // 2. Candidate filtering via trigrams.
-        //
-        // For each keyword, process its trigrams from rarest to most common.
-        // Starting with the smallest postings list keeps the candidate vector
-        // small and reduces both temporary memory and refinement work.
-        std::vector<uint32_t> candidates;
-        bool firstTrigram = true;
-        bool trigramsUsed = false; // Track if we actually used the index
-        bool skipDevice = false;
-
-        std::vector<QueryGram> queryGrams;
-
-        for (const auto& queryKeyword : queryKeywords) {
-            const std::string& kw = queryKeyword.lowercaseText;
-
-            std::vector<QueryGram> keywordGrams = gramsForKeyword(*indexPtr, kw);
-
-            queryGrams.insert(
-                queryGrams.end(),
-                keywordGrams.begin(),
-                keywordGrams.end()
-            );
+        if (diagnostics) {
+            ++diagnostics->devicesSearched;
         }
 
-        std::sort(
-            queryGrams.begin(),
-            queryGrams.end(),
-            [](const QueryGram& lhs, const QueryGram& rhs) {
-                if (lhs.kind != rhs.kind) {
-                    return lhs.kind < rhs.kind;
-                }
+        const auto candidateSourceStart = Clock::now();
 
-                if (lhs.gram != rhs.gram) {
-                    return lhs.gram < rhs.gram;
-                }
+        /*
+         * Candidate filtering via ranked sources.
+         *
+         * Candidate sources include:
+         *   - bigram postings for 2-byte keywords,
+         *   - trigram postings for >=3-byte keywords,
+         *   - extension index candidates for ext:/extension: filters.
+         *
+         * Process the smallest useful source first to keep the refinement set
+         * small. Extension sources are added only when their estimated cost is
+         * low enough; otherwise extension filtering is deferred to refinement.
+         * Correctness is unchanged because every result is still checked against
+         * the full query before it is returned.
+         */
+        std::vector<uint32_t> candidates;
+        bool firstSource = true;
+        bool indexedSourcesUsed = false;
+        bool skipDevice = false;
 
-                return lhs.postingCount < rhs.postingCount;
-            }
-        );
+        const std::vector<CandidateSource> candidateSources =
+            candidateSourcesForDevice(
+                *indexPtr,
+                queryKeywords,
+                extensionFilter,
+                diagnostics
+            );
 
-        queryGrams.erase(
-            std::unique(
-                queryGrams.begin(),
-                queryGrams.end(),
-                [](const QueryGram& lhs, const QueryGram& rhs) {
-                    return lhs.kind == rhs.kind && lhs.gram == rhs.gram;
-                }
-            ),
-            queryGrams.end()
-        );
+        for (const CandidateSource& source : candidateSources) {
+            indexedSourcesUsed = true;
 
-        std::sort(
-            queryGrams.begin(),
-            queryGrams.end(),
-            [](const QueryGram& lhs, const QueryGram& rhs) {
-                if (lhs.postingCount != rhs.postingCount) {
-                    return lhs.postingCount < rhs.postingCount;
-                }
-
-                if (lhs.kind != rhs.kind) {
-                    return lhs.kind < rhs.kind;
-                }
-
-                return lhs.gram < rhs.gram;
-            }
-        );
-
-        for (const QueryGram& queryGram : queryGrams) {
-            trigramsUsed = true;
-
-            if (queryGram.kind == QueryGramKind::Bigram) {
-                ++debugBigramFiltersUsed;
-            } else {
-                ++debugTrigramFiltersUsed;
-            }
-
-            if (!intersectCandidateSetWithGram(
+            if (!intersectCandidateSetWithSource(
                     *indexPtr,
-                    queryGram,
+                    source,
+                    extensionFilter,
                     candidates,
-                    firstTrigram
+                    firstSource,
+                    diagnostics
             )) {
                 skipDevice = true;
+
+                if (diagnostics && source.estimatedCount == 0) {
+                    ++diagnostics->emptyPostingListSkips;
+                }
+
                 break;
             }
 
@@ -6534,12 +6758,16 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         }
 
         if (skipDevice) {
-            trigramCandidateMs += elapsedMsSince(trigramCandidateStart);
+            candidateSourceMs += elapsedMsSince(candidateSourceStart);
             continue;
         }
 
-        trigramCandidateMs += elapsedMsSince(trigramCandidateStart);
+        candidateSourceMs += elapsedMsSince(candidateSourceStart);
         debugCandidateCountBeforeRefine += candidates.size();
+
+        if (diagnostics) {
+            diagnostics->candidateCountBeforeRefine += candidates.size();
+        }
 
         const auto refinementStart = Clock::now();
 
@@ -6548,6 +6776,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         // Otherwise, we only scan the filtered candidates.
         auto resultCallback = [&](uint32_t recordIdx) {
             ++debugRefinementChecks;
+
+            if (diagnostics) {
+                ++diagnostics->refinementChecks;
+            }
 
             if (indexPtr->isDeletedRecord(recordIdx)) {
                 return;
@@ -6610,24 +6842,48 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             appendResult(*indexPtr, recordIdx);
         };
 
-        if (!trigramsUsed) {
-            // Fallback: if all keywords are too short for trigrams, use the
-            // extension index as the candidate source when possible.
+        if (!indexedSourcesUsed) {
+            /*
+             * No ranked candidate source was available for this device.
+             *
+             * This usually means every keyword is shorter than the indexed
+             * n-gram width currently available, for example a one-character
+             * query. If an extension filter exists but was not added as a ranked
+             * source, collect extension candidates here; otherwise scan the
+             * device records linearly and let refinement apply the query.
+             *
+             * Correctness does not depend on whether a filter was used as a
+             * candidate source. All query terms, type filters, and extension
+             * filters are still checked during refinement.
+             */
             if (hasExtensionFilter) {
                 const auto extensionCandidates =
                     collectExtensionCandidates(*indexPtr, extensionFilter);
+
+                if (diagnostics) {
+                    ++diagnostics->extensionSourcesUsed;
+                    diagnostics->extensionSourceDedupCandidateCount += extensionCandidates.size();
+                }
 
                 for (const uint32_t recordIdx : extensionCandidates) {
                     resultCallback(recordIdx);
                 }
             } else {
-                // Fallback: Linear scan of all records (All keywords were too short)
+                if (diagnostics) {
+                    ++diagnostics->linearScanDevices;
+                }
+
+                // Last-resort linear scan when no indexed candidate source applies.
                 for (uint32_t i = 0; i < static_cast<uint32_t>(indexPtr->fileRecords.size()); ++i) {
                     resultCallback(i);
                 }
             }
         } else {
-            // High-speed scan of candidates
+            /*
+             * Refine only the records that survived candidate-source intersection.
+             * The candidate set may come from bigrams, trigrams, extension buckets,
+             * or a combination of those sources.
+             */
             for (uint32_t idx : candidates) {
                 resultCallback(idx);
             }
@@ -6638,6 +6894,11 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     debugResultCount = results.size();
 
+    if (diagnostics) {
+        diagnostics->resultCount = results.size();
+        diagnostics->candidateCountBeforeRefine = debugCandidateCountBeforeRefine;
+    }
+
 #ifdef KERYTHING_ENABLE_LOGGING
     const qint64 totalMs = elapsedMsSince(searchStart);
     if (totalMs >= 10) {
@@ -6645,14 +6906,12 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                   << " query=\"" << query << "\""
                   << " keywords=" << debugKeywordCount
                   << " devices=" << debugDevicesSearched
-                  << " bigramFilters=" << debugBigramFiltersUsed
-                  << " trigramFilters=" << debugTrigramFiltersUsed
                   << " candidatesBeforeRefine=" << debugCandidateCountBeforeRefine
                   << " refinementChecks=" << debugRefinementChecks
                   << " results=" << debugResultCount
                   << " total=" << totalMs << "ms"
                   << " parseAndSetup=" << parseAndSetupMs << "ms"
-                  << " trigramCandidate=" << trigramCandidateMs << "ms"
+                  << " candidateSource=" << candidateSourceMs << "ms"
                   << " refinement=" << refinementMs << "ms"
                   << "\n";
     }
@@ -6663,11 +6922,16 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
 IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     const std::string& query,
-    SearchOptions options
+    SearchOptions options,
+    SearchDiagnostics* diagnostics
 ) {
 #ifdef KERYTHING_ENABLE_LOGGING
     const auto regexSearchStart = Clock::now();
 #endif
+
+    if (diagnostics) {
+        *diagnostics = {};
+    }
 
     std::shared_lock lock(indexMutex_);
 
@@ -6810,6 +7074,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             continue;
         }
 
+        if (diagnostics) {
+            ++diagnostics->devicesSearched;
+        }
+
         const DeviceIndex& index = *indexPtr;
 
         std::vector<uint32_t> candidates;
@@ -6819,7 +7087,19 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         bool skipDevice = false;
 
         if (regexExtensionFilter && !regexExtensionFilter->empty()) {
+            if (diagnostics) {
+                diagnostics->hasExtensionFilter = true;
+                ++diagnostics->extensionSourcesUsed;
+                diagnostics->extensionSourceRawCandidateCount +=
+                    estimateExtensionCandidateCountBeforeDedup(index, *regexExtensionFilter);
+            }
+
             candidates = collectExtensionCandidates(index, *regexExtensionFilter);
+
+            if (diagnostics) {
+                diagnostics->extensionSourceDedupCandidateCount += candidates.size();
+            }
+
             extensionCandidatesUsed = true;
             firstTrigram = candidates.empty();
 
@@ -6835,11 +7115,19 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             for (const QueryGram& queryGram : literalGrams) {
                 trigramsUsed = true;
 
+                if (diagnostics) {
+                    if (queryGram.kind == QueryGramKind::Bigram) {
+                        ++diagnostics->bigramSourcesUsed;
+                    } else {
+                        ++diagnostics->trigramSourcesUsed;
+                    }
+                }
+
                 if (!intersectCandidateSetWithGram(
-                        index,
-                        queryGram,
-                        candidates,
-                        firstTrigram
+                    index,
+                    queryGram,
+                    candidates,
+                    firstTrigram
                 )) {
                     skipDevice = true;
                     break;
@@ -6856,6 +7144,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         }
 
         auto resultCallback = [&](uint32_t recordIdx) {
+            if (diagnostics) {
+                ++diagnostics->refinementChecks;
+            }
+
             if (recordIdx >= index.fileRecords.size()) {
                 return;
             }
@@ -6909,6 +7201,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         };
 
         if (trigramsUsed || extensionCandidatesUsed) {
+            if (diagnostics) {
+                diagnostics->candidateCountBeforeRefine += candidates.size();
+            }
+
             for (const uint32_t recordIdx : candidates) {
                 resultCallback(recordIdx);
             }
@@ -6919,10 +7215,23 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             const auto extensionCandidates =
                 collectExtensionCandidates(index, extensionFilter);
 
+            if (diagnostics) {
+                diagnostics->hasExtensionFilter = true;
+                ++diagnostics->extensionSourcesUsed;
+                diagnostics->extensionSourceRawCandidateCount +=
+                    estimateExtensionCandidateCountBeforeDedup(index, extensionFilter);
+                diagnostics->extensionSourceDedupCandidateCount += extensionCandidates.size();
+                diagnostics->candidateCountBeforeRefine += extensionCandidates.size();
+            }
+
             for (const uint32_t recordIdx : extensionCandidates) {
                 resultCallback(recordIdx);
             }
             continue;
+        }
+
+        if (diagnostics) {
+            ++diagnostics->linearScanDevices;
         }
 
         for (uint32_t recordIdx = 0;
@@ -6930,6 +7239,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
              ++recordIdx) {
             resultCallback(recordIdx);
         }
+    }
+
+    if (diagnostics) {
+        diagnostics->resultCount = results.size();
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING

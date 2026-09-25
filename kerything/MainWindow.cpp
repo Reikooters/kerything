@@ -260,6 +260,8 @@ namespace {
         double p95Ms = 0.0;
         double maxMs = 0.0;
         double meanMs = 0.0;
+
+        IndexController::SearchDiagnostics diagnostics;
     };
 
     double percentileValue(const std::vector<double>& sortedValues, double percentile)
@@ -290,7 +292,8 @@ namespace {
         std::vector<double> timingsMs,
         qsizetype resultCount,
         bool valid,
-        const QString& errorText
+        const QString& errorText,
+        const IndexController::SearchDiagnostics& diagnostics
     ) {
         SearchBenchmarkResult result;
         result.query = benchmarkCase.query;
@@ -298,6 +301,7 @@ namespace {
         result.resultCount = resultCount;
         result.valid = valid;
         result.errorText = errorText;
+        result.diagnostics = diagnostics;
 
         if (timingsMs.empty()) {
             return result;
@@ -2710,7 +2714,15 @@ void MainWindow::showSearchBenchmark()
         out << "  - This benchmark measures search collection only.\n";
         out << "  - It does not update the table model, sort results, render delegates, or repaint the view.\n";
         out << "  - Warmup iterations are excluded from timing statistics.\n";
-        out << "  - Timings can still vary with CPU frequency scaling, background IO, allocator state, and live updates.\n\n";
+        out << "  - Timings can still vary with CPU frequency scaling, background IO, allocator state, and live updates.\n";
+        out << "  - BiSrc/TriSrc/ExtSrc are candidate-source applications across devices, not unique query tokens.\n";
+        out << "  - ExtFlt means the parsed query or regex prefilter contained an extension filter.\n";
+        out << "  - ExtSkip means extension candidate materialization was skipped and extension filtering was deferred to refinement.\n";
+        out << "  - ExtRawUsed is the raw estimated size of materialized extension sources before deduplication.\n";
+        out << "  - ExtRawSkip is the raw estimated size of skipped extension sources.\n";
+        out << "  - ExtDedup is the deduplicated size of materialized extension candidate sources.\n";
+        out << "  - Refine is the number of records checked by final query refinement.\n";
+        out << "  - Cand is the size of the indexed candidate set before refinement; linear scans do not populate Cand.\n\n";
 
         out << "Settings:\n";
         out << "  warmup iterations: " << WarmupIterations << '\n';
@@ -2741,13 +2753,17 @@ void MainWindow::showSearchBenchmark()
             qsizetype resultCount = 0;
             bool valid = true;
             QString errorText;
+            IndexController::SearchDiagnostics finalDiagnostics;
 
             auto runSearch = [&]() -> qsizetype {
+                IndexController::SearchDiagnostics diagnostics;
+
                 if (benchmarkCase.options.useRegex) {
                     IndexController::RegexSearchResult regexResult =
                         indexController->performRegexSearchWithError(
                             benchmarkCase.query.toStdString(),
-                            benchmarkCase.options
+                            benchmarkCase.options,
+                            &diagnostics
                         );
 
                     if (regexResult.errorText) {
@@ -2755,15 +2771,18 @@ void MainWindow::showSearchBenchmark()
                         errorText = *regexResult.errorText;
                     }
 
+                    finalDiagnostics = diagnostics;
                     return static_cast<qsizetype>(regexResult.records.size());
                 }
 
                 std::vector<IndexController::RecordHandle> records =
                     indexController->performTrigramSearch(
                         benchmarkCase.query.toStdString(),
-                        benchmarkCase.options
+                        benchmarkCase.options,
+                        &diagnostics
                     );
 
+                finalDiagnostics = diagnostics;
                 return static_cast<qsizetype>(records.size());
             };
 
@@ -2802,7 +2821,8 @@ void MainWindow::showSearchBenchmark()
                     std::move(timingsMs),
                     resultCount,
                     valid,
-                    errorText
+                    errorText,
+                    finalDiagnostics
                 )
             );
         }
@@ -2811,26 +2831,40 @@ void MainWindow::showSearchBenchmark()
             static_cast<double>(totalTimer.elapsed()) / 1000.0;
 
         out << "Results:\n";
-        out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9\n")
+        out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9  %10  %11  %12  %13  %14  %15  %16\n")
             .arg(QStringLiteral("Query"), -30)
             .arg(QStringLiteral("Mode"), -11)
             .arg(QStringLiteral("Results"), 10)
-            .arg(QStringLiteral("Min ms"), 9)
             .arg(QStringLiteral("P50 ms"), 9)
-            .arg(QStringLiteral("P90 ms"), 9)
-            .arg(QStringLiteral("P95 ms"), 9)
-            .arg(QStringLiteral("Max ms"), 9)
-            .arg(QStringLiteral("Mean ms"), 9);
+            .arg(QStringLiteral("Mean ms"), 9)
+            .arg(QStringLiteral("Refine"), 10)
+            .arg(QStringLiteral("Cand"), 10)
+            .arg(QStringLiteral("BiSrc"), 6)
+            .arg(QStringLiteral("TriSrc"), 6)
+            .arg(QStringLiteral("ExtFlt"), 6)
+            .arg(QStringLiteral("ExtSrc"), 6)
+            .arg(QStringLiteral("ExtSkip"), 7)
+            .arg(QStringLiteral("ExtRawUsed"), 10)
+            .arg(QStringLiteral("ExtRawSkip"), 10)
+            .arg(QStringLiteral("ExtDedup"), 10)
+            .arg(QStringLiteral("Linear"), 6);
 
         out << QString(30, QLatin1Char('-')) << "  "
             << QString(11, QLatin1Char('-')) << "  "
             << QString(10, QLatin1Char('-')) << "  "
             << QString(9, QLatin1Char('-')) << "  "
             << QString(9, QLatin1Char('-')) << "  "
-            << QString(9, QLatin1Char('-')) << "  "
-            << QString(9, QLatin1Char('-')) << "  "
-            << QString(9, QLatin1Char('-')) << "  "
-            << QString(9, QLatin1Char('-')) << '\n';
+            << QString(10, QLatin1Char('-')) << "  "
+            << QString(10, QLatin1Char('-')) << "  "
+            << QString(6, QLatin1Char('-')) << "  "
+            << QString(6, QLatin1Char('-')) << "  "
+            << QString(6, QLatin1Char('-')) << "  "
+            << QString(6, QLatin1Char('-')) << "  "
+            << QString(7, QLatin1Char('-')) << "  "
+            << QString(10, QLatin1Char('-')) << "  "
+            << QString(10, QLatin1Char('-')) << "  "
+            << QString(10, QLatin1Char('-')) << "  "
+            << QString(6, QLatin1Char('-')) << '\n';
 
         for (const SearchBenchmarkResult& result : benchmarkResults) {
             if (!result.valid) {
@@ -2841,16 +2875,58 @@ void MainWindow::showSearchBenchmark()
                 continue;
             }
 
-            out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9\n")
+            const IndexController::SearchDiagnostics& d = result.diagnostics;
+
+            out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9  %10  %11  %12  %13  %14  %15  %16\n")
                 .arg(result.query, -30)
                 .arg(result.label, -11)
                 .arg(QString::number(result.resultCount), 10)
+                .arg(formatBenchmarkMs(result.p50Ms), 9)
+                .arg(formatBenchmarkMs(result.meanMs), 9)
+                .arg(QString::number(d.refinementChecks), 10)
+                .arg(QString::number(d.candidateCountBeforeRefine), 10)
+                .arg(QString::number(d.bigramSourcesUsed), 6)
+                .arg(QString::number(d.trigramSourcesUsed), 6)
+                .arg(d.hasExtensionFilter ? QStringLiteral("yes") : QStringLiteral("no"), 6)
+                .arg(QString::number(d.extensionSourcesUsed), 6)
+                .arg(QString::number(d.extensionSourcesSkipped), 7)
+                .arg(QString::number(d.extensionSourceRawCandidateCount), 10)
+                .arg(QString::number(d.extensionSourceSkippedRawCandidateCount), 10)
+                .arg(QString::number(d.extensionSourceDedupCandidateCount), 10)
+                .arg(QString::number(d.linearScanDevices), 6);
+        }
+
+        out << "\nTiming details:\n";
+        out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7\n")
+            .arg(QStringLiteral("Query"), -30)
+            .arg(QStringLiteral("Mode"), -11)
+            .arg(QStringLiteral("Min ms"), 9)
+            .arg(QStringLiteral("P50 ms"), 9)
+            .arg(QStringLiteral("P90 ms"), 9)
+            .arg(QStringLiteral("P95 ms"), 9)
+            .arg(QStringLiteral("Max ms"), 9);
+
+        out << QString(30, QLatin1Char('-')) << "  "
+            << QString(11, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << '\n';
+
+        for (const SearchBenchmarkResult& result : benchmarkResults) {
+            if (!result.valid) {
+                continue;
+            }
+
+            out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7\n")
+                .arg(result.query, -30)
+                .arg(result.label, -11)
                 .arg(formatBenchmarkMs(result.minMs), 9)
                 .arg(formatBenchmarkMs(result.p50Ms), 9)
                 .arg(formatBenchmarkMs(result.p90Ms), 9)
                 .arg(formatBenchmarkMs(result.p95Ms), 9)
-                .arg(formatBenchmarkMs(result.maxMs), 9)
-                .arg(formatBenchmarkMs(result.meanMs), 9);
+                .arg(formatBenchmarkMs(result.maxMs), 9);
         }
 
         out << "\n";

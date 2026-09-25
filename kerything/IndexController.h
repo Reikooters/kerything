@@ -2284,6 +2284,27 @@ public:
         bool useRegex = false;
     };
 
+    struct SearchDiagnostics {
+        std::size_t devicesSearched = 0;
+
+        std::size_t bigramSourcesUsed = 0;
+        std::size_t trigramSourcesUsed = 0;
+
+        bool hasExtensionFilter = false;
+        std::size_t extensionSourcesUsed = 0;
+        std::size_t extensionSourcesSkipped = 0;
+
+        std::size_t extensionSourceRawCandidateCount = 0;
+        std::size_t extensionSourceSkippedRawCandidateCount = 0;
+        std::size_t extensionSourceDedupCandidateCount = 0;
+
+        std::size_t candidateCountBeforeRefine = 0;
+        std::size_t refinementChecks = 0;
+        std::size_t resultCount = 0;
+        std::size_t linearScanDevices = 0;
+        std::size_t emptyPostingListSkips = 0;
+    };
+
     struct RegexSearchResult {
         std::vector<RecordHandle> records;
         std::optional<QString> errorText;
@@ -2333,8 +2354,16 @@ public:
         const QString& primaryMountPoint = {},
         const std::vector<BlockDeviceMountInfo>& mounts = {}
     );
-    std::vector<RecordHandle> performTrigramSearch(const std::string& query, SearchOptions options);
-    RegexSearchResult performRegexSearchWithError(const std::string& query, SearchOptions options);
+    std::vector<RecordHandle> performTrigramSearch(
+        const std::string& query,
+        SearchOptions options,
+        SearchDiagnostics* diagnostics = nullptr
+    );
+    RegexSearchResult performRegexSearchWithError(
+        const std::string& query,
+        SearchOptions options,
+        SearchDiagnostics* diagnostics = nullptr
+    );
     [[nodiscard]] std::optional<QString> validateRegexSearchQuery(
         const std::string& query,
         SearchOptions options

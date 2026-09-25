@@ -136,6 +136,11 @@ private Q_SLOTS:
      * @brief Shows debug memory statistics for the GUI index/model.
      */
     void showMemoryStats();
+
+    /**
+     * @brief Runs a fixed search-only benchmark suite and displays timing statistics.
+     */
+    void showSearchBenchmark();
 #endif
 
     /**

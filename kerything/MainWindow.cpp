@@ -59,12 +59,14 @@
 
 #ifdef KERYTHING_ENABLE_MEMORY_STATS
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QRegularExpression>
 #include <QTextStream>
+
+#include <cmath>
 #endif
 
 #include "AppController.h"
@@ -237,6 +239,243 @@ namespace {
 
         return regexTokens.join(QLatin1Char(' ')).trimmed();
     }
+
+#ifdef KERYTHING_ENABLE_MEMORY_STATS
+    struct SearchBenchmarkCase {
+        QString query;
+        IndexController::SearchOptions options;
+        QString label;
+    };
+
+    struct SearchBenchmarkResult {
+        QString query;
+        QString label;
+        qsizetype resultCount = 0;
+        bool valid = true;
+        QString errorText;
+
+        double minMs = 0.0;
+        double p50Ms = 0.0;
+        double p90Ms = 0.0;
+        double p95Ms = 0.0;
+        double maxMs = 0.0;
+        double meanMs = 0.0;
+    };
+
+    double percentileValue(const std::vector<double>& sortedValues, double percentile)
+    {
+        if (sortedValues.empty()) {
+            return 0.0;
+        }
+
+        const double clampedPercentile = std::clamp(percentile, 0.0, 1.0);
+        const double rawIndex =
+            clampedPercentile * static_cast<double>(sortedValues.size() - 1);
+
+        const auto lowerIndex = static_cast<std::size_t>(std::floor(rawIndex));
+        const auto upperIndex = static_cast<std::size_t>(std::ceil(rawIndex));
+
+        if (lowerIndex == upperIndex) {
+            return sortedValues[lowerIndex];
+        }
+
+        const double fraction = rawIndex - static_cast<double>(lowerIndex);
+
+        return sortedValues[lowerIndex] +
+               (sortedValues[upperIndex] - sortedValues[lowerIndex]) * fraction;
+    }
+
+    SearchBenchmarkResult summarizeSearchBenchmarkRun(
+        const SearchBenchmarkCase& benchmarkCase,
+        std::vector<double> timingsMs,
+        qsizetype resultCount,
+        bool valid,
+        const QString& errorText
+    ) {
+        SearchBenchmarkResult result;
+        result.query = benchmarkCase.query;
+        result.label = benchmarkCase.label;
+        result.resultCount = resultCount;
+        result.valid = valid;
+        result.errorText = errorText;
+
+        if (timingsMs.empty()) {
+            return result;
+        }
+
+        std::sort(timingsMs.begin(), timingsMs.end());
+
+        result.minMs = timingsMs.front();
+        result.p50Ms = percentileValue(timingsMs, 0.50);
+        result.p90Ms = percentileValue(timingsMs, 0.90);
+        result.p95Ms = percentileValue(timingsMs, 0.95);
+        result.maxMs = timingsMs.back();
+
+        const double totalMs = std::accumulate(
+            timingsMs.begin(),
+            timingsMs.end(),
+            0.0
+        );
+
+        result.meanMs = totalMs / static_cast<double>(timingsMs.size());
+
+        return result;
+    }
+
+    std::vector<SearchBenchmarkCase> defaultSearchBenchmarkCases()
+    {
+        const IndexController::SearchOptions normalOptions{
+            .matchCase = false,
+            .matchWholeWord = false,
+            .useRegex = false
+        };
+
+        const IndexController::SearchOptions wholeWordOptions{
+            .matchCase = false,
+            .matchWholeWord = true,
+            .useRegex = false
+        };
+
+        const IndexController::SearchOptions regexOptions{
+            .matchCase = false,
+            .matchWholeWord = false,
+            .useRegex = true
+        };
+
+        std::vector<SearchBenchmarkCase> cases;
+
+        auto addNormal = [&](QString query, QString label = QStringLiteral("normal")) {
+            cases.push_back({
+                .query = std::move(query),
+                .options = normalOptions,
+                .label = std::move(label),
+            });
+        };
+
+        auto addWholeWord = [&](QString query) {
+            cases.push_back({
+                .query = std::move(query),
+                .options = wholeWordOptions,
+                .label = QStringLiteral("whole-word"),
+            });
+        };
+
+        auto addRegex = [&](QString query) {
+            cases.push_back({
+                .query = std::move(query),
+                .options = regexOptions,
+                .label = QStringLiteral("regex"),
+            });
+        };
+
+        // Rare 2-character terms.
+        addNormal(QStringLiteral("zx"));
+        addNormal(QStringLiteral("xz"));
+        addNormal(QStringLiteral("qz"));
+        addNormal(QStringLiteral("jq"));
+
+        // Useful/common 2-character terms.
+        addNormal(QStringLiteral("qt"));
+        addNormal(QStringLiteral("py"));
+        addNormal(QStringLiteral("rs"));
+        addNormal(QStringLiteral("go"));
+        addNormal(QStringLiteral("so"));
+        addNormal(QStringLiteral("as"));
+        addNormal(QStringLiteral("er"));
+        addNormal(QStringLiteral("in"));
+        addNormal(QStringLiteral("on"));
+        addNormal(QStringLiteral("re"));
+        addNormal(QStringLiteral("st"));
+        addNormal(QStringLiteral("th"));
+        addNormal(QStringLiteral("li"));
+
+        // Multiple short terms.
+        addNormal(QStringLiteral("nu mk"));
+        addNormal(QStringLiteral("so py"));
+        addNormal(QStringLiteral("as rs"));
+        addNormal(QStringLiteral("qt ui"));
+        addNormal(QStringLiteral("go mod"));
+        addNormal(QStringLiteral("js on"));
+        addNormal(QStringLiteral("li bc"));
+        addNormal(QStringLiteral("st re"));
+        addNormal(QStringLiteral("in er"));
+        addNormal(QStringLiteral("re st"));
+        addNormal(QStringLiteral("on th"));
+
+        // Mixed 2-character + longer-token searches.
+        addNormal(QStringLiteral("so png"));
+        addNormal(QStringLiteral("as cache"));
+        addNormal(QStringLiteral("ui theme"));
+        addNormal(QStringLiteral("qt plugin"));
+        addNormal(QStringLiteral("py test"));
+        addNormal(QStringLiteral("js package"));
+        addNormal(QStringLiteral("rs cargo"));
+        addNormal(QStringLiteral("go vendor"));
+        addNormal(QStringLiteral("sh config"));
+
+        // Extension filters.
+        addNormal(QStringLiteral("as ext:png"));
+        addNormal(QStringLiteral("so ext:png"));
+        addNormal(QStringLiteral("ui ext:cpp"));
+        addNormal(QStringLiteral("qt ext:h"));
+        addNormal(QStringLiteral("py ext:py"));
+        addNormal(QStringLiteral("js ext:json"));
+        addNormal(QStringLiteral("rs ext:rs"));
+        addNormal(QStringLiteral("as ext:png;jpg;jpeg"));
+        addNormal(QStringLiteral("so ext:cpp;h;hpp"));
+        addNormal(QStringLiteral("py ext:py;pyi"));
+
+        // File/folder filters.
+        addNormal(QStringLiteral("as type:file"));
+        addNormal(QStringLiteral("as type:folder"));
+        addNormal(QStringLiteral("so type:file"));
+        addNormal(QStringLiteral("so type:folder"));
+        addNormal(QStringLiteral("qt type:file"));
+        addNormal(QStringLiteral("qt type:folder"));
+
+        // Prefix typing sequences.
+        addNormal(QStringLiteral("p"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("pn"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("png"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("s"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("so"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("sou"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("sour"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("source"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("c"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("cm"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("cma"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("cmak"), QStringLiteral("prefix"));
+        addNormal(QStringLiteral("cmake"), QStringLiteral("prefix"));
+
+        // Whole-word checks.
+        addWholeWord(QStringLiteral("as"));
+        addWholeWord(QStringLiteral("go"));
+        addWholeWord(QStringLiteral("rs"));
+        addWholeWord(QStringLiteral("ui"));
+
+        // Conservative regex cases that should be safe and representative.
+        addRegex(QStringLiteral("\\.cpp$"));
+        addRegex(QStringLiteral("\\.(png|jpg)$"));
+        addRegex(QStringLiteral("screenshot[0-9]{4}"));
+        addRegex(QStringLiteral(".*(draft|final).*\\.pdf$"));
+
+        return cases;
+    }
+
+    QString formatBenchmarkMs(double value)
+    {
+        if (value < 0.01) {
+            return QStringLiteral("%1").arg(value, 0, 'f', 4);
+        }
+
+        if (value < 1.0) {
+            return QStringLiteral("%1").arg(value, 0, 'f', 3);
+        }
+
+        return QStringLiteral("%1").arg(value, 0, 'f', 2);
+    }
+#endif
 }
 
 MainWindow::MainWindow(
@@ -680,6 +919,17 @@ MainWindow::MainWindow(
     );
     memoryStatsAct->setStatusTip(QStringLiteral("Show debug memory statistics for the in-memory index and current results"));
     connect(memoryStatsAct, &QAction::triggered, this, &MainWindow::showMemoryStats);
+
+    auto* searchBenchmarkAct = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("speedometer"),
+            QIcon::fromTheme(QStringLiteral("utilities-system-monitor"))
+        ),
+        QStringLiteral("Search Benchmark..."),
+        this
+    );
+    searchBenchmarkAct->setStatusTip(QStringLiteral("Run a fixed search-only benchmark suite"));
+    connect(searchBenchmarkAct, &QAction::triggered, this, &MainWindow::showSearchBenchmark);
 #endif
 
     // Ctrl+F, Ctrl+L and Alt+D: Focus Search
@@ -881,6 +1131,7 @@ MainWindow::MainWindow(
     auto* helpMenu = menuBar()->addMenu("Help");
 #ifdef KERYTHING_ENABLE_MEMORY_STATS
     helpMenu->addAction(memoryStatsAct);
+    helpMenu->addAction(searchBenchmarkAct);
     helpMenu->addSeparator();
 #endif
     helpMenu->addAction(aboutAct);
@@ -2409,6 +2660,223 @@ void MainWindow::showMemoryStats()
     });
 
     connect(closeButton, &QPushButton::clicked, dialog, &QDialog::accept);
+
+    dialog->show();
+}
+
+void MainWindow::showSearchBenchmark()
+{
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("Kerything Search Benchmark"));
+    dialog->resize(1200, 800);
+
+    auto* layout = new QVBoxLayout(dialog);
+
+    auto* textEdit = new QPlainTextEdit(dialog);
+    textEdit->setReadOnly(true);
+    textEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    textEdit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+    auto* buttonLayout = new QHBoxLayout();
+    buttonLayout->addStretch();
+
+    auto* runButton = new QPushButton(QStringLiteral("Run Benchmark"), dialog);
+    auto* copyButton = new QPushButton(QStringLiteral("Copy"), dialog);
+    auto* closeButton = new QPushButton(QStringLiteral("Close"), dialog);
+
+    buttonLayout->addWidget(runButton);
+    buttonLayout->addWidget(copyButton);
+    buttonLayout->addWidget(closeButton);
+
+    layout->addWidget(textEdit);
+    layout->addLayout(buttonLayout);
+
+    auto runBenchmark = [this, textEdit, runButton, copyButton]() {
+        runButton->setEnabled(false);
+        copyButton->setEnabled(false);
+        textEdit->setPlainText(QStringLiteral("Running search benchmark...\n"));
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+        QString text;
+        QTextStream out(&text);
+
+        static constexpr int WarmupIterations = 5;
+        static constexpr int MeasuredIterations = 50;
+
+        out << "Kerything Search Benchmark\n";
+        out << "==========================\n\n";
+        out << "Notes:\n";
+        out << "  - This benchmark measures search collection only.\n";
+        out << "  - It does not update the table model, sort results, render delegates, or repaint the view.\n";
+        out << "  - Warmup iterations are excluded from timing statistics.\n";
+        out << "  - Timings can still vary with CPU frequency scaling, background IO, allocator state, and live updates.\n\n";
+
+        out << "Settings:\n";
+        out << "  warmup iterations: " << WarmupIterations << '\n';
+        out << "  measured iterations: " << MeasuredIterations << '\n';
+        out << "  sort/model/view update: disabled\n\n";
+
+        if (!controller_ || !controller_->indexController()) {
+            out << "IndexController: unavailable\n";
+            textEdit->setPlainText(text);
+            runButton->setEnabled(true);
+            copyButton->setEnabled(true);
+            return;
+        }
+
+        IndexController* indexController = controller_->indexController();
+        const std::vector<SearchBenchmarkCase> benchmarkCases =
+            defaultSearchBenchmarkCases();
+
+        std::vector<SearchBenchmarkResult> benchmarkResults;
+        benchmarkResults.reserve(benchmarkCases.size());
+
+        QElapsedTimer totalTimer;
+        totalTimer.start();
+
+        for (const SearchBenchmarkCase& benchmarkCase : benchmarkCases) {
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+            qsizetype resultCount = 0;
+            bool valid = true;
+            QString errorText;
+
+            auto runSearch = [&]() -> qsizetype {
+                if (benchmarkCase.options.useRegex) {
+                    IndexController::RegexSearchResult regexResult =
+                        indexController->performRegexSearchWithError(
+                            benchmarkCase.query.toStdString(),
+                            benchmarkCase.options
+                        );
+
+                    if (regexResult.errorText) {
+                        valid = false;
+                        errorText = *regexResult.errorText;
+                    }
+
+                    return static_cast<qsizetype>(regexResult.records.size());
+                }
+
+                std::vector<IndexController::RecordHandle> records =
+                    indexController->performTrigramSearch(
+                        benchmarkCase.query.toStdString(),
+                        benchmarkCase.options
+                    );
+
+                return static_cast<qsizetype>(records.size());
+            };
+
+            for (int i = 0; i < WarmupIterations; ++i) {
+                resultCount = runSearch();
+
+                if (!valid) {
+                    break;
+                }
+            }
+
+            std::vector<double> timingsMs;
+            timingsMs.reserve(MeasuredIterations);
+
+            if (valid) {
+                for (int i = 0; i < MeasuredIterations; ++i) {
+                    QElapsedTimer timer;
+                    timer.start();
+
+                    resultCount = runSearch();
+
+                    const double elapsedMs =
+                        static_cast<double>(timer.nsecsElapsed()) / 1'000'000.0;
+
+                    timingsMs.push_back(elapsedMs);
+
+                    if (!valid) {
+                        break;
+                    }
+                }
+            }
+
+            benchmarkResults.push_back(
+                summarizeSearchBenchmarkRun(
+                    benchmarkCase,
+                    std::move(timingsMs),
+                    resultCount,
+                    valid,
+                    errorText
+                )
+            );
+        }
+
+        const double totalElapsedSeconds =
+            static_cast<double>(totalTimer.elapsed()) / 1000.0;
+
+        out << "Results:\n";
+        out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9\n")
+            .arg(QStringLiteral("Query"), -30)
+            .arg(QStringLiteral("Mode"), -11)
+            .arg(QStringLiteral("Results"), 10)
+            .arg(QStringLiteral("Min ms"), 9)
+            .arg(QStringLiteral("P50 ms"), 9)
+            .arg(QStringLiteral("P90 ms"), 9)
+            .arg(QStringLiteral("P95 ms"), 9)
+            .arg(QStringLiteral("Max ms"), 9)
+            .arg(QStringLiteral("Mean ms"), 9);
+
+        out << QString(30, QLatin1Char('-')) << "  "
+            << QString(11, QLatin1Char('-')) << "  "
+            << QString(10, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << "  "
+            << QString(9, QLatin1Char('-')) << '\n';
+
+        for (const SearchBenchmarkResult& result : benchmarkResults) {
+            if (!result.valid) {
+                out << QStringLiteral("%1  %2  %3\n")
+                    .arg(result.query, -30)
+                    .arg(result.label, -11)
+                    .arg(QStringLiteral("ERROR: %1").arg(result.errorText));
+                continue;
+            }
+
+            out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9\n")
+                .arg(result.query, -30)
+                .arg(result.label, -11)
+                .arg(QString::number(result.resultCount), 10)
+                .arg(formatBenchmarkMs(result.minMs), 9)
+                .arg(formatBenchmarkMs(result.p50Ms), 9)
+                .arg(formatBenchmarkMs(result.p90Ms), 9)
+                .arg(formatBenchmarkMs(result.p95Ms), 9)
+                .arg(formatBenchmarkMs(result.maxMs), 9)
+                .arg(formatBenchmarkMs(result.meanMs), 9);
+        }
+
+        out << "\n";
+        out << "Total benchmark wall time: "
+            << QStringLiteral("%1").arg(totalElapsedSeconds, 0, 'f', 2)
+            << "s\n";
+
+        textEdit->setPlainText(text);
+        runButton->setEnabled(true);
+        copyButton->setEnabled(true);
+    };
+
+    connect(runButton, &QPushButton::clicked, dialog, runBenchmark);
+
+    connect(copyButton, &QPushButton::clicked, dialog, [textEdit]() {
+        QApplication::clipboard()->setText(textEdit->toPlainText());
+    });
+
+    connect(closeButton, &QPushButton::clicked, dialog, &QDialog::accept);
+
+    textEdit->setPlainText(
+        QStringLiteral(
+            "Click \"Run Benchmark\" to run the fixed search-only benchmark suite.\n\n"
+            "The benchmark will run synchronously and may briefly make the UI unresponsive."
+        )
+    );
 
     dialog->show();
 }

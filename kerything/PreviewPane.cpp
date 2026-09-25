@@ -16,9 +16,7 @@
 #include <QMimeType>
 #include <QPaintEvent>
 #include <QPainter>
-#include <QRegularExpression>
 #include <QSet>
-#include <QSettings>
 #include <QSizePolicy>
 #include <QStandardPaths>
 #include <QtConcurrent>
@@ -100,6 +98,12 @@ void PreviewImageWidget::paintEvent(QPaintEvent* event)
 
 // --- PreviewPane ---
 
+const QMimeDatabase& PreviewPane::mimeDatabase()
+{
+    static const QMimeDatabase database;
+    return database;
+}
+
 bool PreviewPane::isImageFile(const QFileInfo& fileInfo)
 {
     static const QSet<QString> imageExtensions = {
@@ -117,7 +121,7 @@ bool PreviewPane::isImageFile(const QFileInfo& fileInfo)
         return true;
     }
 
-    const QMimeType mime = QMimeDatabase().mimeTypeForFile(fileInfo);
+    const QMimeType mime = mimeDatabase().mimeTypeForFile(fileInfo);
     return mime.name().startsWith(QStringLiteral("image/"));
 }
 
@@ -136,7 +140,7 @@ bool PreviewPane::isVideoFile(const QFileInfo& fileInfo)
         return true;
     }
 
-    const QMimeType mime = QMimeDatabase().mimeTypeForFile(fileInfo);
+    const QMimeType mime = mimeDatabase().mimeTypeForFile(fileInfo);
     return mime.name().startsWith(QStringLiteral("video/"));
 }
 
@@ -459,11 +463,12 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, q
     timeout->setInterval(10000);
 
     auto cleanedUp = std::make_shared<bool>(false);
+    auto timedOut = std::make_shared<bool>(false);
     auto stderrTail = std::make_shared<QByteArray>();
 
     auto cleanupProcess = [this, proc, timeout, cleanedUp]() {
         if (*cleanedUp) {
-            return;
+            return false;
         }
 
         *cleanedUp = true;
@@ -475,6 +480,7 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, q
         }
 
         proc->deleteLater();
+        return true;
     };
 
     auto drainStderr = [proc, stderrTail]() {
@@ -487,33 +493,41 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, q
     };
 
     connect(timeout, &QTimer::timeout, this,
-            [this, proc, url, meta, generation, cleanupProcess, drainStderr]() {
-                if (currentProcess_ != proc) {
+            [proc, timedOut, drainStderr]() {
+                if (proc->state() == QProcess::NotRunning) {
                     return;
                 }
 
+                *timedOut = true;
                 drainStderr();
-                proc->kill();
-                cleanupProcess();
+                proc->terminate();
 
-                if (generation == previewGeneration_ && currentUrl_ == url) {
-                    showThemeIcon(url, meta, generation);
-                }
+                QTimer::singleShot(750, proc, [proc]() {
+                    if (proc->state() != QProcess::NotRunning) {
+                        proc->kill();
+                    }
+                });
             });
 
     connect(proc, &QProcess::readyReadStandardError, this, drainStderr);
 
     connect(proc, &QProcess::finished, this,
-            [this, proc, url, meta, generation, cleanupProcess, drainStderr](int exitCode, QProcess::ExitStatus exitStatus) {
+            [this, proc, url, meta, generation, cleanupProcess, drainStderr, timedOut](int exitCode, QProcess::ExitStatus exitStatus) {
                 const QByteArray data = proc->readAllStandardOutput();
                 drainStderr();
-                cleanupProcess();
+
+                if (!cleanupProcess()) {
+                    return;
+                }
 
                 if (generation != previewGeneration_ || currentUrl_ != url) {
                     return;
                 }
 
-                if (exitCode == 0 && exitStatus == QProcess::NormalExit && !data.isEmpty()) {
+                if (!*timedOut &&
+                    exitCode == 0 &&
+                    exitStatus == QProcess::NormalExit &&
+                    !data.isEmpty()) {
                     QImage img;
                     if (img.loadFromData(data, "PNG")) {
                         const QPixmap pixmap = QPixmap::fromImage(img);
@@ -533,7 +547,10 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, q
                 }
 
                 drainStderr();
-                cleanupProcess();
+
+                if (!cleanupProcess()) {
+                    return;
+                }
 
                 if (generation == previewGeneration_ && currentUrl_ == url) {
                     showThemeIcon(url, meta, generation);
@@ -553,8 +570,7 @@ void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta, quint64 ge
     const QString localPath = url.toLocalFile();
     const QFileInfo fileInfo(localPath);
 
-    QMimeDatabase mimeDb;
-    const QMimeType mimeType = mimeDb.mimeTypeForFile(fileInfo);
+    const QMimeType mimeType = mimeDatabase().mimeTypeForFile(fileInfo);
     QIcon icon = QIcon::fromTheme(mimeType.iconName());
     if (icon.isNull()) {
         icon = QIcon::fromTheme(mimeType.genericIconName());
@@ -563,7 +579,16 @@ void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta, quint64 ge
         icon = QIcon::fromTheme(QStringLiteral("unknown"));
     }
 
-    const QPixmap pixmap = icon.pixmap(128, 128);
+    const qreal dpr = devicePixelRatioF();
+    const int logicalIconSize = 128;
+    QPixmap pixmap = icon.pixmap(
+        QSize(
+            static_cast<int>(logicalIconSize * dpr),
+            static_cast<int>(logicalIconSize * dpr)
+        )
+    );
+    pixmap.setDevicePixelRatio(dpr);
+
     if (!pixmap.isNull()) {
         cachePreview(previewCacheKey(url), pixmap, true);
         setPreviewContent(pixmap, meta, true);
@@ -574,10 +599,16 @@ void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta, quint64 ge
     metadataLabel_->setText(meta);
 }
 
-QString PreviewPane::generateMetadataHtml(const QFileInfo& fileInfo) const
+QString PreviewPane::generateMetadataHtml(const QFileInfo& fileInfo)
 {
-    QMimeDatabase mimeDb;
-    const QMimeType mime = mimeDb.mimeTypeForFile(fileInfo);
+    return generateMetadataHtmlWithOptionalDimensions(fileInfo, std::nullopt);
+}
+
+QString PreviewPane::generateMetadataHtmlWithOptionalDimensions(
+    const QFileInfo& fileInfo,
+    const std::optional<QString>& dimensionsText
+) {
+    const QMimeType mime = mimeDatabase().mimeTypeForFile(fileInfo);
     const QString typeStr = mime.comment().isEmpty() ? mime.name() : mime.comment();
 
     const QLocale locale;
@@ -589,32 +620,44 @@ QString PreviewPane::generateMetadataHtml(const QFileInfo& fileInfo) const
         ? fileInfo.lastModified().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"))
         : QStringLiteral("Unknown");
 
-    return QStringLiteral(
+    QString html = QStringLiteral(
         "<table cellspacing='0' cellpadding='2' style='font-size: 9pt;'>"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Type:</td><td>%1</td></tr>"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Size:</td><td>%2</td></tr>"
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Modified:</td><td>%3</td></tr>"
-        "<tr><td style='padding-right: 8px; color: palette(placeholder-text); vertical-align: top; white-space: nowrap;'>Path:</td>"
-        "<td style='word-break: break-all;'>%4</td></tr>"
-        "</table>"
     ).arg(
         typeStr.toHtmlEscaped(),
         sizeStr.toHtmlEscaped(),
-        dateStr.toHtmlEscaped(),
-        fileInfo.absoluteFilePath().toHtmlEscaped()
+        dateStr.toHtmlEscaped()
     );
+
+    if (dimensionsText.has_value()) {
+        html += QStringLiteral(
+            "<tr data-kerything-dimensions='1'>"
+            "<td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Dimensions:</td>"
+            "<td>%1</td></tr>"
+        ).arg(dimensionsText->toHtmlEscaped());
+    }
+
+    html += QStringLiteral(
+        "<tr><td style='padding-right: 8px; color: palette(placeholder-text); vertical-align: top; white-space: nowrap;'>Path:</td>"
+        "<td style='word-break: break-all;'>%1</td></tr>"
+        "</table>"
+    ).arg(fileInfo.absoluteFilePath().toHtmlEscaped());
+
+    return html;
+}
+
+QString PreviewPane::dimensionsTextForSize(const QSize& dimensions)
+{
+    return dimensions.isValid()
+        ? QStringLiteral("%1 × %2").arg(dimensions.width()).arg(dimensions.height())
+        : QStringLiteral("Unknown");
 }
 
 QString PreviewPane::metadataHtmlWithDimensions(const QString& metadataText, const QSize& dimensions)
 {
-    if (!dimensions.isValid()) {
-        return metadataHtmlWithDimensionsUnknown(metadataText);
-    }
-
-    return metadataHtmlWithDimensionsText(
-        metadataText,
-        QStringLiteral("%1 × %2").arg(dimensions.width()).arg(dimensions.height())
-    );
+    return metadataHtmlWithDimensionsText(metadataText, dimensionsTextForSize(dimensions));
 }
 
 QString PreviewPane::metadataHtmlWithDimensionsPlaceholder(const QString& metadataText)
@@ -635,45 +678,42 @@ QString PreviewPane::metadataHtmlWithDimensionsUnknown(const QString& metadataTe
 
 QString PreviewPane::metadataHtmlWithDimensionsText(const QString& metadataText, const QString& dimensionsText)
 {
+    static const QString pathMarker = QStringLiteral(
+        "<tr><td style='padding-right: 8px; color: palette(placeholder-text); vertical-align: top; white-space: nowrap;'>Path:</td>"
+    );
+
+    const qsizetype pathRowIndex = metadataText.indexOf(pathMarker);
+    if (pathRowIndex < 0) {
+        return metadataText;
+    }
+
     const QString dimensionsRow = QStringLiteral(
         "<tr data-kerything-dimensions='1'>"
         "<td style='padding-right: 8px; color: palette(placeholder-text); white-space: nowrap;'>Dimensions:</td>"
         "<td>%1</td></tr>"
     ).arg(dimensionsText.toHtmlEscaped());
 
-    QString html = metadataText;
+    const qsizetype existingDimensionsIndex =
+        metadataText.indexOf(QStringLiteral("<tr data-kerything-dimensions='1'>"));
 
-    static const QRegularExpression existingDimensionsRow(
-        QStringLiteral("<tr\\s+data-kerything-dimensions=['\"]1['\"][^>]*>.*?</tr>"),
-        QRegularExpression::DotMatchesEverythingOption
-    );
+    if (existingDimensionsIndex >= 0) {
+        const qsizetype existingDimensionsEnd =
+            metadataText.indexOf(QStringLiteral("</tr>"), existingDimensionsIndex);
 
-    const QRegularExpressionMatch match = existingDimensionsRow.match(html);
-    if (match.hasMatch()) {
-        html.replace(match.capturedStart(), match.capturedLength(), dimensionsRow);
-        return html;
-    }
-
-    /*
-     * Insert before the path row when possible. Matching only the semantic
-     * beginning of the row is less fragile than matching the whole styled cell.
-     */
-    const qsizetype pathLabelIndex = html.indexOf(QStringLiteral(">Path:</td>"));
-    if (pathLabelIndex >= 0) {
-        const qsizetype pathRowIndex = html.lastIndexOf(QStringLiteral("<tr>"), pathLabelIndex);
-        if (pathRowIndex >= 0) {
-            html.insert(pathRowIndex, dimensionsRow);
+        if (existingDimensionsEnd >= 0) {
+            QString html = metadataText;
+            html.replace(
+                existingDimensionsIndex,
+                existingDimensionsEnd + 5 - existingDimensionsIndex,
+                dimensionsRow
+            );
             return html;
         }
     }
 
-    const qsizetype tableEndIndex = html.lastIndexOf(QStringLiteral("</table>"));
-    if (tableEndIndex >= 0) {
-        html.insert(tableEndIndex, dimensionsRow);
-        return html;
-    }
-
-    return metadataText;
+    QString html = metadataText;
+    html.insert(pathRowIndex, dimensionsRow);
+    return html;
 }
 
 void PreviewPane::setPreviewContent(const QPixmap& pixmap, const QString& metadataText, bool isIcon)
@@ -695,7 +735,15 @@ void PreviewPane::cancelCurrentJob()
         currentProcess_ = nullptr;
 
         process->disconnect(this);
-        process->kill();
+
+        if (process->state() != QProcess::NotRunning) {
+            process->terminate();
+
+            if (!process->waitForFinished(100)) {
+                process->kill();
+            }
+        }
+
         process->deleteLater();
     }
 }

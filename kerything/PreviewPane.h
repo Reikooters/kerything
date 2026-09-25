@@ -9,6 +9,7 @@
 #include <QFrame>
 #include <QFutureWatcher>
 #include <QLabel>
+#include <QMimeDatabase>
 #include <QPixmap>
 #include <QPointer>
 #include <QProcess>
@@ -68,8 +69,14 @@ private:
         quint64 generation = 0;
     };
 
+    static const QMimeDatabase& mimeDatabase();
     void setPreviewContent(const QPixmap& pixmap, const QString& metadataText, bool isIcon);
-    QString generateMetadataHtml(const QFileInfo& fileInfo) const;
+    static QString generateMetadataHtml(const QFileInfo& fileInfo);
+    static QString generateMetadataHtmlWithOptionalDimensions(
+        const QFileInfo& fileInfo,
+        const std::optional<QString>& dimensionsText
+    );
+    static QString dimensionsTextForSize(const QSize& dimensions);
     static QString metadataHtmlWithDimensions(const QString& metadataText, const QSize& dimensions);
     static QString metadataHtmlWithDimensionsPlaceholder(const QString& metadataText);
     static QString metadataHtmlWithDimensionsUnknown(const QString& metadataText);

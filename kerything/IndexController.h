@@ -89,6 +89,9 @@ public:
         }
     };
 
+    using BigramEntry = TrigramEntry;
+    using BigramRange = TrigramRange;
+
     struct DeviceIndex {
         quint64 indexId;
         QString deviceId; // stable persistent ID, e.g. partuuid:...
@@ -479,11 +482,20 @@ public:
         std::vector<TrigramRange> trigramRanges;
         std::vector<uint8_t> trigramPostings;
 
+        // Compact full-scan bigram index. This uses the same compact range +
+        // varint-delta posting representation as the trigram index, but keys
+        // are 16-bit byte bigrams stored in uint32_t.
+        std::vector<BigramRange> bigramRanges;
+        std::vector<uint8_t> bigramPostings;
+
         // Trigrams added by live updates after the last full scan.
         //
         // Keeping these separate avoids re-sorting the full trigram index for
         // every create/rename event on busy filesystems.
         std::vector<TrigramEntry> liveDeltaFlatIndex;
+
+        // Bigrams added by live updates after the last full scan.
+        std::vector<BigramEntry> liveDeltaBigramFlatIndex;
 
         // Lowercase final extension -> record indices.
         //
@@ -2033,6 +2045,8 @@ public:
 #endif
         }
 
+        void buildBigramIndexParallel();
+
         void buildExtensionIndex()
         {
             recordsByExtension.clear();
@@ -2336,6 +2350,7 @@ public:
     void buildLowercaseStringPoolByRequestId(quint32 requestId);
     void sortByNameAscendingParallelByRequestId(quint32 requestId);
     void buildTrigramIndexParallelByRequestId(quint32 requestId);
+    void buildBigramIndexParallelByRequestId(quint32 requestId);
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
     [[nodiscard]] QString memoryStatsText() const;
@@ -2409,9 +2424,17 @@ private:
         uint32_t recordIdx,
         std::vector<TrigramEntry>& targetIndex
     );
+    static bool appendBigramsForRecord(
+        DeviceIndex& deviceIndex,
+        uint32_t recordIdx,
+        std::vector<BigramEntry>& targetIndex
+    );
     static bool shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
+    static bool shouldRebuildBigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex);
     static void rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
+    static void rebuildBigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex);
     static void sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex);
+    static void sortLiveUpdateBigramIndex(DeviceIndex& deviceIndex);
     static void addRecordToExtensionIndexIfApplicable(
         DeviceIndex& deviceIndex,
         uint32_t recordIdx

@@ -406,6 +406,9 @@ bool AppController::start() {
                 // Build trigram index
                 indexController_->buildTrigramIndexParallelByRequestId(requestId);
 
+                // Build bigram index
+                indexController_->buildBigramIndexParallelByRequestId(requestId);
+
                 // Build extension index
                 indexController_->buildExtensionIndexByRequestId(requestId);
 

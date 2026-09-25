@@ -198,6 +198,17 @@ namespace {
         std::size_t postingCount = 0;
     };
 
+    enum class QueryGramKind : uint8_t {
+        Bigram,
+        Trigram
+    };
+
+    struct QueryGram {
+        QueryGramKind kind = QueryGramKind::Trigram;
+        uint32_t gram = 0;
+        std::size_t postingCount = 0;
+    };
+
     bool isAsciiWordCharacter(unsigned char c) noexcept
     {
         return std::isalnum(c) || c == '_';
@@ -257,6 +268,12 @@ namespace {
         return (static_cast<uint32_t>(static_cast<unsigned char>(text[offset])) << 16) |
                (static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 1])) << 8) |
                static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 2]));
+    }
+
+    uint32_t makeBigram(std::string_view text, std::size_t offset)
+    {
+        return (static_cast<uint32_t>(static_cast<unsigned char>(text[offset])) << 8) |
+               static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 1]));
     }
 
     std::string asciiLowercaseCopy(std::string_view text)
@@ -357,7 +374,7 @@ namespace {
         std::string current;
 
         auto flush = [&]() {
-            if (current.size() >= 3) {
+            if (current.size() >= 2) {
                 runs.push_back(std::move(current));
             }
 
@@ -927,6 +944,94 @@ namespace {
         return trigrams;
     }
 
+    std::vector<QueryGram> gramsForKeyword(
+        const IndexController::DeviceIndex& index,
+        std::string_view keyword
+    ) {
+        std::vector<QueryGram> grams;
+
+        if (keyword.size() >= 3) {
+            grams.reserve(keyword.size() - 2);
+
+            for (std::size_t i = 0; i <= keyword.size() - 3; ++i) {
+                const uint32_t trigram = makeTrigram(keyword, i);
+
+                grams.push_back({
+                    QueryGramKind::Trigram,
+                    trigram,
+                    trigramPostingCount(index.trigramRanges, trigram) +
+                    trigramPostingCount(index.liveDeltaFlatIndex, trigram)
+                });
+            }
+        } else if (keyword.size() == 2) {
+            const uint32_t bigram = makeBigram(keyword, 0);
+
+            grams.push_back({
+                QueryGramKind::Bigram,
+                bigram,
+                trigramPostingCount(index.bigramRanges, bigram) +
+                trigramPostingCount(index.liveDeltaBigramFlatIndex, bigram)
+            });
+        }
+
+        std::sort(
+            grams.begin(),
+            grams.end(),
+            [](const QueryGram& lhs, const QueryGram& rhs) {
+                if (lhs.kind != rhs.kind) {
+                    return lhs.kind < rhs.kind;
+                }
+
+                if (lhs.gram != rhs.gram) {
+                    return lhs.gram < rhs.gram;
+                }
+
+                return lhs.postingCount < rhs.postingCount;
+            }
+        );
+
+        grams.erase(
+            std::unique(
+                grams.begin(),
+                grams.end(),
+                [](const QueryGram& lhs, const QueryGram& rhs) {
+                    return lhs.kind == rhs.kind && lhs.gram == rhs.gram;
+                }
+            ),
+            grams.end()
+        );
+
+        for (QueryGram& queryGram : grams) {
+            if (queryGram.kind == QueryGramKind::Bigram) {
+                queryGram.postingCount =
+                    trigramPostingCount(index.bigramRanges, queryGram.gram) +
+                    trigramPostingCount(index.liveDeltaBigramFlatIndex, queryGram.gram);
+            } else {
+                queryGram.postingCount =
+                    trigramPostingCount(index.trigramRanges, queryGram.gram) +
+                    trigramPostingCount(index.liveDeltaFlatIndex, queryGram.gram);
+            }
+        }
+
+        std::sort(
+            grams.begin(),
+            grams.end(),
+            [](const QueryGram& lhs, const QueryGram& rhs) {
+                if (lhs.postingCount != rhs.postingCount) {
+                    return lhs.postingCount < rhs.postingCount;
+                }
+
+                if (lhs.kind != rhs.kind) {
+                    return lhs.kind < rhs.kind;
+                }
+
+                return lhs.gram < rhs.gram;
+            }
+        );
+
+        return grams;
+    }
+
     bool intersectCandidateSetWithTrigram(
         const IndexController::DeviceIndex& index,
         uint32_t trigram,
@@ -1003,6 +1108,109 @@ namespace {
 
         intersectSortedUniqueCandidates(candidates, trigramRecordIndices);
         return !candidates.empty();
+    }
+
+    bool intersectCandidateSetWithBigram(
+        const IndexController::DeviceIndex& index,
+        uint32_t bigram,
+        std::size_t postingCount,
+        std::vector<uint32_t>& candidates,
+        bool& firstGram
+    ) {
+        if (postingCount == 0) {
+            candidates.clear();
+            return false;
+        }
+
+        const bool hasLiveDelta = !index.liveDeltaBigramFlatIndex.empty();
+
+        if (firstGram) {
+            candidates.reserve(postingCount);
+
+            forEachRecordIdxForTrigram(
+                index.bigramRanges,
+                index.bigramPostings,
+                bigram,
+                [&](uint32_t recordIdx) {
+                    candidates.push_back(recordIdx);
+                }
+            );
+
+            if (hasLiveDelta) {
+                forEachRecordIdxForTrigram(
+                    index.liveDeltaBigramFlatIndex,
+                    bigram,
+                    [&](uint32_t recordIdx) {
+                        candidates.push_back(recordIdx);
+                    }
+                );
+
+                std::sort(candidates.begin(), candidates.end());
+                candidates.erase(
+                    std::unique(candidates.begin(), candidates.end()),
+                    candidates.end()
+                );
+            }
+
+            firstGram = false;
+            return !candidates.empty();
+        }
+
+        std::vector<uint32_t> bigramRecordIndices;
+        bigramRecordIndices.reserve(postingCount);
+
+        forEachRecordIdxForTrigram(
+            index.bigramRanges,
+            index.bigramPostings,
+            bigram,
+            [&](uint32_t recordIdx) {
+                bigramRecordIndices.push_back(recordIdx);
+            }
+        );
+
+        if (hasLiveDelta) {
+            forEachRecordIdxForTrigram(
+                index.liveDeltaBigramFlatIndex,
+                bigram,
+                [&](uint32_t recordIdx) {
+                    bigramRecordIndices.push_back(recordIdx);
+                }
+            );
+
+            std::sort(bigramRecordIndices.begin(), bigramRecordIndices.end());
+            bigramRecordIndices.erase(
+                std::unique(bigramRecordIndices.begin(), bigramRecordIndices.end()),
+                bigramRecordIndices.end()
+            );
+        }
+
+        intersectSortedUniqueCandidates(candidates, bigramRecordIndices);
+        return !candidates.empty();
+    }
+
+    bool intersectCandidateSetWithGram(
+        const IndexController::DeviceIndex& index,
+        const QueryGram& queryGram,
+        std::vector<uint32_t>& candidates,
+        bool& firstGram
+    ) {
+        if (queryGram.kind == QueryGramKind::Bigram) {
+            return intersectCandidateSetWithBigram(
+                index,
+                queryGram.gram,
+                queryGram.postingCount,
+                candidates,
+                firstGram
+            );
+        }
+
+        return intersectCandidateSetWithTrigram(
+            index,
+            queryGram.gram,
+            queryGram.postingCount,
+            candidates,
+            firstGram
+        );
     }
 
     // Overload using TrigramEntry
@@ -1102,6 +1310,14 @@ namespace {
 
         ranges.shrink_to_fit();
         postings.shrink_to_fit();
+    }
+
+    void buildCompactBigramIndexFromSortedEntries(
+        const std::vector<IndexController::BigramEntry>& sortedEntries,
+        std::vector<IndexController::BigramRange>& ranges,
+        std::vector<uint8_t>& postings)
+    {
+        buildCompactTrigramIndexFromSortedEntries(sortedEntries, ranges, postings);
     }
 
     QByteArray liveEntryKey(quint64 parentInode, std::string_view name)
@@ -1747,6 +1963,108 @@ IndexController::IndexController(QObject* parent)
 {
 }
 
+void IndexController::DeviceIndex::buildBigramIndexParallel()
+{
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Building compact bigram index in parallel..." << std::endl;
+#endif
+
+    liveDeltaBigramFlatIndex.clear();
+
+    std::size_t totalBigrams = 0;
+
+    for (const FileRecord& rec : fileRecords) {
+        if (rec.nameLen >= 2) {
+            totalBigrams += rec.nameLen - 1;
+        }
+    }
+
+    std::vector<BigramEntry> flatEntries;
+    flatEntries.resize(totalBigrams);
+
+    const std::size_t numRecords = fileRecords.size();
+    std::vector<std::size_t> startOffsets(numRecords);
+
+    std::size_t currentOffset = 0;
+    for (std::size_t i = 0; i < numRecords; ++i) {
+        startOffsets[i] = currentOffset;
+
+        if (fileRecords[i].nameLen >= 2) {
+            currentOffset += fileRecords[i].nameLen - 1;
+        }
+    }
+
+    std::vector<uint32_t> workIndices(numRecords);
+    std::iota(workIndices.begin(), workIndices.end(), 0);
+
+    std::for_each(
+        std::execution::par,
+        workIndices.begin(),
+        workIndices.end(),
+        [&](uint32_t i) {
+            const FileRecord& rec = fileRecords[i];
+
+            if (rec.nameLen < 2) {
+                return;
+            }
+
+            const std::string_view name = lowercaseRecordName(rec, i);
+
+            if (name.size() < 2) {
+                return;
+            }
+
+            std::size_t writePos = startOffsets[i];
+
+            for (std::size_t j = 0; j <= name.size() - 2; ++j) {
+                flatEntries[writePos++] = {
+                    (static_cast<uint32_t>(static_cast<unsigned char>(name[j])) << 8) |
+                    static_cast<uint32_t>(static_cast<unsigned char>(name[j + 1])),
+                    i
+                };
+            }
+        }
+    );
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Sorting " << flatEntries.size() << " bigrams..." << std::endl;
+#endif
+
+    std::sort(std::execution::par, flatEntries.begin(), flatEntries.end());
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Removing duplicate bigrams..." << std::endl;
+#endif
+
+    auto last = std::unique(
+        std::execution::par,
+        flatEntries.begin(),
+        flatEntries.end(),
+        [](const auto& a, const auto& b) {
+            return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
+        }
+    );
+
+    flatEntries.erase(last, flatEntries.end());
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Compressing bigram index..." << std::endl;
+#endif
+
+    buildCompactBigramIndexFromSortedEntries(
+        flatEntries,
+        bigramRanges,
+        bigramPostings
+    );
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Finished compact bigram index"
+              << " ranges=" << bigramRanges.size()
+              << " compressedPostingBytes=" << bigramPostings.size()
+              << "\n";
+#endif
+}
+
 const IndexController::DeviceIndex* IndexController::deviceIndex(quint64 indexId) const {
     std::shared_lock lock(indexMutex_);
 
@@ -1818,7 +2136,10 @@ quint64 IndexController::addDevice(
             deviceIndex.lowercaseNameOffsetByRecord.clear();
             deviceIndex.trigramRanges.clear();
             deviceIndex.trigramPostings.clear();
+            deviceIndex.bigramRanges.clear();
+            deviceIndex.bigramPostings.clear();
             deviceIndex.liveDeltaFlatIndex.clear();
+            deviceIndex.liveDeltaBigramFlatIndex.clear();
             deviceIndex.recordsByExtension.clear();
             deviceIndex.extensionIndexEntryCount = 0;
             deviceIndex.extensionIndexLiveDeltaEntries = 0;
@@ -2430,6 +2751,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         std::size_t stringBytesToAppend = 0;
         std::size_t lowercaseStringBytesToAppend = 0;
         std::size_t estimatedTrigramsToAppend = 0;
+        std::size_t estimatedBigramsToAppend = 0;
         std::size_t estimatedDirectoriesToAppend = 0;
 
         for (const LiveUpdateOperation& operation : pendingUpserts) {
@@ -2458,6 +2780,10 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
             if (nameSize >= 3) {
                 estimatedTrigramsToAppend += nameSize - 2;
             }
+
+            if (nameSize >= 2) {
+                estimatedBigramsToAppend += nameSize - 1;
+            }
         }
 
         targetIndex->fileRecords.reserve(
@@ -2482,6 +2808,10 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
 
         targetIndex->liveDeltaFlatIndex.reserve(
             targetIndex->liveDeltaFlatIndex.size() + estimatedTrigramsToAppend
+        );
+
+        targetIndex->liveDeltaBigramFlatIndex.reserve(
+            targetIndex->liveDeltaBigramFlatIndex.size() + estimatedBigramsToAppend
         );
 
         if (targetIndex->fsIndexRefStorage == DeviceIndex::FsIndexRefStorage::UInt32) {
@@ -2509,6 +2839,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
                   << " stringBytesToAppend=" << stringBytesToAppend
                   << " lowercaseStringBytesToAppend=" << lowercaseStringBytesToAppend
                   << " estimatedTrigramsToAppend=" << estimatedTrigramsToAppend
+                  << " estimatedBigramsToAppend=" << estimatedBigramsToAppend
                   << " fileRecords size/capacity="
                   << targetIndex->fileRecords.size()
                   << "/"
@@ -2955,6 +3286,7 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         );
 
         sortLiveUpdateTrigramIndex(*targetIndex);
+        sortLiveUpdateBigramIndex(*targetIndex);
     }
 
     if (targetIndex->fsIndexLiveRefCount() > 0) {
@@ -3009,6 +3341,15 @@ IndexController::LiveUpdateApplyResult IndexController::applyLiveUpdateOperation
         );
 
         rebuildTrigramIndexAfterLiveUpdates(*targetIndex);
+    }
+
+    if (shouldRebuildBigramIndexAfterLiveUpdates(*targetIndex)) {
+        PhaseTimer timer(
+             QStringLiteral("live batch #%1 rebuild bigram index").arg(liveBatchDebugId),
+             10
+        );
+
+        rebuildBigramIndexAfterLiveUpdates(*targetIndex);
     }
 
     if (shouldRebuildExtensionIndexAfterLiveUpdates(*targetIndex)) {
@@ -3176,7 +3517,9 @@ QString IndexController::memoryStatsText() const
     std::size_t grandIndexesWithNamespaceSidecars = 0;
     std::size_t grandIndexesWithInvalidNamespaceSidecars = 0;
     std::size_t grandFlatTrigrams = 0;
+    std::size_t grandFlatBigrams = 0;
     std::size_t grandLiveDeltaTrigrams = 0;
+    std::size_t grandLiveDeltaBigrams = 0;
     std::size_t grandStringBytes = 0;
     std::size_t grandLowercaseStringBytes = 0;
     std::size_t grandLowercaseNameOffsetEntries = 0;
@@ -3194,7 +3537,9 @@ QString IndexController::memoryStatsText() const
     std::size_t maxSearchResultsFromReadySearchableDevices = 0;
 
     quint64 grandTrigramPostingsCapacityBytes = 0;
+    quint64 grandBigramPostingsCapacityBytes = 0;
     quint64 grandRawUint32TrigramPostingBytes = 0;
+    quint64 grandRawUint32BigramPostingBytes = 0;
 
     std::size_t grandCompressedTrigramRangesChecked = 0;
     std::size_t grandCompressedTrigramInvalidOffsets = 0;
@@ -3228,7 +3573,10 @@ QString IndexController::memoryStatsText() const
         const quint64 deletedBitsBytes = vectorCapacityBytes(device.deletedRecordBits);
         const quint64 trigramRangesBytes = vectorCapacityBytes(device.trigramRanges);
         const quint64 trigramPostingsBytes = vectorCapacityBytes(device.trigramPostings);
+        const quint64 bigramRangesBytes = vectorCapacityBytes(device.bigramRanges);
+        const quint64 bigramPostingsBytes = vectorCapacityBytes(device.bigramPostings);
         const quint64 liveDeltaFlatIndexBytes = vectorCapacityBytes(device.liveDeltaFlatIndex);
+        const quint64 liveDeltaBigramFlatIndexBytes = vectorCapacityBytes(device.liveDeltaBigramFlatIndex);
         const quint64 directoryFsIndexRecordRefs32Bytes =
             vectorCapacityBytes(device.directoryFsIndexRecordRefs32);
         const quint64 directoryFsIndexRecordRefs64Bytes =
@@ -3278,6 +3626,12 @@ QString IndexController::memoryStatsText() const
                 device.trigramPostings
             );
 
+        const TrigramDistributionStats bigramStats =
+            calculateTrigramDistributionStats(
+                device.bigramRanges,
+                device.bigramPostings
+            );
+
         const CompressedTrigramValidationStats trigramValidationStats =
             validateCompressedTrigramIndex(
                 device.trigramRanges,
@@ -3286,7 +3640,9 @@ QString IndexController::memoryStatsText() const
             );
 
         grandTrigramPostingsCapacityBytes += trigramPostingsBytes;
+        grandBigramPostingsCapacityBytes += bigramPostingsBytes;
         grandRawUint32TrigramPostingBytes += trigramStats.rawUint32PostingBytes;
+        grandRawUint32BigramPostingBytes += bigramStats.rawUint32PostingBytes;
 
         grandCompressedTrigramRangesChecked += trigramValidationStats.rangesChecked;
         grandCompressedTrigramInvalidOffsets += trigramValidationStats.invalidOffsets;
@@ -3354,7 +3710,10 @@ QString IndexController::memoryStatsText() const
             deletedBitsBytes +
             trigramRangesBytes +
             trigramPostingsBytes +
+            bigramRangesBytes +
+            bigramPostingsBytes +
             liveDeltaFlatIndexBytes +
+            liveDeltaBigramFlatIndexBytes +
             directoryFsIndexRecordRefsBytes +
             liveDirectoryFsIndexRecordRefsBytes +
             fsIndexRecordRefsBytes +
@@ -3397,7 +3756,9 @@ QString IndexController::memoryStatsText() const
         }
 
         grandFlatTrigrams += trigramStats.postingCount;
+        grandFlatBigrams += bigramStats.postingCount;
         grandLiveDeltaTrigrams += device.liveDeltaFlatIndex.size();
+        grandLiveDeltaBigrams += device.liveDeltaBigramFlatIndex.size();
         grandStringBytes += device.stringPool.size();
         grandLowercaseStringBytes += device.lowercaseStringPool.size();
         grandLowercaseNameOffsetEntries += device.lowercaseNameOffsetByRecord.size();
@@ -3620,12 +3981,74 @@ QString IndexController::memoryStatsText() const
             << trigramValidationStats.trailingBytesInRanges
             << '\n';
 
+        out << "    bigramRanges size/capacity: "
+            << device.bigramRanges.size()
+            << '/'
+            << device.bigramRanges.capacity()
+            << " => "
+            << formatBytes(bigramRangesBytes)
+            << '\n';
+        out << "    bigramPostings size/capacity: "
+            << device.bigramPostings.size()
+            << '/'
+            << device.bigramPostings.capacity()
+            << " => "
+            << formatBytes(bigramPostingsBytes)
+            << " compressed bytes\n";
+        out << "      bigram posting distribution:\n";
+        out << "        unique bigrams/ranges: "
+            << bigramStats.rangeCount
+            << '\n';
+        out << "        decoded posting entries: "
+            << bigramStats.postingCount
+            << '\n';
+        out << "        posting-list size min/p50/p90/p95/p99/max: "
+            << bigramStats.minPostingListSize
+            << '/'
+            << bigramStats.p50PostingListSize
+            << '/'
+            << bigramStats.p90PostingListSize
+            << '/'
+            << bigramStats.p95PostingListSize
+            << '/'
+            << bigramStats.p99PostingListSize
+            << '/'
+            << bigramStats.maxPostingListSize
+            << '\n';
+        out << "        posting lists with 1 entry: "
+            << bigramStats.postingListsWithOneEntry
+            << '\n';
+        out << "        posting lists with >=1024 entries: "
+            << bigramStats.postingListsWithAtLeast1024Entries
+            << '\n';
+        out << "        posting lists with >=65536 entries: "
+            << bigramStats.postingListsWithAtLeast65536Entries
+            << '\n';
+        out << "        entries in top 10/top 100 largest posting lists: "
+            << bigramStats.top10PostingEntries
+            << '/'
+            << bigramStats.top100PostingEntries
+            << '\n';
+        out << "        raw uint32 posting bytes would be: "
+            << formatBytes(bigramStats.rawUint32PostingBytes)
+            << '\n';
+        out << "        compressed posting saving vs raw uint32: "
+            << formatBytes(bigramStats.compressedPostingSavingBytes)
+            << '\n';
+
         out << "    liveDeltaFlatIndex size/capacity: "
             << device.liveDeltaFlatIndex.size()
             << '/'
             << device.liveDeltaFlatIndex.capacity()
             << " => "
             << formatBytes(liveDeltaFlatIndexBytes)
+            << '\n';
+        out << "    liveDeltaBigramFlatIndex size/capacity: "
+            << device.liveDeltaBigramFlatIndex.size()
+            << '/'
+            << device.liveDeltaBigramFlatIndex.capacity()
+            << " => "
+            << formatBytes(liveDeltaBigramFlatIndexBytes)
             << '\n';
         out << '\n';
 
@@ -3874,6 +4297,21 @@ QString IndexController::memoryStatsText() const
         << grandCompressedTrigramTrailingBytesInRanges
         << '\n';
     out << "  live delta trigram entries: " << grandLiveDeltaTrigrams << '\n';
+    out << "  bigram posting entries: " << grandFlatBigrams << '\n';
+    out << "  compressed bigram posting capacity bytes: "
+        << formatBytes(grandBigramPostingsCapacityBytes)
+        << '\n';
+    out << "  raw uint32 bigram posting bytes would be: "
+        << formatBytes(grandRawUint32BigramPostingBytes)
+        << '\n';
+    out << "  compressed bigram posting saving vs raw uint32: "
+        << formatBytes(
+            grandRawUint32BigramPostingBytes > grandBigramPostingsCapacityBytes
+                ? grandRawUint32BigramPostingBytes - grandBigramPostingsCapacityBytes
+                : 0
+        )
+        << '\n';
+    out << "  live delta bigram entries: " << grandLiveDeltaBigrams << '\n';
     out << "  fs-index stored record refs: " << grandFsIndexStoredRecordRefs << '\n';
     out << "  fs-index full refs: " << grandFsIndexFullRecordRefs << '\n';
     out << "  fs-index live refs: " << grandFsIndexLiveRecordRefs << '\n';
@@ -3939,6 +4377,22 @@ QString IndexController::memoryStatsText() const
         out << QStringLiteral("%1")
             .arg(
                 static_cast<double>(grandFlatTrigrams) /
+                static_cast<double>(grandRecords),
+                0,
+                'f',
+                2
+            )
+            << '\n';
+    }
+
+    out << "    bigram postings per record: ";
+
+    if (grandRecords == 0) {
+        out << "n/a\n";
+    } else {
+        out << QStringLiteral("%1")
+            .arg(
+                static_cast<double>(grandFlatBigrams) /
                 static_cast<double>(grandRecords),
                 0,
                 'f',
@@ -4320,6 +4774,57 @@ bool IndexController::appendTrigramsForRecord(
     return true;
 }
 
+bool IndexController::appendBigramsForRecord(
+    DeviceIndex& deviceIndex,
+    uint32_t recordIdx,
+    std::vector<BigramEntry>& targetIndex)
+{
+    if (recordIdx >= deviceIndex.fileRecords.size()) {
+        return false;
+    }
+
+    const FileRecord& record = deviceIndex.fileRecords[recordIdx];
+
+    if (record.nameLen < 2) {
+        return false;
+    }
+
+    const std::string_view name = deviceIndex.lowercaseRecordName(record, recordIdx);
+
+    if (name.size() < 2) {
+        return false;
+    }
+
+    std::vector<uint32_t> uniqueBigrams;
+    uniqueBigrams.reserve(name.size() - 1);
+
+    for (std::size_t i = 0; i <= name.size() - 2; ++i) {
+        uniqueBigrams.push_back(makeBigram(name, i));
+    }
+
+    std::sort(uniqueBigrams.begin(), uniqueBigrams.end());
+
+    uniqueBigrams.erase(
+        std::unique(uniqueBigrams.begin(), uniqueBigrams.end()),
+        uniqueBigrams.end()
+    );
+
+    if (uniqueBigrams.empty()) {
+        return false;
+    }
+
+    targetIndex.reserve(targetIndex.size() + uniqueBigrams.size());
+
+    for (const uint32_t bigram : uniqueBigrams) {
+        targetIndex.push_back({
+            bigram,
+            recordIdx
+        });
+    }
+
+    return true;
+}
+
 bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
 {
     if (deviceIndex.liveDeltaFlatIndex.empty()) {
@@ -4341,6 +4846,30 @@ bool IndexController::shouldRebuildTrigramIndexAfterLiveUpdates(const DeviceInde
     }
 
     return deviceIndex.liveDeltaFlatIndex.size() >=
+           mainPostingCount / LiveDeltaRebuildRatioDivisor;
+}
+
+bool IndexController::shouldRebuildBigramIndexAfterLiveUpdates(const DeviceIndex& deviceIndex)
+{
+    if (deviceIndex.liveDeltaBigramFlatIndex.empty()) {
+        return false;
+    }
+
+    static constexpr std::size_t LiveDeltaRebuildMinEntries = 100'000;
+    static constexpr std::size_t LiveDeltaRebuildRatioDivisor = 10;
+
+    if (deviceIndex.liveDeltaBigramFlatIndex.size() < LiveDeltaRebuildMinEntries) {
+        return false;
+    }
+
+    const std::size_t mainPostingCount =
+        totalDecodedTrigramPostingCount(deviceIndex.bigramRanges);
+
+    if (mainPostingCount == 0) {
+        return true;
+    }
+
+    return deviceIndex.liveDeltaBigramFlatIndex.size() >=
            mainPostingCount / LiveDeltaRebuildRatioDivisor;
 }
 
@@ -4425,6 +4954,87 @@ void IndexController::rebuildTrigramIndexAfterLiveUpdates(DeviceIndex& deviceInd
 #endif
 }
 
+void IndexController::rebuildBigramIndexAfterLiveUpdates(DeviceIndex& deviceIndex)
+{
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Rebuilding compact bigram index after live updates"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " ranges=" << deviceIndex.bigramRanges.size()
+              << " compressedPostingBytes=" << deviceIndex.bigramPostings.size()
+              << " liveDeltaBigramFlatIndex=" << deviceIndex.liveDeltaBigramFlatIndex.size()
+              << "\n";
+#endif
+
+    std::vector<BigramEntry> rebuiltIndex;
+
+    std::size_t estimatedBigrams = 0;
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        const std::string_view name = deviceIndex.lowercaseRecordName(recordIdx);
+        if (name.size() >= 2) {
+            estimatedBigrams += name.size() - 1;
+        }
+    }
+
+    rebuiltIndex.reserve(estimatedBigrams);
+
+    for (uint32_t recordIdx = 0;
+         recordIdx < static_cast<uint32_t>(deviceIndex.fileRecords.size());
+         ++recordIdx) {
+        if (deviceIndex.isDeletedRecord(recordIdx)) {
+            continue;
+        }
+
+        appendBigramsForRecord(deviceIndex, recordIdx, rebuiltIndex);
+    }
+
+    static constexpr std::size_t ParallelSortThreshold = 500;
+
+    if (rebuiltIndex.size() >= ParallelSortThreshold) {
+        std::sort(
+            std::execution::par,
+            rebuiltIndex.begin(),
+            rebuiltIndex.end()
+        );
+    } else {
+        std::sort(
+            rebuiltIndex.begin(),
+            rebuiltIndex.end()
+        );
+    }
+
+    auto last = std::unique(
+        rebuiltIndex.begin(),
+        rebuiltIndex.end(),
+        [](const auto& a, const auto& b) {
+            return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
+        }
+    );
+
+    rebuiltIndex.erase(last, rebuiltIndex.end());
+
+    buildCompactBigramIndexFromSortedEntries(
+        rebuiltIndex,
+        deviceIndex.bigramRanges,
+        deviceIndex.bigramPostings
+    );
+
+    deviceIndex.liveDeltaBigramFlatIndex.clear();
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cerr << "Finished rebuilding compact bigram index after live updates"
+              << " deviceId=" << deviceIndex.deviceId.toStdString()
+              << " ranges=" << deviceIndex.bigramRanges.size()
+              << " compressedPostingBytes=" << deviceIndex.bigramPostings.size()
+              << "\n";
+#endif
+}
+
 void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)
 {
     if (deviceIndex.liveDeltaFlatIndex.size() < 2) {
@@ -4455,6 +5065,41 @@ void IndexController::sortLiveUpdateTrigramIndex(DeviceIndex& deviceIndex)
     );
 
     deviceIndex.liveDeltaFlatIndex.erase(last, deviceIndex.liveDeltaFlatIndex.end());
+}
+
+void IndexController::sortLiveUpdateBigramIndex(DeviceIndex& deviceIndex)
+{
+    if (deviceIndex.liveDeltaBigramFlatIndex.size() < 2) {
+        return;
+    }
+
+    static constexpr std::size_t ParallelSortThreshold = 500;
+
+    if (deviceIndex.liveDeltaBigramFlatIndex.size() >= ParallelSortThreshold) {
+        std::sort(
+            std::execution::par,
+            deviceIndex.liveDeltaBigramFlatIndex.begin(),
+            deviceIndex.liveDeltaBigramFlatIndex.end()
+        );
+    } else {
+        std::sort(
+            deviceIndex.liveDeltaBigramFlatIndex.begin(),
+            deviceIndex.liveDeltaBigramFlatIndex.end()
+        );
+    }
+
+    auto last = std::unique(
+        deviceIndex.liveDeltaBigramFlatIndex.begin(),
+        deviceIndex.liveDeltaBigramFlatIndex.end(),
+        [](const auto& a, const auto& b) {
+            return a.trigram == b.trigram && a.recordIdx == b.recordIdx;
+        }
+    );
+
+    deviceIndex.liveDeltaBigramFlatIndex.erase(
+        last,
+        deviceIndex.liveDeltaBigramFlatIndex.end()
+    );
 }
 
 void IndexController::addRecordToExtensionIndexIfApplicable(
@@ -4756,6 +5401,7 @@ bool IndexController::appendRecordFromLiveUpdateOperation(
     }
 
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
+    appendBigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaBigramFlatIndex);
     addRecordToExtensionIndexIfApplicable(deviceIndex, recordIdx);
 
     const qint64 elapsedMs = elapsedMsSince(appendStart);
@@ -5207,6 +5853,7 @@ bool IndexController::updateRecordIdentityFromLiveUpdateOperation(
     updateFileRecordMetadataFromLiveUpdateOperation(record, operation);
     deviceIndex.addLiveParentRecordRef(record.parentRecordIdx, recordIdx);
     appendTrigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaFlatIndex);
+    appendBigramsForRecord(deviceIndex, recordIdx, deviceIndex.liveDeltaBigramFlatIndex);
     addRecordToExtensionIndexIfApplicable(deviceIndex, recordIdx);
 
     return true;
@@ -5498,6 +6145,8 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
     std::size_t debugCandidateCountBeforeRefine = 0;
     std::size_t debugRefinementChecks = 0;
     std::size_t debugDevicesSearched = 0;
+    std::size_t debugBigramFiltersUsed = 0;
+    std::size_t debugTrigramFiltersUsed = 0;
 
     std::shared_lock lock(indexMutex_);
 
@@ -5802,93 +6451,84 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         bool trigramsUsed = false; // Track if we actually used the index
         bool skipDevice = false;
 
+        std::vector<QueryGram> queryGrams;
+
         for (const auto& queryKeyword : queryKeywords) {
             const std::string& kw = queryKeyword.lowercaseText;
 
-            if (kw.length() < 3) {
-                // Short keywords cannot use the trigram index and are handled
-                // later during refinement.
-                continue;
+            std::vector<QueryGram> keywordGrams = gramsForKeyword(*indexPtr, kw);
+
+            queryGrams.insert(
+                queryGrams.end(),
+                keywordGrams.begin(),
+                keywordGrams.end()
+            );
+        }
+
+        std::sort(
+            queryGrams.begin(),
+            queryGrams.end(),
+            [](const QueryGram& lhs, const QueryGram& rhs) {
+                if (lhs.kind != rhs.kind) {
+                    return lhs.kind < rhs.kind;
+                }
+
+                if (lhs.gram != rhs.gram) {
+                    return lhs.gram < rhs.gram;
+                }
+
+                return lhs.postingCount < rhs.postingCount;
             }
+        );
 
-            std::vector<QueryTrigram> keywordTrigrams;
-            keywordTrigrams.reserve(kw.length() - 2);
+        queryGrams.erase(
+            std::unique(
+                queryGrams.begin(),
+                queryGrams.end(),
+                [](const QueryGram& lhs, const QueryGram& rhs) {
+                    return lhs.kind == rhs.kind && lhs.gram == rhs.gram;
+                }
+            ),
+            queryGrams.end()
+        );
 
-            for (size_t i = 0; i <= kw.length() - 3; ++i) {
-                const uint32_t tri =
-                    (static_cast<uint32_t>(static_cast<unsigned char>(kw[i])) << 16) |
-                    (static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 1])) << 8) |
-                    static_cast<uint32_t>(static_cast<unsigned char>(kw[i + 2]));
-
-                keywordTrigrams.push_back({
-                    tri,
-                    trigramPostingCount(indexPtr->trigramRanges, tri) +
-                    trigramPostingCount(indexPtr->liveDeltaFlatIndex, tri)
-                });
-            }
-
-            std::sort(
-                keywordTrigrams.begin(),
-                keywordTrigrams.end(),
-                [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
-                    if (lhs.trigram != rhs.trigram) {
-                        return lhs.trigram < rhs.trigram;
-                    }
-
+        std::sort(
+            queryGrams.begin(),
+            queryGrams.end(),
+            [](const QueryGram& lhs, const QueryGram& rhs) {
+                if (lhs.postingCount != rhs.postingCount) {
                     return lhs.postingCount < rhs.postingCount;
                 }
-            );
 
-            keywordTrigrams.erase(
-                std::unique(
-                    keywordTrigrams.begin(),
-                    keywordTrigrams.end(),
-                    [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
-                        return lhs.trigram == rhs.trigram;
-                    }
-                ),
-                keywordTrigrams.end()
-            );
+                if (lhs.kind != rhs.kind) {
+                    return lhs.kind < rhs.kind;
+                }
 
-            for (QueryTrigram& queryTrigram : keywordTrigrams) {
-                queryTrigram.postingCount =
-                    trigramPostingCount(indexPtr->trigramRanges, queryTrigram.trigram) +
-                    trigramPostingCount(indexPtr->liveDeltaFlatIndex, queryTrigram.trigram);
+                return lhs.gram < rhs.gram;
+            }
+        );
+
+        for (const QueryGram& queryGram : queryGrams) {
+            trigramsUsed = true;
+
+            if (queryGram.kind == QueryGramKind::Bigram) {
+                ++debugBigramFiltersUsed;
+            } else {
+                ++debugTrigramFiltersUsed;
             }
 
-            std::sort(
-                keywordTrigrams.begin(),
-                keywordTrigrams.end(),
-                [](const QueryTrigram& lhs, const QueryTrigram& rhs) {
-                    if (lhs.postingCount != rhs.postingCount) {
-                        return lhs.postingCount < rhs.postingCount;
-                    }
-
-                    return lhs.trigram < rhs.trigram;
-                }
-            );
-
-            for (const QueryTrigram& queryTrigram : keywordTrigrams) {
-                trigramsUsed = true;
-
-                if (!intersectCandidateSetWithTrigram(
-                        *indexPtr,
-                        queryTrigram.trigram,
-                        queryTrigram.postingCount,
-                        candidates,
-                        firstTrigram
-                    )) {
-                    skipDevice = true;
-                    break;
-                }
-
-                if (candidates.empty()) {
-                    skipDevice = true;
-                    break;
-                }
+            if (!intersectCandidateSetWithGram(
+                    *indexPtr,
+                    queryGram,
+                    candidates,
+                    firstTrigram
+            )) {
+                skipDevice = true;
+                break;
             }
 
-            if (skipDevice) {
+            if (candidates.empty()) {
+                skipDevice = true;
                 break;
             }
         }
@@ -6005,6 +6645,8 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                   << " query=\"" << query << "\""
                   << " keywords=" << debugKeywordCount
                   << " devices=" << debugDevicesSearched
+                  << " bigramFilters=" << debugBigramFiltersUsed
+                  << " trigramFilters=" << debugTrigramFiltersUsed
                   << " candidatesBeforeRefine=" << debugCandidateCountBeforeRefine
                   << " refinementChecks=" << debugRefinementChecks
                   << " results=" << debugResultCount
@@ -6187,19 +6829,18 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         }
 
         for (const std::string& literalRun : literalRuns) {
-            const std::vector<QueryTrigram> literalTrigrams =
-                trigramsForLiteral(index, literalRun);
+            const std::vector<QueryGram> literalGrams =
+                gramsForKeyword(index, literalRun);
 
-            for (const QueryTrigram& queryTrigram : literalTrigrams) {
+            for (const QueryGram& queryGram : literalGrams) {
                 trigramsUsed = true;
 
-                if (!intersectCandidateSetWithTrigram(
+                if (!intersectCandidateSetWithGram(
                         index,
-                        queryTrigram.trigram,
-                        queryTrigram.postingCount,
+                        queryGram,
                         candidates,
                         firstTrigram
-                    )) {
+                )) {
                     skipDevice = true;
                     break;
                 }
@@ -6701,6 +7342,28 @@ void IndexController::buildTrigramIndexParallelByRequestId(quint32 requestId) {
 
     DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
     deviceIndex.buildTrigramIndexParallel();
+}
+
+void IndexController::buildBigramIndexParallelByRequestId(quint32 requestId) {
+    std::unique_lock lock(indexMutex_);
+
+    const auto existingIndexIdIt = indexIdByRequestId_.find(requestId);
+    if (existingIndexIdIt == indexIdByRequestId_.end()) {
+        std::cerr << "IndexController: buildBigramIndexParallelByRequestId: No device index for requestId=" << requestId << "\n";
+        return;
+    }
+
+    const quint64 existingIndexId = existingIndexIdIt->second;
+
+    const auto existingDeviceIndexIt = indexByIndexId_.find(existingIndexId);
+    if (existingDeviceIndexIt == indexByIndexId_.end()) {
+        std::cerr << "IndexController: buildBigramIndexParallelByRequestId: No device index for indexId=" << existingIndexId
+                  << " requestId=" << requestId << "\n";
+        return;
+    }
+
+    DeviceIndex& deviceIndex = *existingDeviceIndexIt->second;
+    deviceIndex.buildBigramIndexParallel();
 }
 
 void IndexController::buildExtensionIndexByRequestId(quint32 requestId) {

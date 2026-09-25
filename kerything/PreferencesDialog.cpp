@@ -102,7 +102,7 @@ namespace {
 PreferencesDialog::PreferencesDialog(
     Preferences& preferences,
     const std::vector<BlockDevice>& knownDevices,
-    const std::vector<IndexController::IndexSummary>& indexSummaries,
+    const std::vector<IndexSummary>& indexSummaries,
     QWidget* parent
 )
     : QDialog(parent),
@@ -361,7 +361,7 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
     updateApplyButtonEnabled();
 }
 
-void PreferencesDialog::setIndexSummaries(const std::vector<IndexController::IndexSummary>& indexSummaries)
+void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& indexSummaries)
 {
     QString selectedDeviceId;
 
@@ -1915,7 +1915,7 @@ void PreferencesDialog::populateIndexTable()
     const QBrush unavailableForeground = palette.brush(QPalette::PlaceholderText);
 
     int row = 0;
-    for (const IndexController::IndexSummary& summary : indexSummaries_) {
+    for (const IndexSummary& summary : indexSummaries_) {
         const bool knownDevice = !summary.deviceId.isEmpty() && knownDeviceById_.contains(summary.deviceId);
 
         QString status;

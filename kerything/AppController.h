@@ -14,6 +14,7 @@
 #include "DaemonClient.h"
 #include "DevicePreferenceChange.h"
 #include "IndexController.h"
+#include "IndexSummary.h"
 #include "Preferences.h"
 #include "PreferencesDialogPage.h"
 
@@ -57,7 +58,7 @@ public:
     [[nodiscard]] bool carrySearchTextToNewWindows() const;
     [[nodiscard]] bool carryResultSortingToNewWindows() const;
     [[nodiscard]] bool carryWindowSizeAndColumnWidthsToNewWindows() const;
-    [[nodiscard]] std::vector<IndexController::IndexSummary> indexSummaries() const;
+    [[nodiscard]] std::vector<IndexSummary> indexSummaries() const;
     void setShowFiltersDropdown(bool enabled);
     void setShowPreviewPane(bool enabled);
     IndexController* indexController() const noexcept;

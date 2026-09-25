@@ -4766,7 +4766,7 @@ QString IndexController::memoryStatsText() const
     return text;
 }
 
-std::vector<IndexController::IndexSummary> IndexController::indexSummaries() const
+std::vector<IndexSummary> IndexController::indexSummaries() const
 {
     std::shared_lock lock(indexMutex_);
 

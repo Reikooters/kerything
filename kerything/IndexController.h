@@ -21,6 +21,7 @@
 #include "BlockDevice.h"
 #include "FileRecord.h"
 #include "FilesystemConstants.h"
+#include "IndexSummary.h"
 #include "LiveUpdateEvent.h"
 
 #include <chrono>
@@ -2321,24 +2322,6 @@ public:
         qsizetype missingParent = 0;
         qsizetype missingEntry = 0;
         qsizetype ignoredUnindexedNamespace = 0;
-    };
-
-    struct IndexSummary {
-        quint64 indexId = 0;
-        QString deviceId;
-        QString displayName;
-        QString label;
-        QString devNode;
-        QString fsType;
-        QString primaryMountPoint;
-        QStringList mountPoints;
-        qint64 lastIndexedTime = 0;
-        qsizetype recordCount = 0;
-        qsizetype deletedRecordCount = 0;
-        bool ready = false;
-        bool mounted = false;
-        bool searchable = false;
-        bool showOfflineResults = true;
     };
 
     const DeviceIndex* deviceIndex(quint64 indexId) const;

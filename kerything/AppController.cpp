@@ -1198,9 +1198,9 @@ bool AppController::carryWindowSizeAndColumnWidthsToNewWindows() const
     return preferences_.carryWindowSizeAndColumnWidthsToNewWindows();
 }
 
-std::vector<IndexController::IndexSummary> AppController::indexSummaries() const
+std::vector<IndexSummary> AppController::indexSummaries() const
 {
-    return indexController_ ? indexController_->indexSummaries() : std::vector<IndexController::IndexSummary>{};
+    return indexController_ ? indexController_->indexSummaries() : std::vector<IndexSummary>{};
 }
 
 void AppController::setShowFiltersDropdown(bool enabled)

@@ -12,7 +12,7 @@
 
 #include "BlockDevice.h"
 #include "DevicePreferenceChange.h"
-#include "IndexController.h"
+#include "IndexSummary.h"
 #include "Preferences.h"
 
 enum class PreferencesDialogPage;
@@ -34,12 +34,12 @@ public:
     explicit PreferencesDialog(
         Preferences& preferences,
         const std::vector<BlockDevice>& knownDevices,
-        const std::vector<IndexController::IndexSummary>& indexSummaries,
+        const std::vector<IndexSummary>& indexSummaries,
         QWidget* parent = nullptr
     );
 
     void setKnownDevices(const std::vector<BlockDevice>& knownDevices);
-    void setIndexSummaries(const std::vector<IndexController::IndexSummary>& indexSummaries);
+    void setIndexSummaries(const std::vector<IndexSummary>& indexSummaries);
     void setCurrentPage(PreferencesDialogPage page);
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
     void setShowFiltersDropdown(bool enabled);
@@ -139,7 +139,7 @@ private:
 
     Preferences& preferences_;
     std::vector<BlockDevice> knownDevices_;
-    std::vector<IndexController::IndexSummary> indexSummaries_;
+    std::vector<IndexSummary> indexSummaries_;
 
     QHash<QString, BlockDevice> knownDeviceById_;
     QHash<QString, IndexedDevicePreference> originalPreferencesByDeviceId_;

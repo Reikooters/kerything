@@ -1002,6 +1002,16 @@ QWidget* PreferencesDialog::createIndexesPage()
             return;
         }
 
+        const bool knownDevice = knownDeviceById_.contains(deviceId);
+
+        const QString rescanText = knownDevice
+            ? QStringLiteral(
+                "You can rescan this device later from the Devices page, from the Indexes page, or by pressing F5."
+            )
+            : QStringLiteral(
+                "This device is not currently available. If you reconnect or mount it again, Kerything can index it again once the device is discovered."
+            );
+
         QMessageBox confirmBox(this);
         confirmBox.setIcon(QMessageBox::Question);
         confirmBox.setWindowTitle(QStringLiteral("Forget Index?"));
@@ -1010,8 +1020,8 @@ QWidget* PreferencesDialog::createIndexesPage()
                 "Forget the index for %1?\n\n"
                 "Its files will be removed from search results. "
                 "This does not delete files from disk and does not change device preferences.\n\n"
-                "You can rescan the device later from the Devices page, or by pressing F5."
-            ).arg(name)
+                "%2"
+            ).arg(name, rescanText)
         );
         confirmBox.setStandardButtons(QMessageBox::Discard | QMessageBox::Cancel);
         confirmBox.setDefaultButton(QMessageBox::Cancel);

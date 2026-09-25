@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "AppController.h"
+#include "PreviewMetadata.h"
 
 /**
  * @brief The FileModel class provides a custom table model for displaying NTFS search results.
@@ -123,6 +124,11 @@ public:
      * @brief Counts how many of the given rows currently resolve to mounted local paths.
      */
     [[nodiscard]] qsizetype mountedRowCount(const QModelIndexList& rows) const;
+
+    /**
+     * @brief Returns indexed metadata for the selected row for use by the preview pane.
+     */
+    [[nodiscard]] std::optional<PreviewMetadata> previewMetadataForRow(int row) const;
 
     /**
      * @brief Returns the stable search-result handle for a model row.

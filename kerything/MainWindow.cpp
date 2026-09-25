@@ -2033,7 +2033,7 @@ void MainWindow::updatePreview()
         return;
     }
 
-    previewPane_->previewUrl(*url);
+    previewPane_->previewUrl(*url, model_->previewMetadataForRow(row));
 }
 
 void MainWindow::handleSortSectionClicked(int section)

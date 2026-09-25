@@ -208,6 +208,7 @@ void PreviewPane::clearPreview(const QString& placeholder)
     debounceTimer_.stop();
     currentUrl_.clear();
     currentMetadataText_.clear();
+    currentIndexedMetadata_.reset();
 
     titleLabel_->setText(QStringLiteral("<span style='word-break: break-all;'>Preview</span>"));
     titleLabel_->setToolTip(QString());
@@ -225,6 +226,7 @@ void PreviewPane::showUnmounted()
     debounceTimer_.stop();
     currentUrl_.clear();
     currentMetadataText_.clear();
+    currentIndexedMetadata_.reset();
 
     titleLabel_->setText(QStringLiteral("<span style='word-break: break-all;'>Preview (Unmounted)</span>"));
     titleLabel_->setToolTip(QString());
@@ -235,7 +237,10 @@ void PreviewPane::showUnmounted()
     metadataLabel_->clear();
 }
 
-void PreviewPane::previewUrl(const QUrl& url)
+void PreviewPane::previewUrl(
+    const QUrl& url,
+    const std::optional<PreviewMetadata>& indexedMetadata
+)
 {
     if (currentUrl_ == url && (debounceTimer_.isActive() || currentProcess_ || imageLoadWatcher_)) {
         return;
@@ -248,16 +253,30 @@ void PreviewPane::previewUrl(const QUrl& url)
     debounceTimer_.stop();
 
     currentUrl_ = url;
+    currentIndexedMetadata_ = indexedMetadata;
 
     const QString localFilePath = url.toLocalFile();
     const QFileInfo fileInfo(localFilePath);
 
-    titleLabel_->setText(QStringLiteral("<span style='word-break: break-all;'>%1</span>")
-        .arg(fileInfo.fileName().toHtmlEscaped()));
-    titleLabel_->setToolTip(fileInfo.absoluteFilePath());
+    const QString titleText =
+        indexedMetadata && !indexedMetadata->fileName.isEmpty()
+            ? indexedMetadata->fileName
+            : fileInfo.fileName();
 
-    QString metaText = generateMetadataHtml(fileInfo);
-    if (fileInfo.isFile() && isImageFile(fileInfo)) {
+    const QString toolTipText =
+        indexedMetadata && !indexedMetadata->displayPath.isEmpty()
+            ? indexedMetadata->displayPath
+            : fileInfo.absoluteFilePath();
+
+    titleLabel_->setText(QStringLiteral("<span style='word-break: break-all;'>%1</span>")
+        .arg(titleText.toHtmlEscaped()));
+    titleLabel_->setToolTip(toolTipText);
+
+    QString metaText = generateMetadataHtml(fileInfo, currentIndexedMetadata_);
+    const bool indexedDirectory =
+        currentIndexedMetadata_ && currentIndexedMetadata_->isDirectory;
+
+    if (!indexedDirectory && fileInfo.isFile() && isImageFile(fileInfo)) {
         metaText = metadataHtmlWithDimensionsPlaceholder(metaText);
     }
 
@@ -347,7 +366,7 @@ void PreviewPane::generateFallbackOrIcon(const QUrl& url, const QString& meta, q
     const QString localPath = url.toLocalFile();
     const QFileInfo fileInfo(localPath);
 
-    if (fileInfo.isDir()) {
+    if ((currentIndexedMetadata_ && currentIndexedMetadata_->isDirectory) || fileInfo.isDir()) {
         showThemeIcon(url, meta, generation);
         return;
     }
@@ -601,24 +620,74 @@ void PreviewPane::showThemeIcon(const QUrl& url, const QString& meta, quint64 ge
 
 QString PreviewPane::generateMetadataHtml(const QFileInfo& fileInfo)
 {
-    return generateMetadataHtmlWithOptionalDimensions(fileInfo, std::nullopt);
+    return generateMetadataHtmlWithOptionalDimensions(fileInfo, std::nullopt, std::nullopt);
+}
+
+QString PreviewPane::generateMetadataHtml(
+    const QFileInfo& fileInfo,
+    const std::optional<PreviewMetadata>& indexedMetadata
+)
+{
+    return generateMetadataHtmlWithOptionalDimensions(fileInfo, std::nullopt, indexedMetadata);
 }
 
 QString PreviewPane::generateMetadataHtmlWithOptionalDimensions(
     const QFileInfo& fileInfo,
-    const std::optional<QString>& dimensionsText
+    const std::optional<QString>& dimensionsText,
+    const std::optional<PreviewMetadata>& indexedMetadata
 ) {
-    const QMimeType mime = mimeDatabase().mimeTypeForFile(fileInfo);
-    const QString typeStr = mime.comment().isEmpty() ? mime.name() : mime.comment();
+    QString typeStr;
+    QString sizeStr;
+    QString dateStr;
+    QString pathStr;
 
     const QLocale locale;
-    const QString sizeStr = fileInfo.isDir()
-        ? QStringLiteral("—")
-        : locale.formattedDataSize(fileInfo.size(), 1, QLocale::DataSizeIecFormat);
 
-    const QString dateStr = fileInfo.lastModified().isValid()
-        ? fileInfo.lastModified().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"))
-        : QStringLiteral("Unknown");
+    if (indexedMetadata) {
+        if (indexedMetadata->isDirectory && indexedMetadata->isSymlink) {
+            typeStr = QStringLiteral("Folder symlink");
+        } else if (indexedMetadata->isDirectory) {
+            typeStr = QStringLiteral("Folder");
+        } else if (indexedMetadata->isSymlink) {
+            typeStr = QStringLiteral("File symlink");
+        } else {
+            const QMimeType mime = mimeDatabase().mimeTypeForFile(
+                indexedMetadata->fileName,
+                QMimeDatabase::MatchExtension
+            );
+            typeStr = mime.comment().isEmpty() ? mime.name() : mime.comment();
+        }
+
+        sizeStr = indexedMetadata->isDirectory
+            ? QStringLiteral("—")
+            : locale.formattedDataSize(
+                static_cast<qint64>(indexedMetadata->size),
+                1,
+                QLocale::DataSizeIecFormat
+            );
+
+        dateStr = indexedMetadata->modificationTime > 0
+            ? QDateTime::fromSecsSinceEpoch(static_cast<qint64>(indexedMetadata->modificationTime))
+                .toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"))
+            : QStringLiteral("Unknown");
+
+        pathStr = indexedMetadata->displayPath.isEmpty()
+            ? fileInfo.absoluteFilePath()
+            : indexedMetadata->displayPath;
+    } else {
+        const QMimeType mime = mimeDatabase().mimeTypeForFile(fileInfo);
+        typeStr = mime.comment().isEmpty() ? mime.name() : mime.comment();
+
+        sizeStr = fileInfo.isDir()
+            ? QStringLiteral("—")
+            : locale.formattedDataSize(fileInfo.size(), 1, QLocale::DataSizeIecFormat);
+
+        dateStr = fileInfo.lastModified().isValid()
+            ? fileInfo.lastModified().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"))
+            : QStringLiteral("Unknown");
+
+        pathStr = fileInfo.absoluteFilePath();
+    }
 
     QString html = QStringLiteral(
         "<table cellspacing='0' cellpadding='2' style='font-size: 9pt;'>"
@@ -643,7 +712,7 @@ QString PreviewPane::generateMetadataHtmlWithOptionalDimensions(
         "<tr><td style='padding-right: 8px; color: palette(placeholder-text); vertical-align: top; white-space: nowrap;'>Path:</td>"
         "<td style='word-break: break-all;'>%1</td></tr>"
         "</table>"
-    ).arg(fileInfo.absoluteFilePath().toHtmlEscaped());
+    ).arg(pathStr.toHtmlEscaped());
 
     return html;
 }

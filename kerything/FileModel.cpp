@@ -1082,6 +1082,71 @@ qsizetype FileModel::mountedRowCount(const QModelIndexList& rows) const
     return count;
 }
 
+std::optional<PreviewMetadata> FileModel::previewMetadataForRow(const int row) const
+{
+    if (row < 0 || row >= static_cast<int>(searchResults_.size())) {
+        return std::nullopt;
+    }
+
+    if (!controller_ || !controller_->indexController()) {
+        return std::nullopt;
+    }
+
+    const auto handle = searchResults_[row];
+
+    return controller_->indexController()->withDeviceIndexRead(
+        handle.indexId,
+        [&](const IndexController::DeviceIndex* deviceIndex) -> std::optional<PreviewMetadata> {
+            if (!deviceIndex) {
+                return std::nullopt;
+            }
+
+            if (static_cast<uint8_t>(deviceIndex->generation) != handle.generation) {
+                return std::nullopt;
+            }
+
+            if (!deviceIndex->isReady) {
+                return std::nullopt;
+            }
+
+            if (handle.recordIdx >= deviceIndex->fileRecords.size()) {
+                return std::nullopt;
+            }
+
+            const FileRecord& rec = deviceIndex->fileRecords[handle.recordIdx];
+
+            if (rec.nameOffset + rec.nameLen > deviceIndex->stringPool.size()) {
+                return std::nullopt;
+            }
+
+            const QString fileName = QString::fromUtf8(
+                &deviceIndex->stringPool[rec.nameOffset],
+                rec.nameLen
+            );
+
+            QString displayPath;
+
+            if (hasMountedPath(*deviceIndex, handle)) {
+                displayPath = mountedFullPathForHandle(*deviceIndex, handle, rec);
+            }
+
+            if (displayPath.isEmpty()) {
+                const std::string indexedPath = deviceIndex->getFullPath(handle.recordIdx);
+                displayPath = mountedPathForHandle(*deviceIndex, handle, indexedPath);
+            }
+
+            return PreviewMetadata{
+                .fileName = fileName,
+                .displayPath = displayPath,
+                .size = rec.size,
+                .modificationTime = rec.modificationTime,
+                .isDirectory = (rec.flags & FileRecord_IsDir) != 0,
+                .isSymlink = (rec.flags & FileRecord_IsSymlink) != 0,
+            };
+        }
+    );
+}
+
 std::optional<IndexController::RecordHandle> FileModel::recordHandleForRow(const int row) const
 {
     if (row < 0 || row >= static_cast<int>(searchResults_.size())) {

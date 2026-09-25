@@ -104,6 +104,7 @@ add_executable(kerything
         kerything/PreferencesDialog.cpp
         kerything/PreferencesDialog.h
         kerything/PreferencesDialogPage.h
+        kerything/PreviewMetadata.h
         kerything/PreviewPane.cpp
         kerything/PreviewPane.h
         kerything/SearchResultColumns.h

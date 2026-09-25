@@ -17,6 +17,8 @@
 #include <QUrl>
 #include <QWidget>
 
+#include "PreviewMetadata.h"
+
 #ifdef KERYTHING_WITH_KF6
 #include <KFileItem>
 #include <KIO/PreviewJob>
@@ -46,7 +48,10 @@ public:
     explicit PreviewPane(QWidget* parent = nullptr);
     ~PreviewPane() override;
 
-    void previewUrl(const QUrl& url);
+    void previewUrl(
+        const QUrl& url,
+        const std::optional<PreviewMetadata>& indexedMetadata = std::nullopt
+    );
     void showUnmounted();
     void clearPreview(const QString& placeholder = QStringLiteral("No item selected"));
 
@@ -72,9 +77,14 @@ private:
     static const QMimeDatabase& mimeDatabase();
     void setPreviewContent(const QPixmap& pixmap, const QString& metadataText, bool isIcon);
     static QString generateMetadataHtml(const QFileInfo& fileInfo);
+    static QString generateMetadataHtml(
+        const QFileInfo& fileInfo,
+        const std::optional<PreviewMetadata>& indexedMetadata = std::nullopt
+    );
     static QString generateMetadataHtmlWithOptionalDimensions(
         const QFileInfo& fileInfo,
-        const std::optional<QString>& dimensionsText
+        const std::optional<QString>& dimensionsText,
+        const std::optional<PreviewMetadata>& indexedMetadata = std::nullopt
     );
     static QString dimensionsTextForSize(const QSize& dimensions);
     static QString metadataHtmlWithDimensions(const QString& metadataText, const QSize& dimensions);
@@ -102,6 +112,7 @@ private:
     QTimer debounceTimer_;
     QUrl currentUrl_;
     QString currentMetadataText_;
+    std::optional<PreviewMetadata> currentIndexedMetadata_;
     quint64 previewGeneration_ = 0;
 
     QCache<QString, PreviewCacheEntry> memoryCache_;

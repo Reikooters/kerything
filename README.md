@@ -332,14 +332,15 @@ The following keyboard shortcuts are available in Kerything:
 > 
 > To do this, follow the uninstallation instructions in the [v1-legacy](https://github.com/Reikooters/kerything/tree/v1-legacy) branch.
 
-Kerything can be installed in two main ways:
+Kerything can be installed in three ways:
 
 - using the included Arch Linux `PKGBUILD`
+- building a Fedora RPM from the included spec file
 - building and installing manually with CMake
 
-After installing with either method, complete the shared
-[Post-install setup](#post-install-setup) steps so the GUI can talk to the
-privileged backend daemon.
+After installing, complete the applicable setup steps so the GUI can talk to
+the privileged backend daemon. The Fedora steps are included below; other
+installations use [Post-install setup](#post-install-setup).
 
 ### Upgrading
 
@@ -363,6 +364,43 @@ sudo systemctl enable --now kerythingd.socket
 ```
 
 ---
+
+### Fedora RPM
+
+The RPM includes both the GUI and its systemd socket-activated daemon. The
+build script makes the KDE Frameworks 6 variant by default, `--qt-only` builds
+the non-KDE variant. Build on the Fedora release where you intend to install.
+
+```bash
+sudo dnf install rpm-build
+sudo dnf builddep packaging/kerything.spec
+
+./packaging/build-fedora-rpm.sh
+```
+
+For the Qt-only variant:
+
+```bash
+sudo dnf builddep --without kf6 packaging/kerything.spec
+./packaging/build-fedora-rpm.sh --qt-only
+```
+
+The build script reads the version from the spec file, archives tracked and
+uncommitted, unignored files from the current checkout, and puts the RPM in
+`releases/`. The packages are named `kerything` and `kerything-qt`, respectively.
+They install the same binaries, so remove one before installing the other.
+Install build dependencies only once per Fedora installation.
+
+The RPM creates the `kerything` system group. It does not grant users access
+to the privileged daemon or enable its socket automatically. To finish setup:
+
+```bash
+sudo usermod -aG kerything "$USER"
+sudo systemctl enable --now kerythingd.socket
+```
+
+Log out and back in for the new group membership to take effect. Only enable
+`kerythingd.socket`; systemd starts the service when the GUI connects.
 
 ### Arch Linux
 

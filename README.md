@@ -9,7 +9,7 @@ Inspired by the Windows utility "Everything" by Voidtools, Kerything bypasses st
 
 For other mounted filesystems, Kerything can use Linux filesystem APIs to build an index without requiring filesystem-specific low-level scanner support.
 
-Search is powered by fast in-memory trigram indexes to provide real-time results as you type.
+Search is powered by fast in-memory bigram and trigram indexes to provide real-time results as you type.
 
 Kerything currently supports indexing:
 
@@ -33,10 +33,10 @@ The name is a nod to the iconic "Everything" utility, while the 'K' prefix follo
 
 Kerything can be built in two modes:
 
-| Build mode | CMake flag | Description                                                                                                                                                 |
-|---|---:|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| KDE Frameworks 6 | `-DKERYTHING_WITH_KF6=ON` | Recommended for KDE Plasma desktop users. Enables KDE integration such as richer file opening, “Show in File Manager”, “Open With”, and terminal launching. |
-| Qt-only | `-DKERYTHING_WITH_KF6=OFF` | Recommended for non-KDE desktops. Uses Qt and freedesktop-compatible fallbacks where possible.                                                              |
+| Build mode       |                 CMake flag | Description                                                                                                                                                 |
+|------------------|---------------------------:|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| KDE Frameworks 6 |  `-DKERYTHING_WITH_KF6=ON` | Recommended for KDE Plasma desktop users. Enables KDE integration such as richer file opening, “Show in File Manager”, “Open With”, and terminal launching. |
+| Qt-only          | `-DKERYTHING_WITH_KF6=OFF` | Recommended for non-KDE desktops. Uses Qt and freedesktop-compatible fallbacks where possible.                                                              |
 
 The KDE build is recommended if you are using KDE Plasma.
 
@@ -72,47 +72,57 @@ again.
 - **Blazing Fast Indexing:** Uses low-level disk partition scanning for EXT4 and NTFS where available.
 - **Broader Filesystem Support:** Indexes other mounted Linux filesystems supported by the generic mounted scanner.
 - **Offline Indexing:** Supports scanning NTFS and EXT4 partitions even when they are not mounted in Linux.
-- **Instant Search:** Uses trigram indexing for real-time search results as you type.
+- **Instant Search:** Uses bigram and trigram indexes for real-time search results as you type.
 - **Live Updates:** Tracks filesystem changes for mounted devices in real time using Linux `fanotify`, keeping the in-memory index updated. *(Note: filesystems mounted using `fuseblk` are not expected to work. See note below for more info.)*
 - **Extension Filters:** Narrow searches by file extension using queries such as `ext:mp4` or `ext:wav;mp3`, or use saved filters from the Filter menu.
+- **Preview Pane:** Optionally show a preview pane with thumbnails for images and videos, and file-type icons for other formats.
 - **Full Unicode Support:** Search for filenames containing any UTF-8 character, including international scripts, emojis and symbols.
-- **Zero Bloat**:  Simple, lightning-fast keyword search. By foregoing file-content scanning and other complex patterns, Kerything stays lightweight and responsive.
+- **Zero Bloat:** Simple, lightning-fast keyword search. By foregoing file-content scanning and other complex patterns, Kerything stays lightweight and responsive.
 - **Search Options:** Optionally perform case-sensitive matching, match whole words, or use regular expressions to search for filenames using queries such as `^holiday.*\.jpg$`.
-- **Multithreaded:** Leverages Intel OneTBB for parallel trigram generation and sorting.
+- **Multithreaded:** Leverages oneTBB for parallel index generation and sorting.
 - **Rich Context Actions:** Right-click menu integration to open, copy, or manage files directly from the results. *(Note: Most context actions are only available if the drive was mounted at the time it was scanned.)*
 - **Drag-and-Drop Support:** Easily copy or attach files by dragging them from the search results into Dolphin or other applications. *(Note: Currently not supported for Flatpak or other sandboxed applications due to portal limitations.)*
 - **Low Overhead:** The index is stored in memory with an emphasis on efficiency. By using string pooling (e.g., storing a folder path only once even if it contains thousands of files), Kerything maintains a surprisingly small memory footprint even for massive partitions.
 
-> [!NOTE]
-> Live file system updates are supported for mounted filesystems using
-> Linux `fanotify`. Kerything keeps indexed devices updated for common
-> operations such as creates, deletes, metadata changes, symlinks, and renames.
->
-> Live update watching is enabled for mounted filesystems by default, and can
-> be toggled via the device configuration dialog. Support depends on the
-> filesystem and mount driver.
->
-> Live updates for devices mounted using `fuseblk` are not expected to work,
-> including NTFS mounted using `ntfs-3g`. NTFS mounted using either `ntfs3`
-> or the newer `ntfs` driver added in Linux kernel version 7.1 have been tested
-> to work successfully.
->
-> Live updates currently require the filesystem to be mounted and are provided
-> by the privileged `kerythingd` daemon.
->
-> If the live update stream becomes unreliable, for example due to a fanotify
-> queue overflow or an unsupported edge case, Kerything may mark the index as
-> potentially stale and a full refresh can be performed by pressing F5.
-
-**Native KDE Integration (Optional):**
+### Native KDE Integration (Optional)
 
 Kerything can be built with KDE Frameworks 6 for better integration on KDE Plasma desktops, including:
 
-  - Additional right-click context actions (similar to Dolphin) such as "Open With", share, compress, etc.
-  - "Show in File Manager" not only opens the folder, but also directly highlights the selected file.
-  - Group files by mime type when opening multiple files. This means when you select 4 music files and 3 images and press Open, you get a playlist containing the selected 4 songs open in your music player, and the selected 3 images open in your image viewer.
-  - Better "Open Terminal Here" integration.
-  - About box uses KDE Plasma's standard about box style.
+- Additional right-click context actions similar to Dolphin, such as "Open With", share, compress, and more.
+- "Show in File Manager" not only opens the folder, but also directly highlights the selected file.
+- Grouping files by MIME type when opening multiple files. For example, selecting 4 music files and 3 images and pressing Open can open the songs in your music player and the images in your image viewer.
+- Better "Open Terminal Here" integration.
+- The About box uses KDE Plasma's standard about box style.
+
+### Live updates
+
+Live filesystem updates are supported for mounted filesystems using
+Linux `fanotify`. Kerything keeps indexed devices updated for common
+operations such as creates, deletes, metadata changes, symlinks, and renames.
+
+Live update watching is enabled for mounted filesystems by default, and can
+be toggled via the device configuration dialog. Support depends on the
+filesystem and mount driver.
+
+Live updates for devices mounted using `fuseblk` are not expected to work,
+including NTFS mounted using `ntfs-3g`. NTFS mounted using either `ntfs3`
+or the newer `ntfs` driver added in Linux kernel version 7.1 have been tested
+to work successfully.
+
+Live updates currently require the filesystem to be mounted and are provided
+by the privileged `kerythingd` daemon.
+
+If the live update stream becomes unreliable, for example due to a fanotify
+queue overflow or an unsupported edge case, Kerything may mark the index as
+potentially stale and a full refresh can be performed by pressing F5.
+
+### Adaptive EXT4 scanning
+
+To improve indexing performance for EXT4 devices, Kerything scans in parallel
+on SSDs, NVMe drives, and devices where rotational status cannot be determined.
+
+Rotational drives use serial scanning, as parallelism typically provides little
+or no benefit and may perform worse.
 
 ### Btrfs support
 
@@ -157,7 +167,8 @@ Btrfs support will continue to improve in future releases.
 ## Searching and filters
 
 Kerything searches indexed file names as you type. Searches are case-insensitive
-and use the in-memory trigram index for fast matching.
+by default and use in-memory bigram and trigram indexes for fast matching where
+possible. Search keywords of two characters or longer benefit from these indexes, while single-character keywords fall back to a linear scan.
 
 ### Extension filters
 
@@ -1025,7 +1036,7 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 Thanks to the following people who have contributed code to Kerything:
 
 - [@derickso](https://github.com/derickso)
-  - Added the Preview Pane, which shows thumbnails for images and videos.
+  - Added the Preview Pane, which shows thumbnails for images and videos, and file-type icons for other formats.
 
 ### Third-party Libraries
 
@@ -1056,7 +1067,7 @@ Special thanks to the following people for reporting bugs, suggesting features a
 - [@progalt-pfo](https://github.com/progalt-pfo)
   - Suggested F2FS filesystem support. Kerything does not yet have a dedicated scanner for F2FS, but this led to the development of a generic filesystem scanner which broadened support to other filesystems besides EXT4 and NTFS.
 - [@KaMyKaSii](https://github.com/KaMyKaSii)
-  - Suggested support for regular expressions. I originally did not intend to implement support for regular expressions into Kerything, as I assumed it would be too slow. However, this led to integrating `re2` into the project, which works fairly well when used in tandem with the application's other smarts, such as its trigram and extension indexes.
+  - Suggested support for regular expressions.
 
 ## License
 

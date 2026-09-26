@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -68,6 +70,86 @@ namespace Ext4ScannerEngine {
         constexpr uint32_t kMinInodeSlotsForParallelInodeScan = 1'000'000;
         constexpr uint32_t kMinUsedInodesForParallelInodeScan = 100'000;
         constexpr uint32_t kMaxParallelInodeWorkers = 8;
+
+        enum class Ext4DiagnosticsMode : uint8_t {
+            None,
+            Light,
+            FullQuiet,
+            FullPrint
+        };
+
+        [[nodiscard]] bool envFlagEnabled(const char* name) noexcept
+        {
+            const char* value = std::getenv(name);
+            if (!value) {
+                return false;
+            }
+
+            return std::strcmp(value, "1") == 0 ||
+                   std::strcmp(value, "true") == 0 ||
+                   std::strcmp(value, "TRUE") == 0 ||
+                   std::strcmp(value, "yes") == 0 ||
+                   std::strcmp(value, "YES") == 0 ||
+                   std::strcmp(value, "on") == 0 ||
+                   std::strcmp(value, "ON") == 0;
+        }
+
+        [[nodiscard]] bool forceSerialExt4Scan() noexcept
+        {
+            return envFlagEnabled("KERYTHING_EXT4_FORCE_SERIAL");
+        }
+
+        [[nodiscard]] Ext4DiagnosticsMode ext4DiagnosticsMode() noexcept
+        {
+#ifndef KERYTHING_ENABLE_LOGGING
+            return Ext4DiagnosticsMode::None;
+#else
+            const char* value = std::getenv("KERYTHING_EXT4_DIAGNOSTICS");
+
+            if (!value || value[0] == '\0') {
+                return Ext4DiagnosticsMode::Light;
+            }
+
+            if (std::strcmp(value, "none") == 0) {
+                return Ext4DiagnosticsMode::None;
+            }
+
+            if (std::strcmp(value, "light") == 0) {
+                return Ext4DiagnosticsMode::Light;
+            }
+
+            if (std::strcmp(value, "full-quiet") == 0) {
+                return Ext4DiagnosticsMode::FullQuiet;
+            }
+
+            if (std::strcmp(value, "full-print") == 0) {
+                return Ext4DiagnosticsMode::FullPrint;
+            }
+
+            std::cerr << "[Ext4ScannerEngine] unknown KERYTHING_EXT4_DIAGNOSTICS="
+                      << value
+                      << " expected none|light|full-quiet|full-print; using full-print\n";
+
+            return Ext4DiagnosticsMode::FullPrint;
+#endif
+        }
+
+        [[nodiscard]] bool diagnosticsUseLightTimers(Ext4DiagnosticsMode mode) noexcept
+        {
+            return mode == Ext4DiagnosticsMode::Light ||
+                   mode == Ext4DiagnosticsMode::FullPrint;
+        }
+
+        [[nodiscard]] bool diagnosticsCollectFullProfile(Ext4DiagnosticsMode mode) noexcept
+        {
+            return mode == Ext4DiagnosticsMode::FullQuiet ||
+                   mode == Ext4DiagnosticsMode::FullPrint;
+        }
+
+        [[nodiscard]] bool diagnosticsPrintFullProfile(Ext4DiagnosticsMode mode) noexcept
+        {
+            return mode == Ext4DiagnosticsMode::FullPrint;
+        }
 
 #ifdef KERYTHING_ENABLE_LOGGING
         [[nodiscard]] double seconds(Nanoseconds value)
@@ -369,6 +451,10 @@ namespace Ext4ScannerEngine {
                 return 1;
             }
 
+            if (forceSerialExt4Scan()) {
+                return 1;
+            }
+
             if (options.deviceIsRotational) {
                 return 1;
             }
@@ -405,7 +491,13 @@ namespace Ext4ScannerEngine {
                                              const ScannerHelper::ProgressCallback& onProgress,
                                              Ext4ScanCounters* counters) {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedTimer timer("[Ext4ScannerEngine] inode stats scan");
+            const bool useLightTimers =
+                diagnosticsUseLightTimers(ext4DiagnosticsMode());
+
+            std::optional<ScopedTimer> timer;
+            if (useLightTimers) {
+                timer.emplace("[Ext4ScannerEngine] inode stats scan");
+            }
 #endif
 
             ext2_inode_scan scan = nullptr;
@@ -512,7 +604,13 @@ namespace Ext4ScannerEngine {
                                                             Ext4ScanCounters* counters)
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedTimer timer("[Ext4ScannerEngine] parallel inode stats scan");
+            const bool useLightTimers =
+                diagnosticsUseLightTimers(ext4DiagnosticsMode());
+
+            std::optional<ScopedTimer> timer;
+            if (useLightTimers) {
+                timer.emplace("[Ext4ScannerEngine] parallel inode stats scan");
+            }
 #endif
 
             if (!fs || !fs->super || workerCount <= 1) {
@@ -828,6 +926,10 @@ namespace Ext4ScannerEngine {
             std::size_t directoryCount,
             const ScanOptions& options
         ) noexcept {
+            if (forceSerialExt4Scan()) {
+                return 1;
+            }
+
             if (directoryCount < kMinDirectoriesForParallelScan) {
                 return 1;
             }
@@ -1250,12 +1352,26 @@ namespace Ext4ScannerEngine {
                     const ScannerHelper::ProgressCallback& onProgress,
                     const ScanOptions& options) {
 #ifdef KERYTHING_ENABLE_LOGGING
-        ScopedTimer totalTimer("[Ext4ScannerEngine] total ext4 scan");
+        const Ext4DiagnosticsMode diagnosticsMode = ext4DiagnosticsMode();
+        const bool useLightTimers = diagnosticsUseLightTimers(diagnosticsMode);
+        const bool collectFullProfile = diagnosticsCollectFullProfile(diagnosticsMode);
+        const bool printFullProfile = diagnosticsPrintFullProfile(diagnosticsMode);
+
+        std::cerr << "[Ext4ScannerEngine] diagnosticsMode=" << static_cast<int>(diagnosticsMode)
+                  << " useLightTimers=" << useLightTimers
+                  << " collectFullProfile=" << collectFullProfile
+                  << " printFullProfile=" << printFullProfile
+                  << "\n";
+
+        std::optional<ScopedTimer> totalTimer;
+        if (useLightTimers) {
+            totalTimer.emplace("[Ext4ScannerEngine] total ext4 scan");
+        }
 
         Ext4ScanTimings timings;
         Ext4ScanCounters counters;
-        Ext4ScanTimings* profileTimings = &timings;
-        Ext4ScanCounters* profileCounters = &counters;
+        Ext4ScanTimings* profileTimings = collectFullProfile ? &timings : nullptr;
+        Ext4ScanCounters* profileCounters = collectFullProfile ? &counters : nullptr;
 #else
         Ext4ScanTimings* profileTimings = nullptr;
         Ext4ScanCounters* profileCounters = nullptr;
@@ -1267,7 +1383,10 @@ namespace Ext4ScannerEngine {
         errcode_t retval = 0;
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedAccumulatedTimer timer(profileTimings->open);
+            std::optional<ScopedAccumulatedTimer> timer;
+            if (profileTimings) {
+                timer.emplace(profileTimings->open);
+            }
 #endif
             retval = ext2fs_open(devicePathStd.c_str(), 0, 0, 0, unix_io_manager, &fs);
         }
@@ -1282,10 +1401,12 @@ namespace Ext4ScannerEngine {
         const uint32_t inodesInUse = (freeInodes <= totalInodes) ? (totalInodes - freeInodes) : totalInodes;
 
 #ifdef KERYTHING_ENABLE_LOGGING
-        std::cerr << "[Ext4ScannerEngine] totalInodes=" << totalInodes
-                  << " freeInodes=" << freeInodes
-                  << " estimatedInodesInUse=" << inodesInUse
-                  << "\n";
+        if (useLightTimers) {
+            std::cerr << "[Ext4ScannerEngine] totalInodes=" << totalInodes
+                      << " freeInodes=" << freeInodes
+                      << " estimatedInodesInUse=" << inodesInUse
+                      << "\n";
+        }
 #endif
 
         std::vector<InodeStatsEntry> inodeStats;
@@ -1307,17 +1428,24 @@ namespace Ext4ScannerEngine {
             chooseInodeScanWorkerCount(fs, totalInodes, inodesInUse, options);
 
 #ifdef KERYTHING_ENABLE_LOGGING
-        std::cerr << "[Ext4ScannerEngine] inode scan workers="
-                  << inodeScanWorkerCount
-                  << " deviceIsRotational="
-                  << (options.deviceIsRotational ? "true" : "false")
-                  << "\n";
+        if (useLightTimers) {
+            std::cerr << "[Ext4ScannerEngine] inode scan workers="
+                      << inodeScanWorkerCount
+                      << " deviceIsRotational="
+                      << (options.deviceIsRotational ? "true" : "false")
+                      << " forceSerial="
+                      << (forceSerialExt4Scan() ? "true" : "false")
+                      << "\n";
+        }
 #endif
 
         bool inodeStatsCollected = false;
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedAccumulatedTimer timer(profileTimings->inodeStatsScan);
+            std::optional<ScopedAccumulatedTimer> timer;
+            if (profileTimings) {
+                timer.emplace(profileTimings->inodeStatsScan);
+            }
 #endif
 
             if (inodeScanWorkerCount > 1) {
@@ -1351,21 +1479,33 @@ namespace Ext4ScannerEngine {
         if (!inodeStatsCollected) {
             {
 #ifdef KERYTHING_ENABLE_LOGGING
-                ScopedAccumulatedTimer timer(profileTimings->close);
+                std::optional<ScopedAccumulatedTimer> timer;
+                if (profileTimings) {
+                    timer.emplace(profileTimings->close);
+                }
 #endif
                 ext2fs_close(fs);
             }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-            logExt4ScanProfile(timings, counters);
+            if (printFullProfile) {
+                logExt4ScanProfile(timings, counters);
+            }
 #endif
             return false;
         }
 
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedTimer timer("[Ext4ScannerEngine] inode stats sort");
-            ScopedAccumulatedTimer profileTimer(timings.inodeStatsSort);
+            std::optional<ScopedTimer> timer;
+            if (useLightTimers) {
+                timer.emplace("[Ext4ScannerEngine] inode stats sort");
+            }
+
+            std::optional<ScopedAccumulatedTimer> profileTimer;
+            if (profileTimings) {
+                profileTimer.emplace(profileTimings->inodeStatsSort);
+            }
 #endif
 
             if (!std::is_sorted(inodeStats.begin(),
@@ -1390,7 +1530,10 @@ namespace Ext4ScannerEngine {
         InodeStatsLookup inodeStatsLookup;
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedAccumulatedTimer timer(profileTimings->inodeStatsLookupBuild);
+            std::optional<ScopedAccumulatedTimer> timer;
+            if (profileTimings) {
+                timer.emplace(profileTimings->inodeStatsLookupBuild);
+            }
 #endif
             inodeStatsLookup = buildInodeStatsLookup(
                 inodeStats,
@@ -1410,14 +1553,24 @@ namespace Ext4ScannerEngine {
 
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedTimer timer("[Ext4ScannerEngine] directory entry streaming");
-            ScopedAccumulatedTimer directoryStreamingTimer(profileTimings->directoryStreaming);
+            std::optional<ScopedTimer> timer;
+            if (useLightTimers) {
+                timer.emplace("[Ext4ScannerEngine] directory entry streaming");
+            }
+
+            std::optional<ScopedAccumulatedTimer> directoryStreamingTimer;
+            if (profileTimings) {
+                directoryStreamingTimer.emplace(profileTimings->directoryStreaming);
+            }
 #endif
 
             const FileStats* rootStats = findStatsByInode(inodeStatsLookup, EXT2_ROOT_INO);
             if (rootStats) {
 #ifdef KERYTHING_ENABLE_LOGGING
-                ScopedAccumulatedTimer rootTimer(profileTimings->rootRecordEmit);
+                std::optional<ScopedAccumulatedTimer> rootTimer;
+                if (profileTimings) {
+                    rootTimer.emplace(profileTimings->rootRecordEmit);
+                }
 #endif
 
                 if (!stream.addRecord(EXT2_ROOT_INO,
@@ -1430,13 +1583,18 @@ namespace Ext4ScannerEngine {
                                       profileCounters)) {
                     {
 #ifdef KERYTHING_ENABLE_LOGGING
-                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+                        std::optional<ScopedAccumulatedTimer> closeTimer;
+                        if (profileTimings) {
+                            closeTimer.emplace(profileTimings->close);
+                        }
 #endif
                         ext2fs_close(fs);
                     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-                    logExt4ScanProfile(timings, counters);
+                    if (printFullProfile) {
+                        logExt4ScanProfile(timings, counters);
+                    }
 #endif
                     return false;
                 }
@@ -1449,13 +1607,18 @@ namespace Ext4ScannerEngine {
                     )) {
                     {
 #ifdef KERYTHING_ENABLE_LOGGING
-                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+                        std::optional<ScopedAccumulatedTimer> closeTimer;
+                        if (profileTimings) {
+                            closeTimer.emplace(profileTimings->close);
+                        }
 #endif
                         ext2fs_close(fs);
                     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-                    logExt4ScanProfile(timings, counters);
+                    if (printFullProfile) {
+                        logExt4ScanProfile(timings, counters);
+                    }
 #endif
                     return false;
                 }
@@ -1474,13 +1637,17 @@ namespace Ext4ScannerEngine {
                 chooseDirectoryScanWorkerCount(directoryInodes.size(), options);
 
 #ifdef KERYTHING_ENABLE_LOGGING
-            std::cerr << "[Ext4ScannerEngine] directory scan workers="
-                      << workerCount
-                      << " directories="
-                      << directoryInodes.size()
-                      << " deviceIsRotational="
-                      << (options.deviceIsRotational ? "true" : "false")
-                      << "\n";
+            if (useLightTimers) {
+                std::cerr << "[Ext4ScannerEngine] directory scan workers="
+                          << workerCount
+                          << " directories="
+                          << directoryInodes.size()
+                          << " deviceIsRotational="
+                          << (options.deviceIsRotational ? "true" : "false")
+                          << " forceSerial="
+                          << (forceSerialExt4Scan() ? "true" : "false")
+                          << "\n";
+            }
 #endif
 
             if (workerCount <= 1) {
@@ -1502,13 +1669,18 @@ namespace Ext4ScannerEngine {
                         if (shouldCancel && shouldCancel()) {
                             {
 #ifdef KERYTHING_ENABLE_LOGGING
-                                ScopedAccumulatedTimer closeTimer(profileTimings->close);
+                                std::optional<ScopedAccumulatedTimer> closeTimer;
+                                if (profileTimings) {
+                                    closeTimer.emplace(profileTimings->close);
+                                }
 #endif
                                 ext2fs_close(fs);
                             }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-                            logExt4ScanProfile(timings, counters);
+                            if (printFullProfile) {
+                                logExt4ScanProfile(timings, counters);
+                            }
 #endif
                             return false;
                         }
@@ -1516,7 +1688,10 @@ namespace Ext4ScannerEngine {
 
                     {
 #ifdef KERYTHING_ENABLE_LOGGING
-                        ScopedAccumulatedTimer iterateTimer(profileTimings->dirIterateCalls);
+                        std::optional<ScopedAccumulatedTimer> iterateTimer;
+                        if (profileTimings) {
+                            iterateTimer.emplace(profileTimings->dirIterateCalls);
+                        }
 #endif
                         retval = ext2fs_dir_iterate2(fs,
                                                      dirInode,
@@ -1529,13 +1704,18 @@ namespace Ext4ScannerEngine {
                     if (ctx.cancelled || ctx.failed) {
                         {
 #ifdef KERYTHING_ENABLE_LOGGING
-                            ScopedAccumulatedTimer closeTimer(profileTimings->close);
+                            std::optional<ScopedAccumulatedTimer> closeTimer;
+                            if (profileTimings) {
+                                closeTimer.emplace(profileTimings->close);
+                            }
 #endif
                             ext2fs_close(fs);
                         }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-                        logExt4ScanProfile(timings, counters);
+                        if (printFullProfile) {
+                            logExt4ScanProfile(timings, counters);
+                        }
 #endif
                         return false;
                     }
@@ -1658,14 +1838,17 @@ namespace Ext4ScannerEngine {
 
                                 {
 #ifdef KERYTHING_ENABLE_LOGGING
-                                    ScopedAccumulatedTimer iterateTimer(workerTiming->dirIterateCalls);
+                                    std::optional<ScopedAccumulatedTimer> iterateTimer;
+                                    if (workerTiming) {
+                                        iterateTimer.emplace(workerTiming->dirIterateCalls);
+                                    }
 #endif
                                     iterateResult = ext2fs_dir_iterate2(workerFs,
-                                                                       directoryInodes[i],
-                                                                       0,
-                                                                       nullptr,
-                                                                       dirCallback,
-                                                                       &ctx);
+                                                                        directoryInodes[i],
+                                                                        0,
+                                                                        nullptr,
+                                                                        dirCallback,
+                                                                        &ctx);
                                 }
 
                                 if (ctx.cancelled || ctx.failed) {
@@ -1745,13 +1928,18 @@ namespace Ext4ScannerEngine {
                 if (sharedAbort.load(std::memory_order_relaxed)) {
                     {
 #ifdef KERYTHING_ENABLE_LOGGING
-                        ScopedAccumulatedTimer closeTimer(profileTimings->close);
+                        std::optional<ScopedAccumulatedTimer> closeTimer;
+                        if (profileTimings) {
+                            closeTimer.emplace(profileTimings->close);
+                        }
 #endif
                         ext2fs_close(fs);
                     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-                    logExt4ScanProfile(timings, counters);
+                    if (printFullProfile) {
+                        logExt4ScanProfile(timings, counters);
+                    }
 #endif
                     return false;
                 }
@@ -1760,18 +1948,26 @@ namespace Ext4ScannerEngine {
 
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedAccumulatedTimer timer(profileTimings->finalFlush);
+            std::optional<ScopedAccumulatedTimer> timer;
+            if (profileTimings) {
+                timer.emplace(profileTimings->finalFlush);
+            }
 #endif
             if (!stream.flush(onFileRecordChunk, onStringPoolChunk, profileTimings, profileCounters)) {
                 {
 #ifdef KERYTHING_ENABLE_LOGGING
-                    ScopedAccumulatedTimer closeTimer(profileTimings->close);
+                    std::optional<ScopedAccumulatedTimer> closeTimer;
+                    if (profileTimings) {
+                        closeTimer.emplace(profileTimings->close);
+                    }
 #endif
                     ext2fs_close(fs);
                 }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-                logExt4ScanProfile(timings, counters);
+                if (printFullProfile) {
+                    logExt4ScanProfile(timings, counters);
+                }
 #endif
                 return false;
             }
@@ -1779,19 +1975,24 @@ namespace Ext4ScannerEngine {
 
         {
 #ifdef KERYTHING_ENABLE_LOGGING
-            ScopedAccumulatedTimer timer(profileTimings->close);
+            std::optional<ScopedAccumulatedTimer> timer;
+            if (profileTimings) {
+                timer.emplace(profileTimings->close);
+            }
 #endif
             ext2fs_close(fs);
         }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-        std::cerr << "[Ext4ScannerEngine] emitted stringPoolBytes="
-                  << stream.totalStringPoolLength
-                  << " inodeStatsCount="
-                  << inodeStats.size()
-                  << " directoryCount="
-                  << directoryInodes.size()
-                  << "\n";
+        if (useLightTimers) {
+            std::cerr << "[Ext4ScannerEngine] emitted stringPoolBytes="
+                      << stream.totalStringPoolLength
+                      << " inodeStatsCount="
+                      << inodeStats.size()
+                      << " directoryCount="
+                      << directoryInodes.size()
+                      << "\n";
+        }
 #endif
 
         if (onProgress) {
@@ -1804,7 +2005,9 @@ namespace Ext4ScannerEngine {
         }
 
 #ifdef KERYTHING_ENABLE_LOGGING
-        logExt4ScanProfile(timings, counters);
+        if (printFullProfile) {
+            logExt4ScanProfile(timings, counters);
+        }
 #endif
 
         return true;

@@ -144,6 +144,25 @@ bool PreviewPane::isVideoFile(const QFileInfo& fileInfo)
     return mime.name().startsWith(QStringLiteral("video/"));
 }
 
+bool PreviewPane::isAudioFile(const QFileInfo& fileInfo)
+{
+    static const QSet<QString> audioExtensions = {
+        QStringLiteral("mp3"), QStringLiteral("m4a"), QStringLiteral("aac"),
+        QStringLiteral("flac"), QStringLiteral("ogg"), QStringLiteral("oga"),
+        QStringLiteral("opus"), QStringLiteral("wav"), QStringLiteral("wma"),
+        QStringLiteral("alac"), QStringLiteral("aiff"), QStringLiteral("aif"),
+        QStringLiteral("ape"), QStringLiteral("mpc"), QStringLiteral("tta"),
+        QStringLiteral("wv")
+    };
+
+    if (audioExtensions.contains(fileInfo.suffix().toLower())) {
+        return true;
+    }
+
+    const QMimeType mime = mimeDatabase().mimeTypeForFile(fileInfo);
+    return mime.name().startsWith(QStringLiteral("audio/"));
+}
+
 PreviewPane::PreviewPane(QWidget* parent)
     : QFrame(parent)
 {
@@ -376,6 +395,11 @@ void PreviewPane::generateFallbackOrIcon(const QUrl& url, const QString& meta, q
         return;
     }
 
+    if (isAudioFile(fileInfo)) {
+        generateAudioThumbnail(url, meta, generation);
+        return;
+    }
+
     if (isImageFile(fileInfo)) {
         cancelImageLoad();
 
@@ -550,6 +574,151 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, q
                     QImage img;
                     if (img.loadFromData(data, "PNG")) {
                         const QPixmap pixmap = QPixmap::fromImage(img);
+                        cachePreview(previewCacheKey(url), pixmap, false);
+                        setPreviewContent(pixmap, meta, false);
+                        return;
+                    }
+                }
+
+                showThemeIcon(url, meta, generation);
+            });
+
+    connect(proc, &QProcess::errorOccurred, this,
+            [this, proc, url, meta, generation, cleanupProcess, drainStderr](QProcess::ProcessError) {
+                if (currentProcess_ != proc) {
+                    return;
+                }
+
+                drainStderr();
+
+                if (!cleanupProcess()) {
+                    return;
+                }
+
+                if (generation == previewGeneration_ && currentUrl_ == url) {
+                    showThemeIcon(url, meta, generation);
+                }
+            });
+
+    proc->start(program, args);
+    timeout->start();
+}
+
+void PreviewPane::generateAudioThumbnail(const QUrl& url, const QString& meta, quint64 generation)
+{
+    if (generation != previewGeneration_ || currentUrl_ != url) {
+        return;
+    }
+
+    const QString localPath = url.toLocalFile();
+    const int thumbRes = previewTargetWidth();
+
+    QString program = QStandardPaths::findExecutable(QStringLiteral("ffmpegthumbnailer"));
+    QStringList args;
+
+    if (!program.isEmpty()) {
+        args << QStringLiteral("-i") << localPath
+             << QStringLiteral("-o") << QStringLiteral("/dev/stdout")
+             << QStringLiteral("-s") << QString::number(thumbRes)
+             << QStringLiteral("-c") << QStringLiteral("png");
+    } else {
+        program = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+        if (!program.isEmpty()) {
+            args << QStringLiteral("-loglevel") << QStringLiteral("error")
+                 << QStringLiteral("-i") << localPath
+                 << QStringLiteral("-map") << QStringLiteral("0:v:0")
+                 << QStringLiteral("-frames:v") << QStringLiteral("1")
+                 << QStringLiteral("-vf") << QStringLiteral("scale=%1:-1:force_original_aspect_ratio=decrease").arg(thumbRes)
+                 << QStringLiteral("-c:v") << QStringLiteral("png")
+                 << QStringLiteral("-f") << QStringLiteral("image2pipe")
+                 << QStringLiteral("pipe:1");
+        }
+    }
+
+    if (program.isEmpty()) {
+        showThemeIcon(url, metadataHtmlWithDimensionsUnknown(meta), generation);
+        return;
+    }
+
+    cancelCurrentJob();
+
+    auto* proc = new QProcess(this);
+    currentProcess_ = proc;
+
+    auto* timeout = new QTimer(proc);
+    timeout->setSingleShot(true);
+    timeout->setInterval(10000);
+
+    auto cleanedUp = std::make_shared<bool>(false);
+    auto timedOut = std::make_shared<bool>(false);
+    auto stderrTail = std::make_shared<QByteArray>();
+
+    auto cleanupProcess = [this, proc, timeout, cleanedUp]() {
+        if (*cleanedUp) {
+            return false;
+        }
+
+        *cleanedUp = true;
+
+        timeout->stop();
+
+        if (currentProcess_ == proc) {
+            currentProcess_ = nullptr;
+        }
+
+        proc->deleteLater();
+        return true;
+    };
+
+    auto drainStderr = [proc, stderrTail]() {
+        stderrTail->append(proc->readAllStandardError());
+
+        static constexpr qsizetype MaxStderrBytes = 16 * 1024;
+        if (stderrTail->size() > MaxStderrBytes) {
+            stderrTail->remove(0, stderrTail->size() - MaxStderrBytes);
+        }
+    };
+
+    connect(timeout, &QTimer::timeout, this,
+            [proc, timedOut, drainStderr]() {
+                if (proc->state() == QProcess::NotRunning) {
+                    return;
+                }
+
+                *timedOut = true;
+                drainStderr();
+                proc->terminate();
+
+                QTimer::singleShot(750, proc, [proc]() {
+                    if (proc->state() != QProcess::NotRunning) {
+                        proc->kill();
+                    }
+                });
+            });
+
+    connect(proc, &QProcess::readyReadStandardError, this, drainStderr);
+
+    connect(proc, &QProcess::finished, this,
+            [this, proc, url, meta, generation, cleanupProcess, drainStderr, timedOut](int exitCode, QProcess::ExitStatus exitStatus) {
+                const QByteArray data = proc->readAllStandardOutput();
+                drainStderr();
+
+                if (!cleanupProcess()) {
+                    return;
+                }
+
+                if (generation != previewGeneration_ || currentUrl_ != url) {
+                    return;
+                }
+
+                if (!*timedOut &&
+                    exitCode == 0 &&
+                    exitStatus == QProcess::NormalExit &&
+                    !data.isEmpty()) {
+                    QImage img;
+                    if (img.loadFromData(data)) {
+                        const QPixmap pixmap = QPixmap::fromImage(img);
+
                         cachePreview(previewCacheKey(url), pixmap, false);
                         setPreviewContent(pixmap, meta, false);
                         return;

@@ -93,6 +93,7 @@ private:
     static QString metadataHtmlWithDimensionsText(const QString& metadataText, const QString& dimensionsText);
     void generateFallbackOrIcon(const QUrl& url, const QString& meta, quint64 generation);
     void generateVideoThumbnail(const QUrl& url, const QString& meta, quint64 generation);
+    void generateAudioThumbnail(const QUrl& url, const QString& meta, quint64 generation);
     void showThemeIcon(const QUrl& url, const QString& meta, quint64 generation);
     void cancelCurrentJob();
     void cancelImageLoad();
@@ -104,6 +105,7 @@ private:
     static bool isImageUrl(const QUrl& url);
     static bool isImageFile(const QFileInfo& fileInfo);
     static bool isVideoFile(const QFileInfo& fileInfo);
+    static bool isAudioFile(const QFileInfo& fileInfo);
 
     QLabel* titleLabel_ = nullptr;
     PreviewImageWidget* previewImageWidget_ = nullptr;

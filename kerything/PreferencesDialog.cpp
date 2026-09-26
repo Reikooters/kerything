@@ -1980,7 +1980,9 @@ void PreferencesDialog::populateIndexTable()
             status = QStringLiteral("Ready");
         }
 
-        auto* nameItem = new QTableWidgetItem(summary.displayName);
+        const QString indexName = displayNameForIndexSummary(summary, knownDeviceById_);
+
+        auto* nameItem = new QTableWidgetItem(indexName);
         nameItem->setData(IndexDeviceIdRole, summary.deviceId);
         nameItem->setData(IndexIdRole, summary.indexId);
         nameItem->setToolTip(summary.deviceId);
@@ -2264,6 +2266,54 @@ void PreferencesDialog::toggleDeviceRowChecked(int row)
     );
 
     updateApplyButtonEnabled();
+}
+
+QString PreferencesDialog::displayNameForIndexSummary(
+        const IndexSummary& summary,
+        const QHash<QString, BlockDevice>& knownDeviceById
+    ) {
+    if (!summary.deviceId.isEmpty()) {
+        const auto knownDeviceIt = knownDeviceById.constFind(summary.deviceId);
+
+        if (knownDeviceIt != knownDeviceById.constEnd()) {
+            return BlockDeviceDisplayUtils::displayNameForBlockDevice(knownDeviceIt.value());
+        }
+    }
+
+    const QString label = summary.label.trimmed();
+    if (!label.isEmpty()) {
+        return label;
+    }
+
+    const QString mountPoint = summary.primaryMountPoint.trimmed();
+    if (!mountPoint.isEmpty()) {
+        if (mountPoint == QStringLiteral("/")) {
+            return QStringLiteral("Root filesystem");
+        }
+
+        const QStringList parts = mountPoint.split(
+            QStringLiteral("/"),
+            Qt::SkipEmptyParts
+        );
+
+        if (!parts.isEmpty()) {
+            return parts.last();
+        }
+
+        return mountPoint;
+    }
+
+    const QString devNode = summary.devNode.trimmed();
+    if (!devNode.isEmpty()) {
+        return devNode;
+    }
+
+    const QString deviceId = summary.deviceId.trimmed();
+    if (!deviceId.isEmpty()) {
+        return deviceId;
+    }
+
+    return QStringLiteral("Unknown volume");
 }
 
 std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const

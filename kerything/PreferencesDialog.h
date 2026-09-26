@@ -128,6 +128,11 @@ private:
     bool liveUpdatesSupportedForDevice(const QString& deviceId) const;
     void toggleDeviceRowChecked(int row);
 
+    static QString displayNameForIndexSummary(
+        const IndexSummary& summary,
+        const QHash<QString, BlockDevice>& knownDeviceById
+    );
+
     std::vector<SearchFilterPreference> filtersFromTable() const;
     QString uniqueFilterName(const QString& baseName) const;
     QString newCustomFilterId() const;

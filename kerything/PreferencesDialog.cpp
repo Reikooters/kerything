@@ -2053,10 +2053,7 @@ void PreferencesDialog::populateIndexTable()
                 QTimeZone::UTC
             ).toLocalTime();
 
-            lastIndexedText = locale.toString(
-                lastIndexedDateTime,
-                QLocale::ShortFormat
-            );
+            lastIndexedText = lastIndexedDateTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
         }
 
         indexTable_->setItem(row, IndexLastIndexedColumn, new QTableWidgetItem(lastIndexedText));

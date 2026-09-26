@@ -94,6 +94,13 @@ private:
     void generateFallbackOrIcon(const QUrl& url, const QString& meta, quint64 generation);
     void generateVideoThumbnail(const QUrl& url, const QString& meta, quint64 generation);
     void generateAudioThumbnail(const QUrl& url, const QString& meta, quint64 generation);
+    void runExternalThumbnailCommand(
+        const QUrl& url,
+        const QString& meta,
+        quint64 generation,
+        const QString& program,
+        const QStringList& args
+    );
     void showThemeIcon(const QUrl& url, const QString& meta, quint64 generation);
     void cancelCurrentJob();
     void cancelImageLoad();

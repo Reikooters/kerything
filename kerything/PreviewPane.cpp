@@ -491,117 +491,7 @@ void PreviewPane::generateVideoThumbnail(const QUrl& url, const QString& meta, q
         }
     }
 
-    if (program.isEmpty()) {
-        showThemeIcon(url, meta, generation);
-        return;
-    }
-
-    cancelCurrentJob();
-
-    auto* proc = new QProcess(this);
-    currentProcess_ = proc;
-
-    auto* timeout = new QTimer(proc);
-    timeout->setSingleShot(true);
-    timeout->setInterval(10000);
-
-    auto cleanedUp = std::make_shared<bool>(false);
-    auto timedOut = std::make_shared<bool>(false);
-    auto stderrTail = std::make_shared<QByteArray>();
-
-    auto cleanupProcess = [this, proc, timeout, cleanedUp]() {
-        if (*cleanedUp) {
-            return false;
-        }
-
-        *cleanedUp = true;
-
-        timeout->stop();
-
-        if (currentProcess_ == proc) {
-            currentProcess_ = nullptr;
-        }
-
-        proc->deleteLater();
-        return true;
-    };
-
-    auto drainStderr = [proc, stderrTail]() {
-        stderrTail->append(proc->readAllStandardError());
-
-        static constexpr qsizetype MaxStderrBytes = 16 * 1024;
-        if (stderrTail->size() > MaxStderrBytes) {
-            stderrTail->remove(0, stderrTail->size() - MaxStderrBytes);
-        }
-    };
-
-    connect(timeout, &QTimer::timeout, this,
-            [proc, timedOut, drainStderr]() {
-                if (proc->state() == QProcess::NotRunning) {
-                    return;
-                }
-
-                *timedOut = true;
-                drainStderr();
-                proc->terminate();
-
-                QTimer::singleShot(750, proc, [proc]() {
-                    if (proc->state() != QProcess::NotRunning) {
-                        proc->kill();
-                    }
-                });
-            });
-
-    connect(proc, &QProcess::readyReadStandardError, this, drainStderr);
-
-    connect(proc, &QProcess::finished, this,
-            [this, proc, url, meta, generation, cleanupProcess, drainStderr, timedOut](int exitCode, QProcess::ExitStatus exitStatus) {
-                const QByteArray data = proc->readAllStandardOutput();
-                drainStderr();
-
-                if (!cleanupProcess()) {
-                    return;
-                }
-
-                if (generation != previewGeneration_ || currentUrl_ != url) {
-                    return;
-                }
-
-                if (!*timedOut &&
-                    exitCode == 0 &&
-                    exitStatus == QProcess::NormalExit &&
-                    !data.isEmpty()) {
-                    QImage img;
-                    if (img.loadFromData(data, "PNG")) {
-                        const QPixmap pixmap = QPixmap::fromImage(img);
-                        cachePreview(previewCacheKey(url), pixmap, false);
-                        setPreviewContent(pixmap, meta, false);
-                        return;
-                    }
-                }
-
-                showThemeIcon(url, meta, generation);
-            });
-
-    connect(proc, &QProcess::errorOccurred, this,
-            [this, proc, url, meta, generation, cleanupProcess, drainStderr](QProcess::ProcessError) {
-                if (currentProcess_ != proc) {
-                    return;
-                }
-
-                drainStderr();
-
-                if (!cleanupProcess()) {
-                    return;
-                }
-
-                if (generation == previewGeneration_ && currentUrl_ == url) {
-                    showThemeIcon(url, meta, generation);
-                }
-            });
-
-    proc->start(program, args);
-    timeout->start();
+    runExternalThumbnailCommand(url, meta, generation, program, args);
 }
 
 void PreviewPane::generateAudioThumbnail(const QUrl& url, const QString& meta, quint64 generation)
@@ -635,8 +525,23 @@ void PreviewPane::generateAudioThumbnail(const QUrl& url, const QString& meta, q
         }
     }
 
+    runExternalThumbnailCommand(url, meta, generation, program, args);
+}
+
+void PreviewPane::runExternalThumbnailCommand(
+    const QUrl& url,
+    const QString& meta,
+    quint64 generation,
+    const QString& program,
+    const QStringList& args
+)
+{
+    if (generation != previewGeneration_ || currentUrl_ != url) {
+        return;
+    }
+
     if (program.isEmpty()) {
-        showThemeIcon(url, metadataHtmlWithDimensionsUnknown(meta), generation);
+        showThemeIcon(url, meta, generation);
         return;
     }
 

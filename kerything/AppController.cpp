@@ -1323,6 +1323,40 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
     maybeShowFirstRunDevicePicker(blockDevices);
     preferences_.updateKnownDevices(blockDevices);
     updateIndexedDeviceRuntimeStates(blockDevices);
+
+    for (const BlockDevice& previousDevice : previousKnownDevices) {
+        if (previousDevice.deviceId.isEmpty()) {
+            continue;
+        }
+
+        const bool stillKnown = std::ranges::any_of(
+            blockDevices,
+            [&previousDevice](const BlockDevice& currentDevice) {
+                return currentDevice.deviceId == previousDevice.deviceId;
+            }
+        );
+
+        if (stillKnown) {
+            continue;
+        }
+
+        const auto preference = preferences_.indexedDevicePreference(previousDevice.deviceId);
+
+        indexController_->updateDeviceRuntimeStateByDeviceId(
+            previousDevice.deviceId,
+            false,
+            !preference || preference->showOfflineResults
+        );
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cout << "GUI: marked missing known device as unmounted"
+                  << " deviceId=" << previousDevice.deviceId.toStdString()
+                  << " previousMountPoint=" << previousDevice.primaryMountPoint.toStdString()
+                  << "\n";
+#endif
+    }
+
+    syncLiveUpdateDevices();
     updateOpenPreferencesDialog();
 
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -1861,7 +1895,12 @@ bool AppController::liveUpdatesEnabledForDevice(const QString& deviceId) const
         return false;
     }
 
-    if (!deviceSupportsLiveUpdates(deviceId)) {
+    const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId);
+    if (!blockDevice || !blockDevice->mounted) {
+        return false;
+    }
+
+    if (!Preferences::deviceSupportsLiveUpdates(*blockDevice)) {
         return false;
     }
 

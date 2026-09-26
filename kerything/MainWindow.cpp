@@ -81,6 +81,55 @@ namespace {
     constexpr int FilterDropdownQueryRole = Qt::UserRole + 3;
     constexpr int FilterDropdownKindRole = Qt::UserRole + 4;
 
+    struct AboutContributor {
+        const char* name;
+        const char* task;
+        const char* homepage;
+    };
+
+    constexpr AboutContributor AboutContributors[] = {
+        {
+            "derickso",
+            "Preview Pane feature",
+            "https://github.com/derickso"
+        },
+    };
+
+    QString contributorsHtml()
+    {
+        QStringList lines;
+
+        for (const AboutContributor& contributor : AboutContributors) {
+            lines << QStringLiteral(
+                "<p><a href=\"%1\">%2</a> &mdash; %3</p>"
+            ).arg(
+                QString::fromUtf8(contributor.homepage).toHtmlEscaped(),
+                QString::fromUtf8(contributor.name).toHtmlEscaped(),
+                QString::fromUtf8(contributor.task).toHtmlEscaped()
+            );
+        }
+
+        if (lines.isEmpty()) {
+            return {};
+        }
+
+        return QStringLiteral("<h4>Thanks To</h4>") + lines.join(QString());
+    }
+
+#ifdef KERYTHING_WITH_KF6
+    void addContributorCredits(KAboutData& aboutData)
+    {
+        for (const AboutContributor& contributor : AboutContributors) {
+            aboutData.addCredit(
+                QString::fromUtf8(contributor.name),
+                QString::fromUtf8(contributor.task),
+                QString(),
+                QString::fromUtf8(contributor.homepage)
+            );
+        }
+    }
+#endif
+
     enum FilterDropdownKind {
         FilterDropdownKindFilter = 0,
         FilterDropdownKindManageFilters = 1,
@@ -2996,6 +3045,7 @@ void MainWindow::showAbout()
         QString(),
         QStringLiteral("https://github.com/Reikooters")
     );
+    addContributorCredits(aboutData);
 
     auto* dialog = new KAboutApplicationDialog(aboutData, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -3007,14 +3057,19 @@ void MainWindow::showAbout()
         QStringLiteral(
             "<h3>Kerything</h3>"
             "<p>Fast file search for Linux block devices, inspired by the Windows utility \"Everything\" by Voidtools.</p>"
-            "<p>Version %1</p>"
-            "<p>Release date: %2</p>"
+            "<p>Version %1<br>"
+            "Release date: %2</p>"
             "<p>Copyright &copy; 2026 Reikooters</p>"
             "<p><a href=\"https://github.com/Reikooters/kerything\">"
             "https://github.com/Reikooters/kerything"
             "</a></p>"
             "<p>Licensed under the GNU General Public License v3.0 or later.</p>"
-        ).arg(QApplication::applicationVersion(), KerythingVersion::ReleaseDate)
+            "%3"
+        ).arg(
+            QApplication::applicationVersion(),
+            KerythingVersion::ReleaseDate,
+            contributorsHtml()
+        )
     );
 #endif
 }

@@ -41,9 +41,10 @@
 #include <QUuid>
 #include <QVBoxLayout>
 
-#include "PreferencesDialogPage.h"
 #include "BlockDeviceDisplayUtils.h"
+#include "DeviceCapabilities.h"
 #include "HoverRowHighlight.h"
+#include "PreferencesDialogPage.h"
 #include "SearchResultColumns.h"
 
 namespace {
@@ -1864,12 +1865,12 @@ void PreferencesDialog::populateDeviceTable()
         enabledItem->setData(InitialEnabledRole, preference.enabled);
         enabledItem->setData(
             ScanWhenUnmountedRole,
-            Preferences::deviceSupportsUnmountedScanning(blockDevice) && preference.scanWhenUnmounted
+            DeviceCapabilities::deviceSupportsUnmountedScanning(blockDevice) && preference.scanWhenUnmounted
         );
         enabledItem->setData(ShowOfflineResultsRole, preference.showOfflineResults);
         enabledItem->setData(
             LiveUpdatesEnabledRole,
-            Preferences::deviceSupportsLiveUpdates(blockDevice) && preference.liveUpdatesEnabled
+            DeviceCapabilities::deviceSupportsLiveUpdates(blockDevice) && preference.liveUpdatesEnabled
         );
         deviceTable_->setItem(row, DeviceEnabledColumn, enabledItem);
 
@@ -2197,7 +2198,7 @@ bool PreferencesDialog::unmountedScanningSupportedForDevice(const QString& devic
 {
     const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
     if (knownDeviceIt != knownDeviceById_.constEnd()) {
-        return Preferences::deviceSupportsUnmountedScanning(knownDeviceIt.value());
+        return DeviceCapabilities::deviceSupportsUnmountedScanning(knownDeviceIt.value());
     }
 
     const IndexedDevicePreference preference =
@@ -2206,7 +2207,7 @@ bool PreferencesDialog::unmountedScanningSupportedForDevice(const QString& devic
             IndexedDevicePreference{ .deviceId = deviceId }
         );
 
-    return Preferences::preferenceSupportsUnmountedScanning(preference);
+    return DeviceCapabilities::preferenceSupportsUnmountedScanning(preference);
 }
 
 bool PreferencesDialog::liveUpdatesEnabledForDevice(const QString& deviceId) const
@@ -2233,7 +2234,7 @@ bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) c
 {
     const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
     if (knownDeviceIt != knownDeviceById_.constEnd()) {
-        return Preferences::deviceSupportsLiveUpdates(knownDeviceIt.value());
+        return DeviceCapabilities::deviceSupportsLiveUpdates(knownDeviceIt.value());
     }
 
     const IndexedDevicePreference preference =
@@ -2242,7 +2243,7 @@ bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) c
             IndexedDevicePreference{ .deviceId = deviceId }
         );
 
-    return Preferences::preferenceSupportsLiveUpdates(preference);
+    return DeviceCapabilities::preferenceSupportsLiveUpdates(preference);
 }
 
 void PreferencesDialog::toggleDeviceRowChecked(int row)

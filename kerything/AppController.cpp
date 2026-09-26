@@ -9,13 +9,13 @@
 #include <QLocale>
 
 #include "DaemonClient.h"
+#include "DeviceCapabilities.h"
 #include "DevicePickerDialog.h"
+#include "FileRecord.h"
+#include "LiveUpdateEvent.h"
 #include "MainWindow.h"
 #include "PreferencesDialog.h"
 #include "SingleInstanceServer.h"
-#include "FileRecord.h"
-#include "LiveUpdateEvent.h"
-#include "SearchResultColumns.h"
 
 namespace {
     struct LiveUpdateBatchSummary {
@@ -1476,7 +1476,7 @@ qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>&
 
         const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
         if (!blockDevice.mounted) {
-            const bool canScanUnmounted = Preferences::deviceSupportsUnmountedScanning(blockDevice);
+            const bool canScanUnmounted = DeviceCapabilities::deviceSupportsUnmountedScanning(blockDevice);
             const bool scanWhenUnmounted =
                 canScanUnmounted && preference && preference->scanWhenUnmounted;
 
@@ -1734,13 +1734,13 @@ bool AppController::deviceSupportsLiveUpdates(const QString& deviceId) const
     const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId);
 
     if (blockDevice) {
-        return Preferences::deviceSupportsLiveUpdates(*blockDevice);
+        return DeviceCapabilities::deviceSupportsLiveUpdates(*blockDevice);
     }
 
     const std::optional<IndexedDevicePreference> preference =
         preferences_.indexedDevicePreference(deviceId);
 
-    return preference && Preferences::preferenceSupportsLiveUpdates(*preference);
+    return preference && DeviceCapabilities::preferenceSupportsLiveUpdates(*preference);
 }
 
 bool AppController::requestScanForDeviceId(const QString& deviceId)
@@ -1783,7 +1783,7 @@ bool AppController::requestScanForDeviceId(const QString& deviceId)
         preferences_.indexedDevicePreference(deviceId);
 
     if (!blockDevice->mounted) {
-        const bool canScanUnmounted = Preferences::deviceSupportsUnmountedScanning(*blockDevice);
+        const bool canScanUnmounted = DeviceCapabilities::deviceSupportsUnmountedScanning(*blockDevice);
         const bool scanWhenUnmounted =
             canScanUnmounted && preference && preference->scanWhenUnmounted;
 
@@ -1900,7 +1900,7 @@ bool AppController::liveUpdatesEnabledForDevice(const QString& deviceId) const
         return false;
     }
 
-    if (!Preferences::deviceSupportsLiveUpdates(*blockDevice)) {
+    if (!DeviceCapabilities::deviceSupportsLiveUpdates(*blockDevice)) {
         return false;
     }
 

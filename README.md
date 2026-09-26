@@ -299,6 +299,7 @@ The following keyboard shortcuts are available in Kerything:
 | `Ctrl + I`                                | Toggle case-sensitive filename matching                                   |
 | `Ctrl + B`                                | Toggle whole-word filename matching                                       |
 | `Ctrl + R`                                | Toggle regex                                                              |
+| `Alt + P`                                 | Toggle preview pane                                                       |
 | `Down / Up`                               | Move focus from search bar to the results table                           |
 | `Return`                                  | Open selected file(s) with default applications                           |
 | `Ctrl + Return`                           | Open the folder containing the selected file                              |
@@ -1019,6 +1020,13 @@ Contributions are welcome! Whether it's bug reports, feature requests, or code:
 
 ## Credits
 
+### Code Contributors
+
+Thanks to the following people who have contributed code to Kerything:
+
+- [@derickso](https://github.com/derickso)
+  - Added the Preview Pane, which shows thumbnails for images and videos.
+
 ### Third-party Libraries
 
 Kerything makes use of the following open-source libraries and frameworks:
@@ -1040,14 +1048,15 @@ Special thanks to the following people for reporting bugs, suggesting features a
   - Suggested Btrfs filesystem support. Kerything has a dedicated Btrfs scanner which is currently a work in progress.
   - Identified issue with NTFS scanner not cancelling when it should.
 - [@antonmeleshkevich](https://github.com/antonmeleshkevich)
-  - Suggested support for desktops other than KDE Plasma. This lead to the Qt-only build of Kerything without KDE dependencies.
+  - Suggested support for desktops other than KDE Plasma. This led to the Qt-only build of Kerything without KDE dependencies.
 - [@derickso](https://github.com/derickso)
   - Suggested support for filters, along with a number of filter-related enhancements.
   - Identified issue with NTFS scanner missing files/folders during scanning under certain conditions.
+  - Contributed the Preview Pane feature.
 - [@progalt-pfo](https://github.com/progalt-pfo)
-  - Suggested F2FS filesystem support. Kerything does not yet have a dedicated scanner for F2FS, but this lead to the development of a generic filesystem scanner which broadened support to other filesystems besides EXT4 and NTFS.
+  - Suggested F2FS filesystem support. Kerything does not yet have a dedicated scanner for F2FS, but this led to the development of a generic filesystem scanner which broadened support to other filesystems besides EXT4 and NTFS.
 - [@KaMyKaSii](https://github.com/KaMyKaSii)
-  - Suggested support for regular expressions. I originally did not intend to implement support for regular expressions into Kerything, as I assumed it would be too slow. However, this lead to integrating `re2` into the project, which works fairly well when used in tandem with the application's other smarts, such as its trigram and extension indexes.
+  - Suggested support for regular expressions. I originally did not intend to implement support for regular expressions into Kerything, as I assumed it would be too slow. However, this led to integrating `re2` into the project, which works fairly well when used in tandem with the application's other smarts, such as its trigram and extension indexes.
 
 ## License
 

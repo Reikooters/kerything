@@ -2189,6 +2189,144 @@ namespace {
 
         return text;
     }
+
+    QString displayVolumeName(const IndexController::DeviceIndex& deviceIndex) {
+        QString label = deviceIndex.label.trimmed();
+        if (!label.isEmpty() && label != QStringLiteral("TODO")) {
+            return label;
+        }
+
+        QString deviceId = deviceIndex.deviceId.trimmed();
+        if (!deviceId.isEmpty()) {
+            static constexpr qsizetype MaxDeviceIdDisplayLength = 24;
+
+            if (deviceId.size() <= MaxDeviceIdDisplayLength) {
+                return deviceId;
+            }
+
+            return deviceId.left(MaxDeviceIdDisplayLength - 1) + QStringLiteral("…");
+        }
+
+        QString devNode = deviceIndex.devNode.trimmed();
+        if (!devNode.isEmpty()) {
+            return devNode;
+        }
+
+        return QStringLiteral("Unmounted volume");
+    }
+
+    template <typename Fn>
+    void forEachDirectoryRecordIdx(const IndexController::DeviceIndex& index, Fn&& fn)
+    {
+        if (index.fsIndexRefStorage == IndexController::DeviceIndex::FsIndexRefStorage::UInt32) {
+            for (const auto& ref : index.directoryFsIndexRecordRefs32) {
+                fn(ref.recordIdx);
+            }
+            for (const auto& ref : index.liveDirectoryFsIndexRecordRefs32) {
+                fn(ref.recordIdx);
+            }
+        } else {
+            for (const auto& ref : index.directoryFsIndexRecordRefs64) {
+                fn(ref.recordIdx);
+            }
+            for (const auto& ref : index.liveDirectoryFsIndexRecordRefs64) {
+                fn(ref.recordIdx);
+            }
+        }
+    }
+
+    class OnDemandPathResolver {
+    public:
+        OnDemandPathResolver(const IndexController::DeviceIndex& dev, uint8_t mIdx, bool mCase)
+            : device_(dev),
+              mountPointIdx_(mIdx),
+              matchCase_(mCase)
+        {
+            if (mountPointIdx_ != IndexController::RecordHandle::NoMountPoint &&
+                mountPointIdx_ < static_cast<uint8_t>(device_.mountPoints.size())) {
+                mountPrefix_ = device_.mountPoints.at(mountPointIdx_).toStdString();
+            } else if (!device_.mountPoints.isEmpty()) {
+                mountPrefix_ = "/";
+            } else {
+                mountPrefix_ = (displayVolumeName(device_) + QStringLiteral(":")).toStdString();
+            }
+
+            if (!matchCase_) {
+                std::transform(mountPrefix_.begin(), mountPrefix_.end(), mountPrefix_.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+            }
+        }
+
+        const std::string& getParentPath(uint32_t dirIdx)
+        {
+            if (dirIdx == 0xFFFFFFFF || dirIdx >= device_.fileRecords.size()) {
+                if (mountPrefix_.empty() || mountPrefix_ == "/") {
+                    static const std::string root = "/";
+                    return root;
+                }
+                return mountPrefix_;
+            }
+
+            auto it = dirCache_.find(dirIdx);
+            if (it != dirCache_.end()) {
+                return it->second;
+            }
+
+            const auto& rec = device_.fileRecords[dirIdx];
+            const std::string& parent = getParentPath(rec.parentRecordIdx);
+
+            std::string_view name = matchCase_
+                ? std::string_view(&device_.stringPool[rec.nameOffset], rec.nameLen)
+                : device_.lowercaseRecordName(rec, dirIdx);
+
+            std::string path;
+            if (parent.empty() || parent == "/") {
+                path.reserve(1 + name.size());
+                path.push_back('/');
+                path.append(name);
+            } else {
+                path.reserve(parent.size() + 1 + name.size());
+                path.append(parent);
+                path.push_back('/');
+                path.append(name);
+            }
+
+            return dirCache_.emplace(dirIdx, std::move(path)).first->second;
+        }
+
+        void buildFullPath(std::string& out, uint32_t recordIdx, const FileRecord& rec)
+        {
+            out.clear();
+            if (device_.isFilesystemRootRecord(recordIdx) ||
+                (device_.usesNamespaceAwareMountExpansion() && device_.isBtrfsNamespaceRootRecord(recordIdx))) {
+                out = getParentPath(0xFFFFFFFF);
+                return;
+            }
+
+            const std::string& parent = getParentPath(rec.parentRecordIdx);
+            out.append(parent);
+            if (out.empty() || out.back() != '/') {
+                out.push_back('/');
+            }
+
+            if (matchCase_) {
+                if (rec.nameOffset + rec.nameLen <= device_.stringPool.size()) {
+                    out.append(&device_.stringPool[rec.nameOffset], rec.nameLen);
+                }
+            } else {
+                const std::string_view lowerName = device_.lowercaseRecordName(rec, recordIdx);
+                out.append(lowerName.data(), lowerName.size());
+            }
+        }
+
+    private:
+        const IndexController::DeviceIndex& device_;
+        uint8_t mountPointIdx_;
+        bool matchCase_;
+        std::string mountPrefix_;
+        std::unordered_map<uint32_t, std::string> dirCache_;
+    };
 }
 
 IndexController::IndexController(QObject* parent)
@@ -6646,6 +6784,14 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     parseAndSetupMs = elapsedMsSince(parseAndSetupStart);
 
+    const bool queryHasPathSep = query.find('/') != std::string::npos || query.find('\\') != std::string::npos;
+    const bool effectiveMatchPath = options.matchPath || queryHasPathSep;
+
+    for (auto& qk : queryKeywords) {
+        std::replace(qk.text.begin(), qk.text.end(), '\\', '/');
+        std::replace(qk.lowercaseText.begin(), qk.lowercaseText.end(), '\\', '/');
+    }
+
     // IF EMPTY: Return everything matching non-trigram filters.
     if (keywords.empty()) {
         const auto emptyQueryReserveStart = Clock::now();
@@ -6770,6 +6916,148 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
         if (diagnostics) {
             ++diagnostics->devicesSearched;
+        }
+
+        if (effectiveMatchPath) {
+            std::vector<uint32_t> pathCandidates;
+            bool hasCandidates = false;
+
+            if (hasExtensionFilter) {
+                pathCandidates = collectExtensionCandidates(*indexPtr, extensionFilter);
+                hasCandidates = true;
+                if (diagnostics) {
+                    diagnostics->hasExtensionFilter = true;
+                    ++diagnostics->extensionSourcesUsed;
+                    diagnostics->extensionSourceDedupCandidateCount += pathCandidates.size();
+                }
+            }
+
+            for (const auto& qk : queryKeywords) {
+                std::string tokenToTest;
+                bool isFilenameMandatory = false;
+
+                const std::size_t slashPos = qk.lowercaseText.rfind('/');
+                if (slashPos != std::string::npos) {
+                    tokenToTest = qk.lowercaseText.substr(slashPos + 1);
+                    isFilenameMandatory = (tokenToTest.size() >= 2);
+                } else if (qk.lowercaseText.size() >= 2) {
+                    tokenToTest = qk.lowercaseText;
+                    bool inMountPrefix = false;
+                    for (const QString& mp : indexPtr->mountPoints) {
+                        if (mp.toLower().toStdString().find(tokenToTest) != std::string::npos) {
+                            inMountPrefix = true;
+                            break;
+                        }
+                    }
+
+                    if (!inMountPrefix) {
+                        bool anyDirMatches = false;
+                        forEachDirectoryRecordIdx(*indexPtr, [&](uint32_t dirIdx) {
+                            if (anyDirMatches) return;
+                            if (!indexPtr->isDeletedRecord(dirIdx)) {
+                                if (IndexController::contains(indexPtr->lowercaseRecordName(dirIdx), tokenToTest)) {
+                                    anyDirMatches = true;
+                                }
+                            }
+                        });
+
+                        if (!anyDirMatches) {
+                            isFilenameMandatory = true;
+                        }
+                    }
+                }
+
+                if (isFilenameMandatory && tokenToTest.size() >= 2) {
+                    const std::vector<QueryGram> grams = gramsForKeyword(*indexPtr, tokenToTest);
+                    if (!grams.empty()) {
+                        std::vector<uint32_t> gramCandidates;
+                        bool firstGram = true;
+                        bool ok = true;
+                        for (const auto& g : grams) {
+                            if (!intersectCandidateSetWithGram(*indexPtr, g, gramCandidates, firstGram)) {
+                                ok = false;
+                                break;
+                            }
+                        }
+
+                        if (ok) {
+                            if (!hasCandidates) {
+                                pathCandidates = std::move(gramCandidates);
+                                hasCandidates = true;
+                            } else {
+                                intersectSortedUniqueCandidates(pathCandidates, gramCandidates);
+                            }
+                        }
+                    }
+                }
+            }
+
+            auto scanForMountPoint = [&](uint8_t mountPointIdx) {
+                OnDemandPathResolver resolver(*indexPtr, mountPointIdx, options.matchCase);
+                std::string fullPathBuf;
+
+                auto processRecord = [&](uint32_t recordIdx) {
+                    if (indexPtr->isDeletedRecord(recordIdx)) return;
+
+                    const auto& rec = indexPtr->fileRecords[recordIdx];
+                    const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+                    if (foldersOnly && !isDirectory) return;
+                    if (filesOnly && isDirectory) return;
+                    if (hasExtensionFilter && isDirectory) return;
+
+                    const std::string_view lowercaseName = indexPtr->lowercaseRecordName(rec, recordIdx);
+                    if (lowercaseName.empty() && !indexPtr->isFilesystemRootRecord(recordIdx)) return;
+                    if (hasExtensionFilter && !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) return;
+
+                    if (diagnostics) {
+                        ++diagnostics->refinementChecks;
+                    }
+
+                    resolver.buildFullPath(fullPathBuf, recordIdx, rec);
+
+                    for (const auto& qk : queryKeywords) {
+                        const std::string& kw = options.matchCase ? qk.text : qk.lowercaseText;
+                        if (!matchesKeyword(fullPathBuf, kw, options)) {
+                            return;
+                        }
+                    }
+
+                    results.push_back({
+                        recordIdx,
+                        static_cast<uint16_t>(indexPtr->indexId),
+                        static_cast<uint8_t>(indexPtr->generation),
+                        mountPointIdx
+                    });
+                };
+
+                if (hasCandidates) {
+                    for (const uint32_t recordIdx : pathCandidates) {
+                        processRecord(recordIdx);
+                    }
+                } else {
+                    if (diagnostics) {
+                        ++diagnostics->linearScanDevices;
+                    }
+                    const uint32_t totalRecs = static_cast<uint32_t>(indexPtr->fileRecords.size());
+                    for (uint32_t i = 0; i < totalRecs; ++i) {
+                        processRecord(i);
+                    }
+                }
+            };
+
+            if (indexPtr->mountPoints.isEmpty()) {
+                scanForMountPoint(RecordHandle::NoMountPoint);
+            } else {
+                const int mountCount = std::min<int>(
+                    indexPtr->mountPoints.size(),
+                    RecordHandle::MaxMountPointIdx + 1
+                );
+                for (int m = 0; m < mountCount; ++m) {
+                    scanForMountPoint(static_cast<uint8_t>(m));
+                }
+            }
+            continue;
         }
 
         const auto candidateSourceStart = Clock::now();
@@ -7008,6 +7296,8 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     RegexSearchResult searchResult;
     std::vector<RecordHandle>& results = searchResult.records;
 
+    const bool queryHasPathSep = query.find('/') != std::string::npos || query.find('\\') != std::string::npos;
+    const bool effectiveMatchPath = options.matchPath || queryHasPathSep;
     const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
     const std::vector<std::string>& regexTokens = parsedQuery.keywords;
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
@@ -7146,6 +7436,77 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
 
         if (diagnostics) {
             ++diagnostics->devicesSearched;
+        }
+
+        if (effectiveMatchPath) {
+            auto scanForMountPoint = [&](uint8_t mountPointIdx) {
+                OnDemandPathResolver resolver(*indexPtr, mountPointIdx, options.matchCase);
+                std::string fullPathBuf;
+
+                auto processRegexRecord = [&](uint32_t recordIdx) {
+                    if (recordIdx >= indexPtr->fileRecords.size() || indexPtr->isDeletedRecord(recordIdx)) return;
+
+                    const auto& rec = indexPtr->fileRecords[recordIdx];
+                    const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+                    if (foldersOnly && !isDirectory) return;
+                    if (filesOnly && isDirectory) return;
+                    if (hasExtensionFilter && isDirectory) return;
+
+                    const std::string_view lowercaseName = indexPtr->lowercaseRecordName(rec, recordIdx);
+                    if (lowercaseName.empty() && !indexPtr->isFilesystemRootRecord(recordIdx)) return;
+                    if (hasExtensionFilter && !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) return;
+
+                    if (diagnostics) {
+                        ++diagnostics->refinementChecks;
+                    }
+
+                    resolver.buildFullPath(fullPathBuf, recordIdx, rec);
+
+                    const re2::StringPiece input(fullPathBuf.data(), static_cast<int>(fullPathBuf.size()));
+                    if (!re2::RE2::PartialMatch(input, regex)) return;
+
+                    results.push_back({
+                        recordIdx,
+                        static_cast<uint16_t>(indexPtr->indexId),
+                        static_cast<uint8_t>(indexPtr->generation),
+                        mountPointIdx
+                    });
+                };
+
+                if (hasExtensionFilter) {
+                    const auto extensionCandidates = collectExtensionCandidates(*indexPtr, extensionFilter);
+                    if (diagnostics) {
+                        diagnostics->hasExtensionFilter = true;
+                        ++diagnostics->extensionSourcesUsed;
+                        diagnostics->extensionSourceDedupCandidateCount += extensionCandidates.size();
+                    }
+                    for (const uint32_t recordIdx : extensionCandidates) {
+                        processRegexRecord(recordIdx);
+                    }
+                } else {
+                    if (diagnostics) {
+                        ++diagnostics->linearScanDevices;
+                    }
+                    const uint32_t totalRecs = static_cast<uint32_t>(indexPtr->fileRecords.size());
+                    for (uint32_t recordIdx = 0; recordIdx < totalRecs; ++recordIdx) {
+                        processRegexRecord(recordIdx);
+                    }
+                }
+            };
+
+            if (indexPtr->mountPoints.isEmpty()) {
+                scanForMountPoint(RecordHandle::NoMountPoint);
+            } else {
+                const int mountCount = std::min<int>(
+                    indexPtr->mountPoints.size(),
+                    RecordHandle::MaxMountPointIdx + 1
+                );
+                for (int m = 0; m < mountCount; ++m) {
+                    scanForMountPoint(static_cast<uint8_t>(m));
+                }
+            }
+            continue;
         }
 
         const DeviceIndex& index = *indexPtr;

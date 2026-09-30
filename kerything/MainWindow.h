@@ -42,6 +42,7 @@ public:
         Qt::SortOrder sortOrder = Qt::AscendingOrder;
         bool matchCaseEnabled = false;
         bool matchWholeWordEnabled = false;
+        bool matchPathEnabled = false;
         bool regexEnabled = false;
         bool previewPaneVisible = false;
     };
@@ -214,6 +215,7 @@ private:
     void handleSortSectionClicked(int section);
     void setMatchCaseEnabled(bool enabled);
     void setMatchWholeWordEnabled(bool enabled);
+    void setMatchPathEnabled(bool enabled);
     void setRegexEnabled(bool enabled);
     void resetSearchStateAndFocus();
     void openNewWindowFromThisWindow();
@@ -224,6 +226,7 @@ private:
     QToolButton* filterChip_ = nullptr;
     QToolButton* matchCaseChip_ = nullptr;
     QToolButton* matchWholeWordChip_ = nullptr;
+    QToolButton* matchPathChip_ = nullptr;
     QToolButton* regexChip_ = nullptr;
     QWidget* chipContainer_ = nullptr;
     QTableView *tableView_ = nullptr;
@@ -236,6 +239,7 @@ private:
     QAction* showFiltersDropdownAct_ = nullptr;
     QAction* matchCaseAct_ = nullptr;
     QAction* matchWholeWordAct_ = nullptr;
+    QAction* matchPathAct_ = nullptr;
     QAction* regexAct_ = nullptr;
     QAction* togglePreviewAct_ = nullptr;
     QSplitter* mainSplitter_ = nullptr;
@@ -248,6 +252,7 @@ private:
     bool liveMetadataRefreshDirty_ = false;
     bool matchCaseEnabled_ = false;
     bool matchWholeWordEnabled_ = false;
+    bool matchPathEnabled_ = false;
     bool regexEnabled_ = false;
     int lastSortSection_ = 0;
 

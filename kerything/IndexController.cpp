@@ -385,6 +385,7 @@ namespace {
     {
         std::vector<std::string> runs;
         std::string current;
+        bool disableLiteralPrefilter = false;
 
         auto flush = [&]() {
             if (current.size() >= 2) {
@@ -416,66 +417,41 @@ namespace {
             }
         };
 
-        auto skipGroup = [&](std::size_t& i) {
-            int depth = 1;
-            bool escaped = false;
-
-            while (++i < pattern.size() && depth > 0) {
-                const char groupChar = pattern[i];
-
-                if (escaped) {
-                    escaped = false;
-                    continue;
-                }
-
-                if (groupChar == '\\') {
-                    escaped = true;
-                    continue;
-                }
-
-                if (groupChar == '[') {
-                    skipCharacterClass(i);
-                    continue;
-                }
-
-                if (groupChar == '(') {
-                    ++depth;
-                    continue;
-                }
-
-                if (groupChar == ')') {
-                    --depth;
-                    continue;
-                }
-            }
-        };
-
         for (std::size_t i = 0; i < pattern.size(); ++i) {
             const char c = pattern[i];
 
             if (c == '|') {
-                // Top-level alternation means the literal before and after the
-                // operator are branch-specific, not globally mandatory.
-                current.clear();
-                continue;
+                /*
+                 * Alternation makes surrounding literal runs branch-specific
+                 * unless a full regex analysis proves otherwise. This extractor
+                 * is intentionally conservative: if a literal is not mandatory
+                 * for every possible match, it must not be used as a prefilter.
+                 */
+                disableLiteralPrefilter = true;
+                break;
             }
 
             if (c == '[') {
-                // Character classes are alternatives, not literal text.
-                // For example, [0-2] must not contribute the literal "0-2"
-                // to the trigram prefilter.
+                /*
+                 * Character classes are alternatives, not literal text.
+                 * For example, [0-2] must not contribute the literal "0-2"
+                 * to the n-gram prefilter. Skip over the class so regex
+                 * metacharacters inside it are not handled as top-level syntax.
+                 */
                 flush();
                 skipCharacterClass(i);
                 continue;
             }
 
             if (c == '(') {
-                // Do not extract from inside groups. This avoids treating
-                // branch-specific literals in (png|jpg) as mandatory while
-                // still allowing literals before/after the group.
-                flush();
-                skipGroup(i);
-                continue;
+                /*
+                 * Groups can contain alternation, captures, optional constructs,
+                 * and quantifiers applied after the closing ')'. Rather than try
+                 * to prove which literals remain mandatory, disable the literal
+                 * prefilter and let RE2 evaluate the full regex during refinement.
+                 */
+                disableLiteralPrefilter = true;
+                break;
             }
 
             if (c == '\\') {
@@ -521,6 +497,10 @@ namespace {
             current.push_back(c);
         }
 
+        if (disableLiteralPrefilter) {
+            return {};
+        }
+
         flush();
 
         std::sort(
@@ -553,9 +533,71 @@ namespace {
         return std::isalnum(c) || c == '_' || c == '-' || c == '+';
     }
 
+    /*
+     * Regex-derived extension filters are only safe when the extension suffix is
+     * mandatory for every possible match. A pattern such as:
+     *
+     *   foo|bar\.txt$
+     *
+     * must not be prefiltered to .txt files, because the "foo" branch can match
+     * other extensions. Use this lightweight check to reject that common unsafe
+     * shape before applying the final-extension optimization.
+     */
+    bool hasTopLevelRegexAlternation(std::string_view pattern)
+    {
+        int groupDepth = 0;
+        bool escaped = false;
+        bool inCharacterClass = false;
+
+        for (const char c : pattern) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+
+            if (inCharacterClass) {
+                if (c == ']') {
+                    inCharacterClass = false;
+                }
+
+                continue;
+            }
+
+            if (c == '[') {
+                inCharacterClass = true;
+                continue;
+            }
+
+            if (c == '(') {
+                ++groupDepth;
+                continue;
+            }
+
+            if (c == ')' && groupDepth > 0) {
+                --groupDepth;
+                continue;
+            }
+
+            if (c == '|' && groupDepth == 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     std::optional<IndexController::ExtensionSet> extractRegexFinalExtensionAlternation(
         std::string_view pattern
     ) {
+        if (hasTopLevelRegexAlternation(pattern)) {
+            return std::nullopt;
+        }
+
         std::optional<IndexController::ExtensionSet> result;
 
         for (std::size_t i = 0; i + 2 < pattern.size(); ++i) {
@@ -654,6 +696,10 @@ namespace {
     std::optional<IndexController::ExtensionSet> extractRegexFinalSimpleExtension(
         std::string_view pattern
     ) {
+        if (hasTopLevelRegexAlternation(pattern)) {
+            return std::nullopt;
+        }
+
         std::size_t end = pattern.size();
 
         while (end > 0 && pattern[end - 1] == '$') {
@@ -7121,6 +7167,13 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     std::vector<std::string> literalRuns =
         extractConservativeRegexLiteralRuns(prefilterPattern);
 
+    /*
+     * Regex prefilters are correctness-sensitive optimizations. They may only
+     * restrict candidates using facts that are mandatory for every possible
+     * match. If a safe mandatory literal or extension cannot be proven, the
+     * corresponding prefilter is omitted and RE2 remains the source of truth
+     * during refinement.
+     */
     std::optional<ExtensionSet> regexExtensionFilter =
         extractRegexFinalExtensionAlternation(prefilterPattern);
 

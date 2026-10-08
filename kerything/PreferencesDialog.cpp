@@ -1389,7 +1389,7 @@ QWidget* PreferencesDialog::createWindowsPage()
     carrySearchOptionsToNewWindowsCheckBox_->setToolTip(
         QStringLiteral(
             "When enabled, File > New Window and Ctrl+N copy the current window's Match Case,\n"
-            "Match Whole Word, and Regex into the new search window."
+            "Match Whole Word, Match Path, and Regex into the new search window."
         )
     );
 

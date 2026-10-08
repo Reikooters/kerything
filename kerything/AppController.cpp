@@ -731,6 +731,7 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
         if (!preferences_.carrySearchOptionsToNewWindows()) {
             state.matchCaseEnabled = false;
             state.matchWholeWordEnabled = false;
+            state.matchPathEnabled = false;
             state.regexEnabled = false;
         }
 

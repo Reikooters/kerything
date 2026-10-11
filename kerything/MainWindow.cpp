@@ -94,6 +94,11 @@ namespace {
             "Preview Pane feature",
             "https://github.com/derickso"
         },
+        {
+            "VitroidFPV",
+            "Added RPM builds for Fedora",
+            "https://github.com/VitroidFPV"
+        }
     };
 
     QString contributorsHtml()

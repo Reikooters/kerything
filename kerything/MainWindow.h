@@ -18,6 +18,7 @@
 #include "FileModel.h"
 
 class AppController;
+class QCloseEvent;
 class QComboBox;
 class QSplitter;
 class PreviewPane;
@@ -85,6 +86,7 @@ protected:
 
     bool event(QEvent* event) override;
     void changeEvent(QEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
     /**
      * @brief Filters events for specific objects in the application.

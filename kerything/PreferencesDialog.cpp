@@ -1347,14 +1347,16 @@ QWidget* PreferencesDialog::createWindowsPage()
     createNewWindowOnLaunchCheckBox_->setToolTip(
         QStringLiteral(
             "When enabled, launching Kerything while it is already running opens another search window.\n"
-            "When disabled, Kerything tries to present the last active window instead."
+            "When disabled, Kerything tries to present the last active window instead.\n"
+            "If windows were hidden with the tray menu, they are restored first."
         )
     );
 
     auto* createNewWindowOnLaunchDescription = new QLabel(
         QStringLiteral(
             "When enabled, launching Kerything while it is already running opens another search window. "
-            "When disabled, Kerything tries to present the last active window instead.\n"
+            "When disabled, Kerything tries to present an existing window instead. "
+            "If windows were hidden with the tray menu, launching Kerything restores them first. "
             "Some Wayland compositors may ignore requests to raise or activate existing windows."
         ),
         launchGroup
@@ -1365,6 +1367,72 @@ QWidget* PreferencesDialog::createWindowsPage()
     launchLayout->addWidget(createNewWindowOnLaunchDescription);
 
     layout->addWidget(launchGroup);
+
+    auto* trayGroup = new QGroupBox(QStringLiteral("System tray"), content);
+    auto* trayLayout = new QVBoxLayout(trayGroup);
+
+    showTrayIconCheckBox_ = new QCheckBox(
+        QStringLiteral("Show system tray icon"),
+        trayGroup
+    );
+    showTrayIconCheckBox_->setChecked(preferences_.showTrayIcon());
+    showTrayIconCheckBox_->setToolTip(
+        QStringLiteral(
+            "Show a Kerything icon in the desktop environment's system tray when available.\n"
+            "The tray menu can hide and restore all search windows, open Preferences, or quit Kerything."
+        )
+    );
+
+    closeToTrayCheckBox_ = new QCheckBox(
+        QStringLiteral("Keep running in tray when the last window is closed"),
+        trayGroup
+    );
+    closeToTrayCheckBox_->setChecked(preferences_.closeToTray());
+    closeToTrayCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, closing the last Kerything search window keeps the application running in the tray.\n"
+            "Closing extra search windows still closes those windows normally.\n"
+            "Use Quit from the tray menu or File menu to exit completely."
+        )
+    );
+
+    auto* trayDescription = new QLabel(
+        QStringLiteral(
+            "Tray availability depends on your Linux desktop environment. If no system tray is available, "
+            "Kerything will close normally instead of continuing in the background."
+        ),
+        trayGroup
+    );
+    trayDescription->setWordWrap(true);
+
+    trayLayout->addWidget(showTrayIconCheckBox_);
+    trayLayout->addWidget(closeToTrayCheckBox_);
+    trayLayout->addWidget(trayDescription);
+
+    layout->addWidget(trayGroup);
+
+    auto syncTrayOptionStates = [this]() {
+        if (!showTrayIconCheckBox_ || !closeToTrayCheckBox_) {
+            return;
+        }
+
+        if (closeToTrayCheckBox_->isChecked() && !showTrayIconCheckBox_->isChecked()) {
+            const QSignalBlocker blocker(showTrayIconCheckBox_);
+            showTrayIconCheckBox_->setChecked(true);
+        }
+
+        showTrayIconCheckBox_->setEnabled(!closeToTrayCheckBox_->isChecked());
+        showTrayIconCheckBox_->setToolTip(
+            closeToTrayCheckBox_->isChecked()
+                ? QStringLiteral("The tray icon is required when Kerything keeps running after the last window is closed.")
+                : QStringLiteral(
+                    "Show a Kerything icon in the desktop environment's system tray when available.\n"
+                    "The tray menu can hide and restore all search windows, open Preferences, or quit Kerything."
+                )
+        );
+    };
+
+    syncTrayOptionStates();
 
     auto* newWindowsGroup = new QGroupBox(QStringLiteral("New windows"), content);
     auto* newWindowsLayout = new QVBoxLayout(newWindowsGroup);
@@ -1472,6 +1540,31 @@ QWidget* PreferencesDialog::createWindowsPage()
     });
 
     connect(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(showTrayIconCheckBox_, &QCheckBox::toggled, this, [this]() {
+        updateApplyButtonEnabled();
+    });
+
+    connect(closeToTrayCheckBox_, &QCheckBox::toggled, this, [this](bool checked) {
+        if (checked && showTrayIconCheckBox_ && !showTrayIconCheckBox_->isChecked()) {
+            const QSignalBlocker blocker(showTrayIconCheckBox_);
+            showTrayIconCheckBox_->setChecked(true);
+        }
+
+        if (showTrayIconCheckBox_) {
+            showTrayIconCheckBox_->setEnabled(!checked);
+            showTrayIconCheckBox_->setToolTip(
+                checked
+                    ? QStringLiteral("The tray icon is required when Kerything keeps running after the last window is closed.")
+                    : QStringLiteral(
+                        "Show a Kerything icon in the desktop environment's system tray when available.\n"
+                        "The tray menu can hide and restore all search windows, open Preferences, or quit Kerything."
+                    )
+            );
+        }
+
         updateApplyButtonEnabled();
     });
 
@@ -3240,6 +3333,23 @@ bool PreferencesDialog::hasWindowChanges() const
             preferences_.carryWindowSizeAndColumnWidthsToNewWindows();
     }
 
+    const bool effectiveShowTrayIcon =
+        showTrayIconCheckBox_ &&
+        (showTrayIconCheckBox_->isChecked() ||
+         (closeToTrayCheckBox_ && closeToTrayCheckBox_->isChecked()));
+
+    if (showTrayIconCheckBox_) {
+        changed = changed ||
+            effectiveShowTrayIcon !=
+            preferences_.showTrayIcon();
+    }
+
+    if (closeToTrayCheckBox_) {
+        changed = changed ||
+            closeToTrayCheckBox_->isChecked() !=
+            preferences_.closeToTray();
+    }
+
     return changed;
 }
 
@@ -3344,6 +3454,26 @@ bool PreferencesDialog::applyChanges()
     const bool uiChanged = hasUIChanges();
     const bool windowChanged = hasWindowChanges();
 
+    const bool trayPreferencesChanged =
+        (showTrayIconCheckBox_ &&
+         (showTrayIconCheckBox_->isChecked() ||
+          (closeToTrayCheckBox_ && closeToTrayCheckBox_->isChecked())) !=
+         preferences_.showTrayIcon()) ||
+        (closeToTrayCheckBox_ &&
+         closeToTrayCheckBox_->isChecked() !=
+         preferences_.closeToTray());
+
+    const bool trayShowIconEnabled =
+        showTrayIconCheckBox_
+            ? showTrayIconCheckBox_->isChecked() ||
+              (closeToTrayCheckBox_ && closeToTrayCheckBox_->isChecked())
+            : preferences_.showTrayIcon();
+
+    const bool trayCloseToTrayEnabled =
+        closeToTrayCheckBox_
+            ? closeToTrayCheckBox_->isChecked()
+            : preferences_.closeToTray();
+
     const bool searchResultHighlightingChanged =
         showHighlightedSearchTermsCheckBox_ &&
         showHighlightedSearchTermsCheckBox_->isChecked() !=
@@ -3420,6 +3550,14 @@ bool PreferencesDialog::applyChanges()
                 carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->isChecked()
             );
         }
+
+        if (showTrayIconCheckBox_) {
+            preferences_.setShowTrayIcon(trayShowIconEnabled);
+        }
+
+        if (closeToTrayCheckBox_) {
+            preferences_.setCloseToTray(trayCloseToTrayEnabled);
+        }
     }
 
     if (uiChanged) {
@@ -3483,6 +3621,10 @@ bool PreferencesDialog::applyChanges()
 
         if (showPreviewPaneChanged) {
             Q_EMIT showPreviewPaneApplied(showPreviewPaneEnabled);
+        }
+
+        if (trayPreferencesChanged) {
+            Q_EMIT trayPreferencesApplied(trayShowIconEnabled, trayCloseToTrayEnabled);
         }
 
         updateApplyButtonEnabled();
@@ -3591,6 +3733,14 @@ bool PreferencesDialog::applyChanges()
 
     if (showFiltersDropdownChanged) {
         Q_EMIT showFiltersDropdownApplied(showFiltersDropdownEnabled);
+    }
+
+    if (showPreviewPaneChanged) {
+        Q_EMIT showPreviewPaneApplied(showPreviewPaneEnabled);
+    }
+
+    if (trayPreferencesChanged) {
+        Q_EMIT trayPreferencesApplied(trayShowIconEnabled, trayCloseToTrayEnabled);
     }
 
     return true;

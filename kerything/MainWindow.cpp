@@ -9,6 +9,7 @@
 #include <iostream>
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDesktopServices>
@@ -891,7 +892,14 @@ MainWindow::MainWindow(
     // Quit Kerything
     auto *quitAct = new QAction(QIcon::fromTheme("application-exit"), "Quit Kerything", this);
     quitAct->setShortcut(QKeySequence::Quit);
-    connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+    connect(quitAct, &QAction::triggered, this, [this]() {
+         if (controller_) {
+             controller_->quitApplication();
+             return;
+         }
+
+         qApp->quit();
+     });
     addAction(quitAct);
 
     // Configure Kerything
@@ -1745,6 +1753,15 @@ void MainWindow::changeEvent(QEvent* event)
     }
 
     refreshDirtyLiveUpdatesIfNeeded();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (controller_) {
+        controller_->maybeShowCloseToTrayNoticeForClosingWindow(this);
+    }
+
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::rebuildFilterMenu()

@@ -57,6 +57,7 @@ Q_SIGNALS:
     void searchResultHighlightingApplied(bool enabled);
     void showFiltersDropdownApplied(bool enabled);
     void showPreviewPaneApplied(bool enabled);
+    void trayPreferencesApplied(bool showTrayIcon, bool closeToTray);
 
 private:
     enum DeviceColumn {
@@ -183,6 +184,8 @@ private:
     QCheckBox* carrySearchTextToNewWindowsCheckBox_ = nullptr;
     QCheckBox* carryResultSortingToNewWindowsCheckBox_ = nullptr;
     QCheckBox* carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = nullptr;
+    QCheckBox* showTrayIconCheckBox_ = nullptr;
+    QCheckBox* closeToTrayCheckBox_ = nullptr;
     QComboBox* defaultSortColumnComboBox_ = nullptr;
     QComboBox* defaultSortOrderComboBox_ = nullptr;
     QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;

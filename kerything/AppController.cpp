@@ -6,7 +6,13 @@
 #include <algorithm>
 #include <iostream>
 #include <QApplication>
+#include <QAction>
+#include <QIcon>
 #include <QLocale>
+#include <QMenu>
+#include <QSystemTrayIcon>
+#include <QTimer>
+#include <QWidget>
 
 #include "DaemonClient.h"
 #include "DeviceCapabilities.h"
@@ -143,6 +149,9 @@ bool AppController::start() {
 
         // If the primary instance cannot be reached, fall back to becoming primary.
     }
+
+    // Setup tray icon
+    setupTrayIcon();
 
     // Create index controller
     indexController_ = new IndexController(this);
@@ -713,6 +722,356 @@ bool AppController::start() {
     return true;
 }
 
+void AppController::setupTrayIcon()
+{
+    if (trayIcon_) {
+        updateTrayIcon();
+        return;
+    }
+
+    trayMenu_ = new QMenu();
+    trayMenu_->setObjectName(QStringLiteral("kerythingTrayMenu"));
+
+    trayShowAction_ = trayMenu_->addAction(
+        QIcon::fromTheme(QStringLiteral("go-home")),
+        QStringLiteral("Show Kerything")
+    );
+    connect(trayShowAction_, &QAction::triggered, this, [this]() {
+        restoreTrayHiddenWindows(true);
+    });
+
+    trayHideAction_ = trayMenu_->addAction(
+        QIcon::fromTheme(QStringLiteral("window-minimize")),
+        QStringLiteral("Hide All Windows")
+    );
+    connect(trayHideAction_, &QAction::triggered, this, &AppController::hideAllWindowsToTray);
+
+    trayMenu_->addSeparator();
+
+    trayPreferencesAction_ = trayMenu_->addAction(
+        QIcon::fromTheme(QStringLiteral("configure")),
+        QStringLiteral("Preferences...")
+    );
+    connect(trayPreferencesAction_, &QAction::triggered, this, [this]() {
+        showPreferencesDialog();
+    });
+
+    trayMenu_->addSeparator();
+
+    trayQuitAction_ = trayMenu_->addAction(
+        QIcon::fromTheme(QStringLiteral("application-exit")),
+        QStringLiteral("Quit")
+    );
+    connect(trayQuitAction_, &QAction::triggered, this, &AppController::quitApplication);
+
+    trayIcon_ = new QSystemTrayIcon(this);
+    trayIcon_->setIcon(QIcon::fromTheme(
+        QStringLiteral("kerything"),
+        QIcon::fromTheme(QStringLiteral("edit-find"))
+    ));
+    trayIcon_->setToolTip(QStringLiteral("Kerything"));
+    trayIcon_->setContextMenu(trayMenu_);
+
+    connect(trayIcon_, &QSystemTrayIcon::activated,
+            this, [this](QSystemTrayIcon::ActivationReason reason) {
+                if (reason == QSystemTrayIcon::Trigger ||
+                    reason == QSystemTrayIcon::DoubleClick) {
+                    restoreTrayHiddenWindows(true);
+                }
+            });
+
+    updateTrayIcon();
+    updateTrayActions();
+}
+
+void AppController::updateTrayIcon()
+{
+    if (!trayIcon_) {
+        return;
+    }
+
+    const bool shouldShow =
+        preferences_.showTrayIcon() ||
+        preferences_.closeToTray();
+
+    if (!shouldShow && hasTrayHiddenWindows()) {
+        restoreTrayHiddenWindows(false);
+        raisePreferencesDialogSoon();
+    }
+
+    if (shouldShow && QSystemTrayIcon::isSystemTrayAvailable()) {
+        trayIcon_->show();
+    } else {
+        trayIcon_->hide();
+    }
+
+    const bool canCloseToTray =
+        preferences_.closeToTray() &&
+        closeToTrayAvailable();
+
+    app_.setQuitOnLastWindowClosed(!canCloseToTray);
+
+    updateTrayActions();
+}
+
+void AppController::hideAllWindowsToTray()
+{
+    cleanupWindows();
+    cleanupTrayHiddenWindows();
+
+    bool hidAnyWindow = false;
+
+    for (auto& window : windows_) {
+        if (!window || !window->isVisible()) {
+            continue;
+        }
+
+        if (!trayHiddenWindows_.contains(window)) {
+            trayHiddenWindows_.append(window);
+        }
+
+        window->hide();
+        hidAnyWindow = true;
+    }
+
+    updateTrayActions();
+
+    if (hidAnyWindow) {
+        showCloseToTrayMessageOnce();
+    }
+}
+
+void AppController::cleanupTrayHiddenWindows()
+{
+    for (auto it = trayHiddenWindows_.begin(); it != trayHiddenWindows_.end(); ) {
+        if (it->isNull()) {
+            it = trayHiddenWindows_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void AppController::updateTrayActions()
+{
+    cleanupWindows();
+    cleanupTrayHiddenWindows();
+
+    bool hasVisibleWindow = false;
+    for (const auto& window : windows_) {
+        if (window && window->isVisible()) {
+            hasVisibleWindow = true;
+            break;
+        }
+    }
+
+    if (trayHideAction_) {
+        trayHideAction_->setEnabled(hasVisibleWindow);
+        trayHideAction_->setToolTip(
+            hasVisibleWindow
+                ? QStringLiteral("Hide all visible Kerything windows")
+                : QStringLiteral("No visible Kerything windows to hide")
+        );
+    }
+
+    if (!trayShowAction_) {
+        return;
+    }
+
+    const int hiddenWindowCount = trayHiddenWindowCount();
+
+    if (hiddenWindowCount <= 0) {
+        trayShowAction_->setText(QStringLiteral("Show Kerything"));
+        trayShowAction_->setToolTip(QStringLiteral("Show or create a Kerything window"));
+        return;
+    }
+
+    if (hiddenWindowCount == 1) {
+        trayShowAction_->setText(QStringLiteral("Show Hidden Window"));
+        trayShowAction_->setToolTip(QStringLiteral("Restore the hidden Kerything window"));
+        return;
+    }
+
+    trayShowAction_->setText(
+        QStringLiteral("Show %1 Hidden Windows").arg(hiddenWindowCount)
+    );
+    trayShowAction_->setToolTip(
+        QStringLiteral("Restore %1 hidden Kerything windows").arg(hiddenWindowCount)
+    );
+}
+
+void AppController::maybeQuitAfterLastWindowClosed()
+{
+    if (quittingExplicitly_) {
+        return;
+    }
+
+    cleanupWindows();
+    cleanupTrayHiddenWindows();
+
+    if (!windows_.isEmpty()) {
+        return;
+    }
+
+    const bool canCloseToTray =
+        preferences_.closeToTray() &&
+        closeToTrayAvailable();
+
+    if (canCloseToTray) {
+        return;
+    }
+
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (!widget ||
+            widget == trayMenu_ ||
+            !widget->isVisible() ||
+            !widget->isWindow()) {
+            continue;
+        }
+
+        return;
+    }
+
+    app_.setQuitOnLastWindowClosed(true);
+    app_.quit();
+}
+
+int AppController::trayHiddenWindowCount() const
+{
+    int count = 0;
+
+    for (const auto& window : trayHiddenWindows_) {
+        if (window) {
+            ++count;
+        }
+    }
+
+    return count;
+}
+
+bool AppController::hasTrayHiddenWindows() const
+{
+    return trayHiddenWindowCount() > 0;
+}
+
+bool AppController::hasOtherVisibleWindows(const MainWindow* closingWindow) const
+{
+    for (const auto& window : windows_) {
+        if (!window || window == closingWindow) {
+            continue;
+        }
+
+        if (window->isVisible()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool AppController::restoreTrayHiddenWindows(bool activateRestoredWindow)
+{
+    cleanupWindows();
+    cleanupTrayHiddenWindows();
+
+    bool restoredAnyWindow = false;
+    MainWindow* windowToActivate = nullptr;
+
+    for (auto& window : trayHiddenWindows_) {
+        if (!window) {
+            continue;
+        }
+
+        if (window->isMinimized()) {
+            window->showNormal();
+        } else {
+            window->show();
+        }
+
+        restoredAnyWindow = true;
+        windowToActivate = window;
+    }
+
+    trayHiddenWindows_.clear();
+    updateTrayActions();
+
+    if (!restoredAnyWindow) {
+        presentExistingWindow();
+        return false;
+    }
+
+    if (activateRestoredWindow && windowToActivate) {
+        windowToActivate->raise();
+        windowToActivate->activateWindow();
+    }
+
+    return true;
+}
+
+void AppController::raisePreferencesDialogSoon()
+{
+    if (!preferencesDialog_) {
+        return;
+    }
+
+    QPointer<PreferencesDialog> dialog = preferencesDialog_;
+
+    auto raiseDialog = [dialog]() {
+        if (!dialog) {
+            return;
+        }
+
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    };
+
+    QTimer::singleShot(0, this, raiseDialog);
+    QTimer::singleShot(50, this, raiseDialog);
+}
+
+bool AppController::closeToTrayAvailable() const
+{
+    return trayIcon_ &&
+           trayIcon_->isVisible() &&
+           QSystemTrayIcon::isSystemTrayAvailable();
+}
+
+void AppController::maybeShowCloseToTrayNoticeForClosingWindow(MainWindow* closingWindow)
+{
+    if (quittingExplicitly_ ||
+        !preferences_.closeToTray() ||
+        !closeToTrayAvailable() ||
+        hasOtherVisibleWindows(closingWindow)) {
+        return;
+    }
+
+    showCloseToTrayMessageOnce();
+}
+
+void AppController::showCloseToTrayMessageOnce()
+{
+    if (closeToTrayMessageShown_ || !trayIcon_ || !trayIcon_->isVisible()) {
+        return;
+    }
+
+    closeToTrayMessageShown_ = true;
+
+    trayIcon_->showMessage(
+        QStringLiteral("Kerything is still running"),
+        QStringLiteral("Open Kerything again or use the tray icon menu to show a window or quit."),
+        QSystemTrayIcon::Information,
+        5000
+    );
+}
+
+void AppController::quitApplication()
+{
+    quittingExplicitly_ = true;
+    app_.setQuitOnLastWindowClosed(true);
+    app_.quit();
+}
+
 void AppController::openNewWindow(MainWindow* sourceWindow) {
     // Clean up any stale pointers before adding a new one.
     cleanupWindows();
@@ -760,18 +1119,33 @@ void AppController::openNewWindow(MainWindow* sourceWindow) {
     // When the window is destroyed, remove its pointer from the controller list.
     connect(window, &QObject::destroyed, this, [this, window]() {
         windows_.removeAll(window);
+        trayHiddenWindows_.removeAll(window);
+        updateTrayActions();
+
+        QTimer::singleShot(0, this, [this]() {
+            maybeQuitAfterLastWindowClosed();
+        });
     });
 
     // Show the new window and bring it to the front.
     window->show();
     window->raise();
     window->activateWindow();
+
+    updateTrayActions();
 }
 
 void AppController::openWindowForLaunchRequest()
 {
+    const bool restoredHiddenWindows =
+        hasTrayHiddenWindows() && restoreTrayHiddenWindows(true);
+
     if (preferences_.createNewWindowOnLaunch()) {
         openNewWindow();
+        return;
+    }
+
+    if (restoredHiddenWindows) {
         return;
     }
 
@@ -856,6 +1230,21 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
 
     connect(dialog, &PreferencesDialog::showPreviewPaneApplied,
         this, &AppController::setShowPreviewPane);
+
+    connect(dialog, &PreferencesDialog::trayPreferencesApplied,
+            this, [this](bool showTrayIcon, bool closeToTray) {
+                Q_UNUSED(showTrayIcon);
+                Q_UNUSED(closeToTray);
+
+                updateTrayIcon();
+
+                if (preferences_.closeToTray() && !closeToTrayAvailable()) {
+                    requestWindowStatusMessage(
+                        QStringLiteral("System tray is not available in this desktop session."),
+                        6000
+                    );
+                }
+            });
 
     connect(dialog, &PreferencesDialog::searchResultHighlightingApplied,
             this, [this](bool enabled) {

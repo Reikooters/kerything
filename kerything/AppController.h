@@ -22,6 +22,9 @@ class QApplication;
 class MainWindow;
 class PreferencesDialog;
 class SingleInstanceServer;
+class QAction;
+class QMenu;
+class QSystemTrayIcon;
 
 class AppController final : public QObject {
     Q_OBJECT
@@ -45,6 +48,9 @@ public:
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
     [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
+    [[nodiscard]] bool closeToTrayAvailable() const;
+    void maybeShowCloseToTrayNoticeForClosingWindow(MainWindow* closingWindow);
+    void quitApplication();
     [[nodiscard]] int defaultSortColumn() const;
     [[nodiscard]] Qt::SortOrder defaultSortOrder() const;
     [[nodiscard]] bool sortDateDescendingFirst() const;
@@ -78,6 +84,18 @@ private:
     void cleanupWindows();
     void trimSortScratchAllWindows();
     void updateOpenPreferencesDialog();
+    void setupTrayIcon();
+    void updateTrayIcon();
+    void showCloseToTrayMessageOnce();
+    void hideAllWindowsToTray();
+    bool restoreTrayHiddenWindows(bool activateRestoredWindow = true);
+    void raisePreferencesDialogSoon();
+    void updateTrayActions();
+    void cleanupTrayHiddenWindows();
+    void maybeQuitAfterLastWindowClosed();
+    [[nodiscard]] int trayHiddenWindowCount() const;
+    [[nodiscard]] bool hasTrayHiddenWindows() const;
+    [[nodiscard]] bool hasOtherVisibleWindows(const MainWindow* closingWindow) const;
     bool requestKnownDevices(quint32* requestIdOut = nullptr);
     void handleKnownDevicesUpdated(quint32 requestId, const std::vector<BlockDevice>& blockDevices);
     [[nodiscard]] std::vector<BlockDevice> devicesNeedingScanAfterKnownDeviceUpdate(
@@ -129,6 +147,16 @@ private:
     QTimer liveUpdateRefreshTimer_;
     QTimer liveMetadataRefreshTimer_;
     bool liveUpdateRefreshPausedDirty_ = false;
+
+    QSystemTrayIcon* trayIcon_ = nullptr;
+    QMenu* trayMenu_ = nullptr;
+    QAction* trayShowAction_ = nullptr;
+    QAction* trayHideAction_ = nullptr;
+    QAction* trayPreferencesAction_ = nullptr;
+    QAction* trayQuitAction_ = nullptr;
+    QList<QPointer<MainWindow>> trayHiddenWindows_;
+    bool quittingExplicitly_ = false;
+    bool closeToTrayMessageShown_ = false;
 };
 
 #endif // KERYTHING_APPCONTROLLER_H

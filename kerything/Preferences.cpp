@@ -113,6 +113,43 @@ void Preferences::setCarryWindowSizeToNewWindows(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showTrayIcon() const
+{
+    return closeToTray() ||
+           settings_.value(
+               QStringLiteral("ui/showTrayIcon"),
+               true
+           ).toBool();
+}
+
+void Preferences::setShowTrayIcon(bool enabled)
+{
+    settings_.setValue(
+        QStringLiteral("ui/showTrayIcon"),
+        enabled || closeToTray()
+    );
+    settings_.sync();
+}
+
+bool Preferences::closeToTray() const
+{
+    return settings_.value(
+        QStringLiteral("ui/closeToTray"),
+        true
+    ).toBool();
+}
+
+void Preferences::setCloseToTray(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/closeToTray"), enabled);
+
+    if (enabled) {
+        settings_.setValue(QStringLiteral("ui/showTrayIcon"), true);
+    }
+
+    settings_.sync();
+}
+
 bool Preferences::showFiltersDropdown() const
 {
     return settings_.value(

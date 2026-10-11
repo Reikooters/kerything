@@ -62,6 +62,10 @@ public:
     void setCarryResultSortingToNewWindows(bool enabled);
     [[nodiscard]] bool carryWindowSizeAndColumnWidthsToNewWindows() const;
     void setCarryWindowSizeToNewWindows(bool enabled);
+    [[nodiscard]] bool showTrayIcon() const;
+    void setShowTrayIcon(bool enabled);
+    [[nodiscard]] bool closeToTray() const;
+    void setCloseToTray(bool enabled);
 
     // UI
     [[nodiscard]] bool showFiltersDropdown() const;

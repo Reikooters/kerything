@@ -1,60 +1,106 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1. Ensure the user passed a version argument
-if [ $# -lt 1 ] || [ -z "$1" ]; then
-    echo "Error: Missing version argument."
-    echo "Usage: $0 <version>"
-    echo "Example: $0 1.2.3"
+usage() {
+    cat >&2 <<EOF
+Usage: $0 [--kf6|--qt-only]
+
+Build Arch Linux release tarballs.
+
+Options:
+  --kf6       Build the KDE Frameworks 6 variant. This is the default.
+  --qt-only   Build the Qt-only variant.
+  -h, --help  Show this help text.
+EOF
+}
+
+VARIANT="kf6"
+PACKAGE_NAME="kerything"
+KERYTHING_WITH_KF6="ON"
+
+while (( $# > 0 )); do
+    case "$1" in
+        --kf6)
+            VARIANT="kf6"
+            PACKAGE_NAME="kerything"
+            KERYTHING_WITH_KF6="ON"
+            ;;
+        --qt-only)
+            VARIANT="qt-only"
+            PACKAGE_NAME="kerything-qt"
+            KERYTHING_WITH_KF6="OFF"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown argument: $1" >&2
+            usage
+            exit 1
+            ;;
+    esac
+
+    shift
+done
+
+# Determine paths relative to this script.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+VERSION_FILE="$PROJECT_ROOT/shared/Version.h"
+
+if [[ ! -f "$VERSION_FILE" ]]; then
+    echo "Error: Version file not found: $VERSION_FILE" >&2
     exit 1
 fi
 
-# Configuration
-VERSION="$1"
-TARBALL_NAME="kerything-v${VERSION}-archlinux-x86_64.tar.gz"
+VERSION="$(
+    sed -nE 's/^[[:space:]]*inline[[:space:]]+constexpr[[:space:]]+auto[[:space:]]+Version[[:space:]]*=[[:space:]]*"([^"]+)";[[:space:]]*$/\1/p' "$VERSION_FILE" |
+        head -n 1
+)"
 
-echo "====> Starting Arch Linux release build pipeline for version ${VERSION}..."
+if [[ -z "$VERSION" ]]; then
+    echo "Error: Could not read Kerything version from $VERSION_FILE" >&2
+    exit 1
+fi
 
-# 2. Determine paths relative to this script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="$PROJECT_ROOT/releases"
-BUILD_DIR="$PROJECT_ROOT/build-archlinux"
-PACKAGE_DIR="$PROJECT_ROOT/package-archlinux"
+BUILD_DIR="$PROJECT_ROOT/build-archlinux-$VARIANT"
+PACKAGE_DIR="$PROJECT_ROOT/package-archlinux-$VARIANT"
+TARBALL_NAME="${PACKAGE_NAME}-v${VERSION}-archlinux-x86_64.tar.gz"
 
-# Create the dedicated releases directory on the host if it doesn't exist
+echo "====> Starting Arch Linux release build pipeline..."
+echo "      Version: $VERSION"
+echo "      Variant: $VARIANT"
+echo "      Package: $PACKAGE_NAME"
+echo "      KF6:     $KERYTHING_WITH_KF6"
+
 mkdir -p "$OUTPUT_DIR"
 
-# Clean previous build/package staging folders
 echo "====> Cleaning previous build and package staging directories..."
 rm -rf "$BUILD_DIR" "$PACKAGE_DIR"
 
-# 3. Configure the release build
 echo "====> Configuring CMake..."
 cmake -S "$PROJECT_ROOT" -B "$BUILD_DIR" \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/usr \
-  -DKERYTHING_WITH_KF6=ON
+  -DKERYTHING_SYSTEMD_SYSTEM_UNIT_DIR=/usr/lib/systemd/system \
+  -DKERYTHING_WITH_KF6="$KERYTHING_WITH_KF6"
 
-# 4. Build binaries
 echo "====> Building binaries..."
 cmake --build "$BUILD_DIR" --parallel
 
-# 5. Check for missing runtime dependencies
 echo "====> Checking for missing dependencies..."
 ldd "$BUILD_DIR/kerything" | grep 'not found' || true
 ldd "$BUILD_DIR/kerythingd" | grep 'not found' || true
 
-# 6. Perform staged installation
 echo "====> Performing staged installation..."
-cmake --install "$BUILD_DIR" --prefix "$PACKAGE_DIR"
+DESTDIR="$PACKAGE_DIR" cmake --install "$BUILD_DIR"
 
-# 7. Create distribution tarball
 echo "====> Creating distribution tarball..."
 tar -C "$PACKAGE_DIR" -czf "$OUTPUT_DIR/$TARBALL_NAME" .
 
-# 8. Clean up the build and staged package folders
 echo "====> Cleaning up build and package staging directories..."
 rm -rf "$BUILD_DIR" "$PACKAGE_DIR"
 

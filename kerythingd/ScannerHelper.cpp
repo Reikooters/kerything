@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <fstream>
 #include <linux/limits.h>
+#include <linux/fs.h>
 #include <optional>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include <fcntl.h>
@@ -182,6 +184,21 @@ namespace {
 
         return false;
     }
+
+    bool flushBlockDeviceBuffers(const QString& devNode)
+    {
+        const QByteArray devNative = QFile::encodeName(devNode);
+        const int fd = ::open(devNative.constData(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            return false;
+        }
+
+        // BLKFLSBUF asks the kernel block layer to flush dirty buffers and
+        // invalidate all cached pages for this raw block device.
+        const int rc = ::ioctl(fd, BLKFLSBUF, 0);
+        ::close(fd);
+        return rc == 0;
+    }
 }
 
 bool isAllowedFsType(const QString& fsType)
@@ -293,6 +310,7 @@ bool scanDevice(const QString& devNode,
     if (normalizedFsType == QStringLiteral("ntfs") ||
         normalizedFsType == QStringLiteral("ntfs3")) {
         syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
+        flushBlockDeviceBuffers(resolvedPath); // Invalidate stale block device page cache
 
         return NtfsScannerEngine::scanDevice(
             resolvedPath,
@@ -306,6 +324,7 @@ bool scanDevice(const QString& devNode,
 
     if (normalizedFsType == QStringLiteral("ext4")) {
         syncMountedFilesystem(primaryMountPoint, mountPoints, onError);
+        flushBlockDeviceBuffers(resolvedPath); // Invalidate stale block device page cache
 
         const std::optional<bool> rotational = isRotationalBlockDevice(resolvedPath);
 

@@ -582,6 +582,11 @@ SearchResultTableView::SearchResultTableView(QWidget* parent)
         SearchResultColumn::Name,
         new HighlightedSearchTermDelegate(this)
     );
+
+    setItemDelegateForColumn(
+        SearchResultColumn::Path,
+        new HighlightedSearchTermDelegate(this)
+    );
 }
 
 void SearchResultTableView::mousePressEvent(QMouseEvent* event)

@@ -479,7 +479,7 @@ void FileModel::setSearchHighlightTerms(
     if (rowCount() > 0) {
         Q_EMIT dataChanged(
             index(0, SearchResultColumn::Name),
-            index(rowCount() - 1, SearchResultColumn::Name),
+            index(rowCount() - 1, SearchResultColumn::Path),
             {
                 HighlightTermsRole,
                 HighlightMatchCaseRole,
@@ -832,9 +832,13 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
         return {};
     }
 
+    const bool isHighlightColumn =
+        index.column() == SearchResultColumn::Name ||
+        index.column() == SearchResultColumn::Path;
+
     if (role == HighlightTermsRole) {
         if (!searchHighlightTermsEnabled_ ||
-            index.column() != SearchResultColumn::Name ||
+            !isHighlightColumn ||
             searchHighlightTerms_.isEmpty()) {
             return {};
         }
@@ -844,7 +848,7 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
 
     if (role == HighlightMatchCaseRole) {
         if (!searchHighlightTermsEnabled_ ||
-            index.column() != SearchResultColumn::Name ||
+            !isHighlightColumn ||
             searchHighlightTerms_.isEmpty()) {
             return {};
         }
@@ -854,7 +858,7 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
 
     if (role == HighlightMatchWholeWordRole) {
         if (!searchHighlightTermsEnabled_ ||
-            index.column() != SearchResultColumn::Name ||
+            !isHighlightColumn ||
             searchHighlightTerms_.isEmpty()) {
             return {};
         }
@@ -864,7 +868,7 @@ QVariant FileModel::data(const QModelIndex &index, int role) const {
 
     if (role == HighlightUseRegexRole) {
         if (!searchHighlightTermsEnabled_ ||
-            index.column() != SearchResultColumn::Name ||
+            !isHighlightColumn ||
             searchHighlightTerms_.isEmpty()) {
             return {};
         }

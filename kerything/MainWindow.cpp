@@ -181,6 +181,16 @@ namespace {
             }
 
             terms << term;
+
+            if (term.contains(QLatin1Char('/')) || term.contains(QLatin1Char('\\'))) {
+                const QStringList subTerms = term.split(QRegularExpression(QStringLiteral("[/\\\\]")), Qt::SkipEmptyParts);
+                for (const QString& sub : subTerms) {
+                    const QString trimmedSub = sub.trimmed();
+                    if (!trimmedSub.isEmpty()) {
+                        terms << trimmedSub;
+                    }
+                }
+            }
         }
 
         terms.removeDuplicates();
@@ -774,6 +784,7 @@ MainWindow::MainWindow(
 
     matchCaseChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Case"));
     matchWholeWordChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Whole Word"));
+    matchPathChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Match Path"));
     regexChip_ = makeSearchOptionChip(QStringLiteral("Click to turn off Regex"));
 
     connect(filterChip_, &QToolButton::clicked, this, [this]() {
@@ -788,6 +799,10 @@ MainWindow::MainWindow(
         setMatchWholeWordEnabled(false);
     });
 
+    connect(matchPathChip_, &QToolButton::clicked, this, [this]() {
+        setMatchPathEnabled(false);
+    });
+
     connect(regexChip_, &QToolButton::clicked, this, [this]() {
         setRegexEnabled(false);
     });
@@ -798,6 +813,7 @@ MainWindow::MainWindow(
     chipLayout->setSpacing(1);
     chipLayout->addWidget(matchCaseChip_);
     chipLayout->addWidget(matchWholeWordChip_);
+    chipLayout->addWidget(matchPathChip_);
     chipLayout->addWidget(regexChip_);
     chipLayout->addWidget(filterChip_);
     chipContainer_->setVisible(false);
@@ -1075,6 +1091,23 @@ MainWindow::MainWindow(
     connect(matchWholeWordAct_, &QAction::toggled, this, &MainWindow::setMatchWholeWordEnabled);
     addAction(matchWholeWordAct_);
 
+    // Match Path
+    matchPathAct_ = new QAction(
+        QIcon::fromTheme(
+            QStringLiteral("system-file-manager"),
+            QIcon::fromTheme(QStringLiteral("folder-open"))
+        ),
+        QStringLiteral("Match Path"),
+        this
+    );
+    matchPathAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_U));
+    matchPathAct_->setCheckable(true);
+    matchPathAct_->setChecked(matchPathEnabled_);
+    matchPathAct_->setStatusTip(QStringLiteral("Include the path when searching for files"));
+    matchPathAct_->setToolTip(QStringLiteral("Include the path when searching for files"));
+    connect(matchPathAct_, &QAction::toggled, this, &MainWindow::setMatchPathEnabled);
+    addAction(matchPathAct_);
+
     // Regex
     regexAct_ = new QAction(
         QIcon::fromTheme(
@@ -1190,6 +1223,7 @@ MainWindow::MainWindow(
     searchMenu_ = menuBar()->addMenu(QStringLiteral("Search"));
     searchMenu_->addAction(matchCaseAct_);
     searchMenu_->addAction(matchWholeWordAct_);
+    searchMenu_->addAction(matchPathAct_);
     searchMenu_->addAction(regexAct_);
     searchMenu_->addSeparator();
     searchMenu_->addAction(resetSearchAct);
@@ -1333,10 +1367,14 @@ void MainWindow::updateSearch(const QString &text) {
 
     std::vector<IndexController::RecordHandle> results;
 
+    const bool pathSeparatorPresent = text.contains(QLatin1Char('/')) || text.contains(QLatin1Char('\\'));
+    const bool effectiveMatchPath = matchPathEnabled_ || pathSeparatorPresent;
+
     if (regexEnabled_) {
         const IndexController::SearchOptions regexOptions{
             .matchCase = matchCaseEnabled_,
             .matchWholeWord = false,
+            .matchPath = effectiveMatchPath,
             .useRegex = true
         };
 
@@ -1385,6 +1423,7 @@ void MainWindow::updateSearch(const QString &text) {
             IndexController::SearchOptions{
                 .matchCase = matchCaseEnabled_,
                 .matchWholeWord = matchWholeWordEnabled_,
+                .matchPath = effectiveMatchPath,
                 .useRegex = false
             }
         );
@@ -1448,6 +1487,7 @@ MainWindow::NewWindowState MainWindow::newWindowState() const
         .sortOrder = header ? header->sortIndicatorOrder() : Qt::AscendingOrder,
         .matchCaseEnabled = matchCaseEnabled_,
         .matchWholeWordEnabled = matchWholeWordEnabled_,
+        .matchPathEnabled = matchPathEnabled_,
         .regexEnabled = regexEnabled_,
         .previewPaneVisible = previewPane_ != nullptr && previewPane_->isVisible(),
     };
@@ -1461,6 +1501,7 @@ void MainWindow::applyNewWindowState(const NewWindowState& state)
 
     matchCaseEnabled_ = state.matchCaseEnabled;
     matchWholeWordEnabled_ = state.matchWholeWordEnabled;
+    matchPathEnabled_ = state.matchPathEnabled;
     regexEnabled_ = state.regexEnabled;
 
     setPreviewPaneVisible(state.previewPaneVisible);
@@ -1482,6 +1523,11 @@ void MainWindow::applyNewWindowState(const NewWindowState& state)
                 ? QStringLiteral("Match Whole Word is unavailable while Regex is enabled")
                 : QStringLiteral("Match complete words in file names")
         );
+    }
+
+    if (matchPathAct_) {
+        const QSignalBlocker blocker(matchPathAct_);
+        matchPathAct_->setChecked(matchPathEnabled_);
     }
 
     if (regexAct_) {
@@ -1684,6 +1730,7 @@ void MainWindow::resetSearchStateAndFocus()
 
     matchCaseEnabled_ = false;
     matchWholeWordEnabled_ = false;
+    matchPathEnabled_ = false;
     regexEnabled_ = false;
 
     if (matchCaseAct_) {
@@ -1696,6 +1743,11 @@ void MainWindow::resetSearchStateAndFocus()
         matchWholeWordAct_->setChecked(false);
         matchWholeWordAct_->setEnabled(true);
         matchWholeWordAct_->setStatusTip(QStringLiteral("Match complete words in file names"));
+    }
+
+    if (matchPathAct_) {
+        const QSignalBlocker blocker(matchPathAct_);
+        matchPathAct_->setChecked(false);
     }
 
     if (regexAct_) {
@@ -2164,6 +2216,25 @@ void MainWindow::updateSearchOptionChips()
         }
     }
 
+    if (matchPathChip_) {
+        if (matchPathEnabled_) {
+            matchPathChip_->setText(QStringLiteral("Path  ×"));
+            matchPathChip_->setToolTip(
+                QStringLiteral(
+                    "Search option enabled: Match Path\n\n"
+                    "Click to turn off Match Path."
+                )
+            );
+            matchPathChip_->setStatusTip(QStringLiteral("Click to turn off Match Path"));
+            matchPathChip_->show();
+        } else {
+            matchPathChip_->hide();
+            matchPathChip_->setText(QString());
+            matchPathChip_->setToolTip(QString());
+            matchPathChip_->setStatusTip(QStringLiteral("Match Path is off"));
+        }
+    }
+
     if (regexChip_) {
         if (regexEnabled_) {
             regexChip_->setText(QStringLiteral("Regex  ×"));
@@ -2202,6 +2273,10 @@ void MainWindow::updateSearchMenuTitle()
         activeOptions << QStringLiteral("Match Whole Word");
     }
 
+    if (matchPathEnabled_) {
+        activeOptions << QStringLiteral("Match Path");
+    }
+
     if (regexEnabled_) {
         activeOptions << QStringLiteral("Regex");
     }
@@ -2229,6 +2304,7 @@ void MainWindow::updateChipSpacing()
     const QList<QToolButton*> chips = {
         matchCaseChip_,
         matchWholeWordChip_,
+        matchPathChip_,
         regexChip_,
         filterChip_
     };
@@ -2452,6 +2528,24 @@ void MainWindow::setMatchWholeWordEnabled(bool enabled)
     if (matchWholeWordAct_ && matchWholeWordAct_->isChecked() != enabled) {
         const QSignalBlocker blocker(matchWholeWordAct_);
         matchWholeWordAct_->setChecked(enabled);
+    }
+
+    updateSearchOptionChips();
+    updateSearchMenuTitle();
+    updateSearch(searchLine_ ? searchLine_->text() : QString());
+}
+
+void MainWindow::setMatchPathEnabled(bool enabled)
+{
+    if (matchPathEnabled_ == enabled) {
+        return;
+    }
+
+    matchPathEnabled_ = enabled;
+
+    if (matchPathAct_ && matchPathAct_->isChecked() != enabled) {
+        const QSignalBlocker blocker(matchPathAct_);
+        matchPathAct_->setChecked(enabled);
     }
 
     updateSearchOptionChips();

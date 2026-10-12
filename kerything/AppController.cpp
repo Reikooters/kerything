@@ -760,7 +760,7 @@ void AppController::setupTrayIcon()
 
     trayQuitAction_ = trayMenu_->addAction(
         QIcon::fromTheme(QStringLiteral("application-exit")),
-        QStringLiteral("Quit")
+        QStringLiteral("Quit Kerything")
     );
     connect(trayQuitAction_, &QAction::triggered, this, &AppController::quitApplication);
 

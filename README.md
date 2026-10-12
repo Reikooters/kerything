@@ -373,16 +373,16 @@ the non-KDE variant. Build on the Fedora release where you intend to install.
 
 ```bash
 sudo dnf install rpm-build
-sudo dnf builddep packaging/kerything.spec
+sudo dnf builddep packaging/local/fedora-rpm/kerything.spec
 
-./packaging/build-fedora-rpm.sh
+./packaging/local/fedora-rpm/build-fedora-rpm.sh
 ```
 
 For the Qt-only variant:
 
 ```bash
-sudo dnf builddep --without kf6 packaging/kerything.spec
-./packaging/build-fedora-rpm.sh --qt-only
+sudo dnf builddep --without kf6 packaging/local/fedora-rpm/kerything.spec
+./packaging/local/fedora-rpm/build-fedora-rpm.sh --qt-only
 ```
 
 The build script reads the version from the spec file, archives tracked and

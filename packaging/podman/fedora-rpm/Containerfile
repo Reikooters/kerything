@@ -1,0 +1,26 @@
+FROM fedora:latest
+
+RUN dnf -y update && \
+    dnf -y install \
+        git \
+        rpm-build \
+        dnf-plugins-core \
+        cmake \
+        gcc-c++ \
+        pkgconf-pkg-config \
+        qt6-qtbase-devel \
+        extra-cmake-modules \
+        kf6-kcoreaddons-devel \
+        kf6-ki18n-devel \
+        kf6-kio-devel \
+        kf6-kxmlgui-devel \
+        tbb-devel \
+        re2-devel \
+        e2fsprogs-devel \
+        libblkid-devel \
+        libmount-devel \
+        systemd-devel \
+        systemd-rpm-macros && \
+    dnf clean all
+
+WORKDIR /src

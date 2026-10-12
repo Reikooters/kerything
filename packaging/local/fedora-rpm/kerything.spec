@@ -1,4 +1,5 @@
 %bcond_without kf6
+%{!?kerything_version:%global kerything_version 0}
 
 %if %{with kf6}
 Name:           kerything
@@ -7,7 +8,7 @@ Name:           kerything
 Name:           kerything-qt
 %global kerything_kf6 OFF
 %endif
-Version:        2.8.0
+Version:        %{kerything_version}
 Release:        1%{?dist}
 Summary:        Fast file search for Linux block devices
 License:        GPL-3.0-or-later
@@ -56,7 +57,7 @@ that scans devices with elevated privileges.
 
 %install
 %cmake_install
-install -Dpm 0644 packaging/kerything.sysusers \
+install -Dpm 0644 packaging/local/fedora-rpm/kerything.sysusers \
     %{buildroot}%{_sysusersdir}/kerything.conf
 
 # RPM installs license files through %%license.

@@ -372,7 +372,7 @@ build script makes the KDE Frameworks 6 variant by default, `--qt-only` builds
 the non-KDE variant. Build on the Fedora release where you intend to install.
 
 ```bash
-sudo dnf install rpm-build
+sudo dnf install rpm-build dnf-plugins-core
 sudo dnf builddep packaging/local/fedora-rpm/kerything.spec
 
 ./packaging/local/fedora-rpm/build-fedora-rpm.sh
@@ -381,7 +381,9 @@ sudo dnf builddep packaging/local/fedora-rpm/kerything.spec
 For the Qt-only variant:
 
 ```bash
+sudo dnf install rpm-build dnf-plugins-core
 sudo dnf builddep --without kf6 packaging/local/fedora-rpm/kerything.spec
+
 ./packaging/local/fedora-rpm/build-fedora-rpm.sh --qt-only
 ```
 

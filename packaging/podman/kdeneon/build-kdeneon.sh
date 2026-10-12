@@ -1,86 +1,176 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1. Ensure the user passed a version argument
-if [ $# -lt 1 ] || [ -z "$1" ]; then
-    echo "Error: Missing version argument."
-    echo "Usage: $0 <version>"
-    echo "Example: $0 1.2.3"
+usage() {
+    cat >&2 <<EOF
+Usage: $0 [--kf6|--qt-only] [--rebuild-image]
+
+Build KDE Neon release tarballs inside a Podman container.
+
+Options:
+  --kf6            Build the KDE Frameworks 6 variant. This is the default.
+  --qt-only        Build the Qt-only variant.
+  --rebuild-image  Rebuild the Podman image before building.
+  -h, --help       Show this help text.
+
+Environment:
+  OUTPUT_DIR  Optional output directory for finished tarballs.
+              Defaults to <project-root>/releases.
+EOF
+}
+
+VARIANT="kf6"
+PACKAGE_NAME="kerything"
+KERYTHING_WITH_KF6="ON"
+REBUILD_IMAGE=false
+
+while (( $# > 0 )); do
+    case "$1" in
+        --kf6)
+            VARIANT="kf6"
+            PACKAGE_NAME="kerything"
+            KERYTHING_WITH_KF6="ON"
+            ;;
+        --qt-only)
+            VARIANT="qt-only"
+            PACKAGE_NAME="kerything-qt"
+            KERYTHING_WITH_KF6="OFF"
+            ;;
+        --rebuild-image)
+            REBUILD_IMAGE=true
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown argument: $1" >&2
+            usage
+            exit 1
+            ;;
+    esac
+
+    shift
+done
+
+if ! command -v podman >/dev/null; then
+    cat >&2 <<EOF
+Error: podman is missing.
+
+Install Podman first. For example:
+
+  sudo pacman -S podman
+
+or on Fedora:
+
+  sudo dnf install podman
+
+EOF
     exit 1
 fi
 
-# Configuration
-VERSION="$1"
-IMAGE_NAME="kerything-kdeneon-build"
-VOLUME_NAME="kdeneon-artifacts-scratch"
-TARBALL_NAME="kerything-v${VERSION}-kdeneon-x86_64.tar.gz"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+VERSION_FILE="$PROJECT_ROOT/shared/Version.h"
+CONTAINERFILE="$SCRIPT_DIR/Containerfile"
 
-echo "====> Starting KDE Neon clean build pipeline for version ${VERSION}..."
-
-# 2. Determine paths relative to this script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-OUTPUT_DIR="$PROJECT_ROOT/releases"
-
-# Create the dedicated releases directory on the host if it doesn't exist
-mkdir -p "$OUTPUT_DIR"
-
-# 3. Check if the Podman image exists
-if ! podman image exists "$IMAGE_NAME"; then
-    echo "====> Building missing Podman image..."
-    podman build -f "$SCRIPT_DIR/Containerfile.kdeneon" -t "$IMAGE_NAME" "$SCRIPT_DIR"
+if [[ ! -f "$CONTAINERFILE" ]]; then
+    echo "Error: Containerfile not found: $CONTAINERFILE" >&2
+    exit 1
 fi
 
-# 4. Create a clean temporary Podman volume for build artifacts
+if [[ ! -f "$VERSION_FILE" ]]; then
+    echo "Error: Version file not found: $VERSION_FILE" >&2
+    exit 1
+fi
+
+VERSION="$(
+    sed -nE 's/^[[:space:]]*inline[[:space:]]+constexpr[[:space:]]+auto[[:space:]]+Version[[:space:]]*=[[:space:]]*"([^"]+)";[[:space:]]*$/\1/p' "$VERSION_FILE" |
+        head -n 1
+)"
+
+if [[ -z "$VERSION" ]]; then
+    echo "Error: Could not read Kerything version from $VERSION_FILE" >&2
+    exit 1
+fi
+
+IMAGE_NAME="kerything-kdeneon-build"
+VOLUME_NAME="kerything-kdeneon-build-${VARIANT}-$$"
+OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/releases}"
+TARBALL_NAME="${PACKAGE_NAME}-v${VERSION}-kdeneon-x86_64.tar.gz"
+
+cleanup() {
+    echo "====> Cleaning up scratch volume..."
+    podman volume rm -f "$VOLUME_NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "====> Starting KDE Neon Podman build pipeline..."
+echo "      Version: $VERSION"
+echo "      Variant: $VARIANT"
+echo "      Package: $PACKAGE_NAME"
+echo "      KF6:     $KERYTHING_WITH_KF6"
+echo "      Image:   $IMAGE_NAME"
+echo "      Output:  $OUTPUT_DIR"
+
+if [[ "$REBUILD_IMAGE" == true ]]; then
+    echo "====> Rebuilding Podman image..."
+    podman build -f "$CONTAINERFILE" -t "$IMAGE_NAME" "$SCRIPT_DIR"
+elif ! podman image exists "$IMAGE_NAME"; then
+    echo "====> Building missing Podman image..."
+    podman build -f "$CONTAINERFILE" -t "$IMAGE_NAME" "$SCRIPT_DIR"
+else
+    echo "====> Reusing existing Podman image: $IMAGE_NAME"
+fi
+
 echo "====> Creating temporary scratch volume..."
-podman volume rm -f "$VOLUME_NAME" >/dev/null 2>&1 || true
 podman volume create "$VOLUME_NAME" >/dev/null
 
-# 5. Run the compilation non-interactively inside the container
-echo "====> Compiling inside the KDE Neon environment..."
+echo "====> Building inside the KDE Neon container..."
 podman run --rm \
-  --userns=keep-id \
-  -v "$PROJECT_ROOT:/src:ro,Z" \
-  -v "$VOLUME_NAME:/workspace:Z" \
-  -w /workspace \
-  "$IMAGE_NAME" \
-  bash -c "
-    set -euo pipefail
+    -i \
+    --userns=keep-id \
+    -e KERYTHING_WITH_KF6="$KERYTHING_WITH_KF6" \
+    -e TARBALL_NAME="$TARBALL_NAME" \
+    -v "$PROJECT_ROOT:/src:ro,Z" \
+    -v "$VOLUME_NAME:/workspace:Z" \
+    -w /workspace \
+    "$IMAGE_NAME" \
+    bash -s <<'EOF'
+set -euo pipefail
 
-    echo '--> Configuring CMake...'
-    cmake -S /src -B build \
-      -G Ninja \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr \
-      -DKERYTHING_WITH_KF6=ON
+echo '--> Configuring CMake...'
+cmake -S /src -B build \
+  -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr \
+  -DKERYTHING_SYSTEMD_SYSTEM_UNIT_DIR=/lib/systemd/system \
+  -DKERYTHING_WITH_KF6="$KERYTHING_WITH_KF6"
 
-    echo '--> Building binaries...'
-    cmake --build build
+echo '--> Building binaries...'
+cmake --build build --parallel
 
-    echo '--> Checking for missing dependencies...'
-    ldd build/kerything | grep 'not found' || true
-    ldd build/kerythingd | grep 'not found' || true
+echo '--> Checking for missing dependencies...'
+ldd build/kerything | grep 'not found' || true
+ldd build/kerythingd | grep 'not found' || true
 
-    echo '--> Performing staged installation...'
-    cmake --install build --prefix ./package
+echo '--> Performing staged installation...'
+DESTDIR=/workspace/package cmake --install build
 
-    echo '--> Creating distribution tarball...'
-    tar -C package -czf '$TARBALL_NAME' .
-  "
+echo '--> Creating distribution tarball...'
+tar -C /workspace/package -czf "/workspace/$TARBALL_NAME" .
+EOF
 
-# 6. Copy the finished tarball back to the dedicated releases directory
 echo "====> Copying artifact back to host..."
 podman run --rm \
-  -v "$VOLUME_NAME:/workspace:Z" \
-  -v "$OUTPUT_DIR:/host:Z" \
-  "$IMAGE_NAME" \
-  cp "/workspace/$TARBALL_NAME" /host/
-
-# 7. Post-build cleanup
-echo "====> Cleaning up scratch volumes..."
-podman volume rm "$VOLUME_NAME" >/dev/null
+    -v "$VOLUME_NAME:/workspace:Z" \
+    -v "$OUTPUT_DIR:/host:Z" \
+    "$IMAGE_NAME" \
+    cp "/workspace/$TARBALL_NAME" /host/
 
 echo "========================================================="
-echo "Success! Your pristine package is ready:"
+echo "Success! Your KDE Neon package tarball is ready:"
 echo " -> $OUTPUT_DIR/$TARBALL_NAME"
 echo "========================================================="

@@ -222,6 +222,66 @@ namespace {
         std::size_t estimatedCount = 0;
     };
 
+    struct RegexPrefilterPlan {
+        std::vector<std::string> requiredLiterals;
+        std::vector<std::string> caseSensitiveRequiredLiterals;
+        std::optional<IndexController::ExtensionSet> requiredExtensions;
+    };
+
+    struct RankedRegexSource {
+        CandidateSource source;
+        std::string literal;
+    };
+
+    struct EffectiveExtensionFilter {
+        IndexController::ExtensionSet extensions;
+        bool impossible = false;
+
+        [[nodiscard]] bool hasFilter() const noexcept
+        {
+            return !extensions.empty();
+        }
+    };
+
+    EffectiveExtensionFilter combineExplicitAndRegexExtensionFilters(
+        const IndexController::ExtensionSet& explicitExtensionFilter,
+        const std::optional<IndexController::ExtensionSet>& regexExtensionFilter
+    ) {
+        EffectiveExtensionFilter result;
+
+        if (explicitExtensionFilter.empty()) {
+            if (regexExtensionFilter) {
+                result.extensions = *regexExtensionFilter;
+            }
+
+            return result;
+        }
+
+        if (!regexExtensionFilter || regexExtensionFilter->empty()) {
+            result.extensions = explicitExtensionFilter;
+            return result;
+        }
+
+        const IndexController::ExtensionSet& smaller =
+            explicitExtensionFilter.size() <= regexExtensionFilter->size()
+                ? explicitExtensionFilter
+                : *regexExtensionFilter;
+
+        const IndexController::ExtensionSet& larger =
+            explicitExtensionFilter.size() <= regexExtensionFilter->size()
+                ? *regexExtensionFilter
+                : explicitExtensionFilter;
+
+        for (const std::string& extension : smaller) {
+            if (larger.contains(extension)) {
+                result.extensions.insert(extension);
+            }
+        }
+
+        result.impossible = result.extensions.empty();
+        return result;
+    }
+
     bool isAsciiWordCharacter(unsigned char c) noexcept
     {
         return std::isalnum(c) || c == '_';
@@ -319,6 +379,49 @@ namespace {
         return regexPattern;
     }
 
+    std::string searchQueryForPlainRegexLiteralFastPath(
+        const IndexController::ParsedSearchQuery& parsedQuery,
+        std::string_view literal
+    ) {
+        std::string query(literal);
+
+        if (!parsedQuery.extensions.empty()) {
+            if (!query.empty()) {
+                query += ' ';
+            }
+
+            query += "ext:";
+
+            bool firstExtension = true;
+            for (const std::string& extension : parsedQuery.extensions) {
+                if (!firstExtension) {
+                    query += ';';
+                }
+
+                query += extension;
+                firstExtension = false;
+            }
+        }
+
+        if (parsedQuery.filesOnly) {
+            if (!query.empty()) {
+                query += ' ';
+            }
+
+            query += "file:";
+        }
+
+        if (parsedQuery.foldersOnly) {
+            if (!query.empty()) {
+                query += ' ';
+            }
+
+            query += "folder:";
+        }
+
+        return query;
+    }
+
     re2::RE2::Options kerythingRegexOptions(
         const IndexController::SearchOptions& searchOptions
     ) {
@@ -374,11 +477,51 @@ namespace {
             case '{':
             case '}':
             case '|':
+            case '-':
                 return true;
 
             default:
                 return false;
         }
+    }
+
+    std::optional<std::string> plainRegexLiteralText(std::string_view pattern)
+    {
+        std::string literal;
+        literal.reserve(pattern.size());
+
+        for (std::size_t i = 0; i < pattern.size(); ++i) {
+            const char c = pattern[i];
+
+            if (c == '\\') {
+                if (i + 1 >= pattern.size()) {
+                    return std::nullopt;
+                }
+
+                const char escaped = pattern[++i];
+
+                /*
+                 * Escaped regex operators are still literal text, e.g. "\.txt"
+                 * means ".txt". Escapes such as "\d", "\w", "\s", "\p{...}",
+                 * and "\x.." are not plain literal text, so keep them on the
+                 * RE2 path.
+                 */
+                if (!escapedRegexCharIsLiteral(escaped)) {
+                    return std::nullopt;
+                }
+
+                literal.push_back(escaped);
+                continue;
+            }
+
+            if (regexOperatorBreaksMandatoryLiteralRun(c)) {
+                return std::nullopt;
+            }
+
+            literal.push_back(c);
+        }
+
+        return literal;
     }
 
     std::vector<std::string> extractConservativeRegexLiteralRuns(std::string_view pattern)
@@ -417,6 +560,52 @@ namespace {
             }
         };
 
+        auto skipRegexGroup = [&](std::size_t& i) {
+            int depth = 1;
+            bool escaped = false;
+            bool inCharacterClass = false;
+
+            while (++i < pattern.size()) {
+                const char groupChar = pattern[i];
+
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+
+                if (groupChar == '\\') {
+                    escaped = true;
+                    continue;
+                }
+
+                if (inCharacterClass) {
+                    if (groupChar == ']') {
+                        inCharacterClass = false;
+                    }
+
+                    continue;
+                }
+
+                if (groupChar == '[') {
+                    inCharacterClass = true;
+                    continue;
+                }
+
+                if (groupChar == '(') {
+                    ++depth;
+                    continue;
+                }
+
+                if (groupChar == ')') {
+                    --depth;
+
+                    if (depth == 0) {
+                        break;
+                    }
+                }
+            }
+        };
+
         for (std::size_t i = 0; i < pattern.size(); ++i) {
             const char c = pattern[i];
 
@@ -447,11 +636,18 @@ namespace {
                 /*
                  * Groups can contain alternation, captures, optional constructs,
                  * and quantifiers applied after the closing ')'. Rather than try
-                 * to prove which literals remain mandatory, disable the literal
-                 * prefilter and let RE2 evaluate the full regex during refinement.
+                 * to prove which literals inside the group are mandatory, skip
+                 * the group and continue collecting literals that occur outside it.
+                 *
+                 * This preserves useful safe literals in patterns such as:
+                 *
+                 *   (abc|def)xyz     => xyz
+                 *   foo(bar)?baz     => foo, baz
+                 *   foo(?:bar|baz)$  => foo
                  */
-                disableLiteralPrefilter = true;
-                break;
+                flush();
+                skipRegexGroup(i);
+                continue;
             }
 
             if (c == '\\') {
@@ -591,10 +787,31 @@ namespace {
         return false;
     }
 
+    bool hasUnescapedTrailingRegexEndAnchor(std::string_view pattern)
+    {
+        if (pattern.empty() || pattern.back() != '$') {
+            return false;
+        }
+
+        std::size_t backslashCount = 0;
+        std::size_t pos = pattern.size() - 1;
+
+        while (pos > 0 && pattern[pos - 1] == '\\') {
+            ++backslashCount;
+            --pos;
+        }
+
+        return backslashCount % 2 == 0;
+    }
+
     std::optional<IndexController::ExtensionSet> extractRegexFinalExtensionAlternation(
         std::string_view pattern
     ) {
         if (hasTopLevelRegexAlternation(pattern)) {
+            return std::nullopt;
+        }
+
+        if (!hasUnescapedTrailingRegexEndAnchor(pattern)) {
             return std::nullopt;
         }
 
@@ -667,9 +884,10 @@ namespace {
                 ++pos;
             }
 
-            // Only use this optimization when the extension group is at the end
-            // of the regex, apart from an optional trailing '$'. This keeps the
-            // prefilter safe and predictable.
+            // Only use this optimization when the extension group is anchored at
+            // the end of the regex. Without a trailing '$', a pattern such as
+            // "\.jou" can still match "file.journal", so filtering to extension
+            // "jou" would incorrectly discard valid matches.
             if (pos != pattern.size()) {
                 continue;
             }
@@ -697,6 +915,10 @@ namespace {
         std::string_view pattern
     ) {
         if (hasTopLevelRegexAlternation(pattern)) {
+            return std::nullopt;
+        }
+
+        if (!hasUnescapedTrailingRegexEndAnchor(pattern)) {
             return std::nullopt;
         }
 
@@ -1597,6 +1819,252 @@ namespace {
         std::vector<uint8_t>& postings)
     {
         buildCompactTrigramIndexFromSortedEntries(sortedEntries, ranges, postings);
+    }
+
+    RegexPrefilterPlan buildRegexPrefilterPlan(
+        std::string_view pattern,
+        std::string_view lowercasePattern
+    ) {
+        RegexPrefilterPlan plan;
+
+        /*
+         * This is intentionally conservative. Each fact stored in the plan must be
+         * mandatory for every possible match. RE2 remains the final source of truth
+         * during refinement.
+         *
+         * requiredLiterals are lowercased for index lookup and case-insensitive
+         * refinement. caseSensitiveRequiredLiterals preserve the user's original
+         * regex text for case-sensitive pre-RE2 refinement.
+         */
+        plan.requiredLiterals = extractConservativeRegexLiteralRuns(lowercasePattern);
+        plan.caseSensitiveRequiredLiterals = extractConservativeRegexLiteralRuns(pattern);
+
+        plan.requiredExtensions = extractRegexFinalExtensionAlternation(lowercasePattern);
+        if (!plan.requiredExtensions) {
+            plan.requiredExtensions = extractRegexFinalSimpleExtension(lowercasePattern);
+        }
+
+        return plan;
+    }
+
+    bool containsAllRequiredRegexLiterals(
+        std::string_view name,
+        const std::vector<std::string>& requiredLiterals
+    ) {
+        for (const std::string& literal : requiredLiterals) {
+            if (!IndexController::contains(name, literal)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    std::vector<QueryGram> rarestGramsForRegexLiteral(
+        const IndexController::DeviceIndex& index,
+        std::string_view literal
+    ) {
+        std::vector<QueryGram> grams = gramsForKeyword(index, literal);
+
+        /*
+         * Every gram from a mandatory literal is also mandatory, so using all of
+         * them is correct. However, intersecting many common grams can cost more
+         * than simply refining a smaller candidate set with RE2. Keep only the
+         * rarest few grams per literal as a safe, high-value prefilter.
+         */
+        static constexpr std::size_t MaxRegexGramsPerLiteral = 4;
+
+        if (grams.size() > MaxRegexGramsPerLiteral) {
+            grams.resize(MaxRegexGramsPerLiteral);
+        }
+
+        return grams;
+    }
+
+    std::vector<RankedRegexSource> rankedRegexSourcesForDevice(
+        const IndexController::DeviceIndex& index,
+        const RegexPrefilterPlan& plan,
+        const EffectiveExtensionFilter& effectiveExtensionFilter
+    ) {
+        std::vector<RankedRegexSource> sources;
+
+        /*
+         * Explicit ext: filters and regex-derived extension filters have already
+         * been combined into effectiveExtensionFilter. Add that combined set as
+         * one ranked source so candidate generation only scans extension buckets
+         * that can survive all extension constraints.
+         */
+        if (effectiveExtensionFilter.hasFilter()) {
+            sources.push_back({
+                CandidateSource{
+                    CandidateSourceKind::Extension,
+                    0,
+                    estimateExtensionCandidateCountBeforeDedup(
+                        index,
+                        effectiveExtensionFilter.extensions
+                    )
+                },
+                {}
+            });
+        }
+
+        for (const std::string& literal : plan.requiredLiterals) {
+            const std::vector<QueryGram> grams =
+                rarestGramsForRegexLiteral(index, literal);
+
+            sources.reserve(sources.size() + grams.size());
+
+            for (const QueryGram& gram : grams) {
+                sources.push_back({
+                    CandidateSource{
+                        gram.kind == QueryGramKind::Bigram
+                            ? CandidateSourceKind::Bigram
+                            : CandidateSourceKind::Trigram,
+                        gram.gram,
+                        gram.postingCount
+                    },
+                    literal
+                });
+            }
+        }
+
+        std::sort(
+            sources.begin(),
+            sources.end(),
+            [](const RankedRegexSource& lhs, const RankedRegexSource& rhs) {
+                const CandidateSource& a = lhs.source;
+                const CandidateSource& b = rhs.source;
+
+                if (a.kind != b.kind) {
+                    return a.kind < b.kind;
+                }
+
+                if (a.gram != b.gram) {
+                    return a.gram < b.gram;
+                }
+
+                return a.estimatedCount < b.estimatedCount;
+            }
+        );
+
+        sources.erase(
+            std::unique(
+                sources.begin(),
+                sources.end(),
+                [](const RankedRegexSource& lhs, const RankedRegexSource& rhs) {
+                    return lhs.source.kind == rhs.source.kind &&
+                           lhs.source.gram == rhs.source.gram;
+                }
+            ),
+            sources.end()
+        );
+
+        std::sort(
+            sources.begin(),
+            sources.end(),
+            [](const RankedRegexSource& lhs, const RankedRegexSource& rhs) {
+                const CandidateSource& a = lhs.source;
+                const CandidateSource& b = rhs.source;
+
+                if (a.estimatedCount != b.estimatedCount) {
+                    return a.estimatedCount < b.estimatedCount;
+                }
+
+                if (a.kind != b.kind) {
+                    return a.kind < b.kind;
+                }
+
+                return a.gram < b.gram;
+            }
+        );
+
+        return sources;
+    }
+
+    bool intersectCandidateSetWithRegexSource(
+        const IndexController::DeviceIndex& index,
+        const RankedRegexSource& rankedSource,
+        const EffectiveExtensionFilter& effectiveExtensionFilter,
+        std::vector<uint32_t>& candidates,
+        bool& firstSource,
+        IndexController::SearchDiagnostics* diagnostics
+    ) {
+        const CandidateSource& source = rankedSource.source;
+
+        switch (source.kind) {
+            case CandidateSourceKind::Bigram:
+                if (diagnostics) {
+                    ++diagnostics->bigramSourcesUsed;
+                }
+
+                return intersectCandidateSetWithBigram(
+                    index,
+                    source.gram,
+                    source.estimatedCount,
+                    candidates,
+                    firstSource
+                );
+
+            case CandidateSourceKind::Trigram:
+                if (diagnostics) {
+                    ++diagnostics->trigramSourcesUsed;
+                }
+
+                return intersectCandidateSetWithTrigram(
+                    index,
+                    source.gram,
+                    source.estimatedCount,
+                    candidates,
+                    firstSource
+                );
+
+            case CandidateSourceKind::Extension:
+                if (!effectiveExtensionFilter.hasFilter()) {
+                    candidates.clear();
+                    return false;
+                }
+
+                return intersectCandidateSetWithExtensionCandidates(
+                    index,
+                    effectiveExtensionFilter.extensions,
+                    candidates,
+                    firstSource,
+                    diagnostics
+                );
+        }
+
+        candidates.clear();
+        return false;
+    }
+
+    std::vector<uint32_t> collectBestFallbackRegexCandidates(
+        const IndexController::DeviceIndex& index,
+        const EffectiveExtensionFilter& effectiveExtensionFilter,
+        IndexController::SearchDiagnostics* diagnostics
+    ) {
+        if (!effectiveExtensionFilter.hasFilter()) {
+            return {};
+        }
+
+        if (diagnostics) {
+            diagnostics->hasExtensionFilter = true;
+            ++diagnostics->extensionSourcesUsed;
+            diagnostics->extensionSourceRawCandidateCount +=
+                estimateExtensionCandidateCountBeforeDedup(
+                    index,
+                    effectiveExtensionFilter.extensions
+                );
+        }
+
+        std::vector<uint32_t> candidates =
+            collectExtensionCandidates(index, effectiveExtensionFilter.extensions);
+
+        if (diagnostics) {
+            diagnostics->extensionSourceDedupCandidateCount += candidates.size();
+            diagnostics->candidateCountBeforeRefine += candidates.size();
+        }
+
+        return candidates;
     }
 
     QByteArray liveEntryKey(quint64 parentInode, std::string_view name)
@@ -6887,9 +7355,13 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
         const auto refinementStart = Clock::now();
 
-        // 4. Refinement Phase
-        // If no trigrams were used (all keywords < 3 chars), we scan everything.
-        // Otherwise, we only scan the filtered candidates.
+        /*
+         * Refinement phase.
+         *
+         * If no indexed candidate source was available for this device, scan
+         * either extension candidates or all records. Otherwise, refine only the
+         * records that survived candidate-source intersection.
+         */
         auto resultCallback = [&](uint32_t recordIdx) {
             ++debugRefinementChecks;
 
@@ -6963,10 +7435,11 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
              * No ranked candidate source was available for this device.
              *
              * This usually means every keyword is shorter than the indexed
-             * n-gram width currently available, for example a one-character
-             * query. If an extension filter exists but was not added as a ranked
-             * source, collect extension candidates here; otherwise scan the
-             * device records linearly and let refinement apply the query.
+             * n-gram widths currently available, for example a one-character
+             * query, or that no useful indexed source survived planning. If an
+             * extension filter exists but was not added as a ranked source,
+             * collect extension candidates here; otherwise scan the device
+             * records linearly and let refinement apply the query.
              *
              * Correctness does not depend on whether a filter was used as a
              * candidate source. All query terms, type filters, and extension
@@ -7145,6 +7618,53 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     }
 
     const std::string regexPattern = regexPatternFromParsedQuery(parsedQuery);
+
+    /*
+     * Fast path for the common interactive case where regex mode is enabled but
+     * the user has only typed a plain literal fragment so far, e.g. "holiday".
+     *
+     * Restrict this to a single regex token for now. Regex "foo bar" means a
+     * literal space between foo and bar, while normal search would mean
+     * "foo AND bar", so routing multi-token regex patterns through normal search
+     * would change semantics.
+     */
+    if (regexTokens.size() == 1) {
+        if (const std::optional<std::string> literal =
+                plainRegexLiteralText(regexPattern)) {
+            SearchOptions literalOptions = options;
+
+            /*
+             * Regex search does not apply normal whole-word semantics. Keep the
+             * fast path behavior aligned with regex PartialMatch by disabling
+             * whole-word refinement here.
+             */
+            literalOptions.matchWholeWord = false;
+
+            const std::string fastPathQuery =
+                searchQueryForPlainRegexLiteralFastPath(
+                    parsedQuery,
+                    *literal
+                );
+
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cerr << "performRegexSearchWithError"
+                      << " plain literal fast path"
+                      << " query=" << query
+                      << " literal=" << *literal
+                      << "\n";
+#endif
+
+            searchResult.records =
+                performTrigramSearch(
+                    fastPathQuery,
+                    literalOptions,
+                    diagnostics
+                );
+
+            return searchResult;
+        }
+    }
+
     const std::string prefilterPattern = asciiLowercaseCopy(regexPattern);
 
     re2::RE2 regex(regexPattern, kerythingRegexOptions(options));
@@ -7164,9 +7684,6 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         return searchResult;
     }
 
-    std::vector<std::string> literalRuns =
-        extractConservativeRegexLiteralRuns(prefilterPattern);
-
     /*
      * Regex prefilters are correctness-sensitive optimizations. They may only
      * restrict candidates using facts that are mandatory for every possible
@@ -7174,19 +7691,45 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
      * corresponding prefilter is omitted and RE2 remains the source of truth
      * during refinement.
      */
-    std::optional<ExtensionSet> regexExtensionFilter =
-        extractRegexFinalExtensionAlternation(prefilterPattern);
+    const RegexPrefilterPlan regexPrefilterPlan =
+        buildRegexPrefilterPlan(regexPattern, prefilterPattern);
 
-    if (!regexExtensionFilter) {
-        regexExtensionFilter = extractRegexFinalSimpleExtension(prefilterPattern);
+    const EffectiveExtensionFilter effectiveExtensionFilter =
+        combineExplicitAndRegexExtensionFilters(
+            extensionFilter,
+            regexPrefilterPlan.requiredExtensions
+        );
+
+    if (foldersOnly && effectiveExtensionFilter.hasFilter()) {
+        return searchResult;
+    }
+
+    if (effectiveExtensionFilter.impossible) {
+        if (diagnostics) {
+            diagnostics->hasExtensionFilter = true;
+            diagnostics->resultCount = 0;
+        }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cerr << "regex search prefilter"
+                  << " pattern=" << regexPattern
+                  << " impossible extension intersection"
+                  << " elapsed=" << elapsedMsSince(regexSearchStart)
+                  << "ms\n";
+#endif
+
+        return searchResult;
     }
 
 #ifdef KERYTHING_ENABLE_LOGGING
     std::cerr << "regex search prefilter"
               << " pattern=" << regexPattern
-              << " literalRuns=" << literalRuns.size()
-              << " extensionFilter="
-              << (regexExtensionFilter ? regexExtensionFilter->size() : 0)
+              << " requiredLiterals=" << regexPrefilterPlan.requiredLiterals.size()
+              << " requiredExtensions="
+              << (regexPrefilterPlan.requiredExtensions
+                  ? regexPrefilterPlan.requiredExtensions->size()
+                  : 0)
+              << " effectiveExtensions=" << effectiveExtensionFilter.extensions.size()
               << "\n";
 #endif
 
@@ -7204,60 +7747,50 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
         const DeviceIndex& index = *indexPtr;
 
         std::vector<uint32_t> candidates;
-        bool firstTrigram = true;
-        bool trigramsUsed = false;
-        bool extensionCandidatesUsed = false;
+        bool firstSource = true;
+        bool indexedSourcesUsed = false;
         bool skipDevice = false;
 
-        if (regexExtensionFilter && !regexExtensionFilter->empty()) {
-            if (diagnostics) {
-                diagnostics->hasExtensionFilter = true;
-                ++diagnostics->extensionSourcesUsed;
-                diagnostics->extensionSourceRawCandidateCount +=
-                    estimateExtensionCandidateCountBeforeDedup(index, *regexExtensionFilter);
+        const std::vector<RankedRegexSource> rankedSources =
+            rankedRegexSourcesForDevice(
+                index,
+                regexPrefilterPlan,
+                effectiveExtensionFilter
+            );
+
+        for (const RankedRegexSource& rankedSource : rankedSources) {
+            indexedSourcesUsed = true;
+
+            if (!intersectCandidateSetWithRegexSource(
+                    index,
+                    rankedSource,
+                    effectiveExtensionFilter,
+                    candidates,
+                    firstSource,
+                    diagnostics
+            )) {
+                skipDevice = true;
+
+                if (diagnostics && rankedSource.source.estimatedCount == 0) {
+                    ++diagnostics->emptyPostingListSkips;
+                }
+
+                break;
             }
-
-            candidates = collectExtensionCandidates(index, *regexExtensionFilter);
-
-            if (diagnostics) {
-                diagnostics->extensionSourceDedupCandidateCount += candidates.size();
-            }
-
-            extensionCandidatesUsed = true;
-            firstTrigram = candidates.empty();
 
             if (candidates.empty()) {
-                continue;
-            }
-        }
-
-        for (const std::string& literalRun : literalRuns) {
-            const std::vector<QueryGram> literalGrams =
-                gramsForKeyword(index, literalRun);
-
-            for (const QueryGram& queryGram : literalGrams) {
-                trigramsUsed = true;
-
-                if (diagnostics) {
-                    if (queryGram.kind == QueryGramKind::Bigram) {
-                        ++diagnostics->bigramSourcesUsed;
-                    } else {
-                        ++diagnostics->trigramSourcesUsed;
-                    }
-                }
-
-                if (!intersectCandidateSetWithGram(
-                    index,
-                    queryGram,
-                    candidates,
-                    firstTrigram
-                )) {
-                    skipDevice = true;
-                    break;
-                }
+                skipDevice = true;
+                break;
             }
 
-            if (skipDevice) {
+            /*
+             * Once the candidate set is reasonably small, RE2 refinement is usually
+             * cheaper than intersecting more posting lists. This is only a performance
+             * heuristic; correctness is unchanged because RE2 still checks every
+             * surviving candidate.
+             */
+            static constexpr std::size_t RegexCandidateEarlyRefineLimit = 50'000;
+            if (candidates.size() <= RegexCandidateEarlyRefineLimit) {
                 break;
             }
         }
@@ -7290,7 +7823,7 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
                 return;
             }
 
-            if (hasExtensionFilter && isDirectory) {
+            if (effectiveExtensionFilter.hasFilter() && isDirectory) {
                 return;
             }
 
@@ -7301,8 +7834,12 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
                 return;
             }
 
-            if (hasExtensionFilter &&
-                !matchesFileExtensionFilter(rec, lowercaseName, extensionFilter)) {
+            if (effectiveExtensionFilter.hasFilter() &&
+                !matchesFileExtensionFilter(
+                    rec,
+                    lowercaseName,
+                    effectiveExtensionFilter.extensions
+                )) {
                 return;
             }
 
@@ -7315,6 +7852,31 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
                 rec.nameLen
             );
 
+            /*
+             * Candidate sources may use only the rarest few grams from each
+             * mandatory literal. Before invoking RE2, cheaply verify that the
+             * full mandatory literal runs are actually present.
+             *
+             * For case-insensitive regex searches, check lowercased literals
+             * against the lowercased filename. For case-sensitive regex searches,
+             * check the original-case literals against the original filename.
+             */
+            if (options.matchCase) {
+                if (!containsAllRequiredRegexLiterals(
+                        name,
+                        regexPrefilterPlan.caseSensitiveRequiredLiterals
+                    )) {
+                    return;
+                }
+            } else {
+                if (!containsAllRequiredRegexLiterals(
+                        lowercaseName,
+                        regexPrefilterPlan.requiredLiterals
+                    )) {
+                    return;
+                }
+            }
+
             const re2::StringPiece input(name.data(), static_cast<int>(name.size()));
             if (!re2::RE2::PartialMatch(input, regex)) {
                 return;
@@ -7323,7 +7885,7 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             appendResult(index, recordIdx);
         };
 
-        if (trigramsUsed || extensionCandidatesUsed) {
+        if (indexedSourcesUsed) {
             if (diagnostics) {
                 diagnostics->candidateCountBeforeRefine += candidates.size();
             }
@@ -7334,20 +7896,15 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             continue;
         }
 
-        if (hasExtensionFilter) {
-            const auto extensionCandidates =
-                collectExtensionCandidates(index, extensionFilter);
+        const std::vector<uint32_t> fallbackCandidates =
+            collectBestFallbackRegexCandidates(
+                index,
+                effectiveExtensionFilter,
+                diagnostics
+            );
 
-            if (diagnostics) {
-                diagnostics->hasExtensionFilter = true;
-                ++diagnostics->extensionSourcesUsed;
-                diagnostics->extensionSourceRawCandidateCount +=
-                    estimateExtensionCandidateCountBeforeDedup(index, extensionFilter);
-                diagnostics->extensionSourceDedupCandidateCount += extensionCandidates.size();
-                diagnostics->candidateCountBeforeRefine += extensionCandidates.size();
-            }
-
-            for (const uint32_t recordIdx : extensionCandidates) {
+        if (!fallbackCandidates.empty()) {
+            for (const uint32_t recordIdx : fallbackCandidates) {
                 resultCallback(recordIdx);
             }
             continue;

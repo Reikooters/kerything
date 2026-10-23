@@ -5,12 +5,14 @@
 #define KERYTHING_SAVESEARCHFILTERDIALOG_H
 
 #include <QDialog>
+#include <QPalette>
 
 #include <vector>
 
 #include "Preferences.h"
 
 class QLineEdit;
+class QAction;
 
 class SaveSearchFilterDialog final : public QDialog {
 public:
@@ -24,12 +26,20 @@ public:
 
 private:
     void acceptIfValid();
+    void updateValidationState();
+    void clearValidationState();
 
     std::vector<SearchFilterPreference> existingFilters_;
     SearchFilterPreference searchFilter_;
     QLineEdit* nameEdit_ = nullptr;
     QLineEdit* macroEdit_ = nullptr;
     QLineEdit* queryEdit_ = nullptr;
+    QAction* nameWarningAction_ = nullptr;
+    QAction* macroWarningAction_ = nullptr;
+    QAction* queryWarningAction_ = nullptr;
+    QPalette nameEditPalette_;
+    QPalette macroEditPalette_;
+    QPalette queryEditPalette_;
 };
 
 #endif // KERYTHING_SAVESEARCHFILTERDIALOG_H

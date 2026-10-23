@@ -102,6 +102,8 @@ namespace {
     }
 }
 
+namespace SearchFilterUtils {
+
 QString normalizedSearchFilterMacro(QString macro)
 {
     macro = macro.trimmed();
@@ -457,4 +459,6 @@ std::vector<SearchFilterValidationIssue> validateAndNormalizeSearchFilters(
     }
 
     return issues;
+}
+
 }

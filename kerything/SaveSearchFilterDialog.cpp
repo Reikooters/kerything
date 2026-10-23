@@ -86,7 +86,10 @@ SaveSearchFilterDialog::SaveSearchFilterDialog(
     auto* formLayout = new QFormLayout();
 
     nameEdit_ = new QLineEdit(this);
-    nameEdit_->setText(uniqueSearchFilterName(QStringLiteral("New Filter"), existingFilters_));
+    nameEdit_->setText(SearchFilterUtils::uniqueSearchFilterName(
+        QStringLiteral("New Filter"),
+        existingFilters_
+    ));
     nameWarningAction_ = addValidationWarningAction(nameEdit_);
     nameEditPalette_ = nameEdit_->palette();
     formLayout->addRow(QStringLiteral("Name:"), nameEdit_);
@@ -132,13 +135,14 @@ void SaveSearchFilterDialog::acceptIfValid()
 {
     std::vector<SearchFilterPreference> filters = existingFilters_;
     SearchFilterPreference candidate;
-    candidate.id = newCustomSearchFilterId();
+    candidate.id = SearchFilterUtils::newCustomSearchFilterId();
     candidate.name = nameEdit_->text();
     candidate.macro = macroEdit_->text();
     candidate.query = queryEdit_->text();
     filters.push_back(candidate);
 
-    const std::vector<SearchFilterValidationIssue> issues = validateAndNormalizeSearchFilters(filters);
+    const std::vector<SearchFilterUtils::SearchFilterValidationIssue> issues =
+        SearchFilterUtils::validateAndNormalizeSearchFilters(filters);
     if (!issues.empty()) {
         updateValidationState();
         QMessageBox::warning(
@@ -147,19 +151,19 @@ void SaveSearchFilterDialog::acceptIfValid()
             issues.front().message
         );
 
-        for (const SearchFilterValidationIssue& issue : issues) {
+        for (const SearchFilterUtils::SearchFilterValidationIssue& issue : issues) {
             if (issue.row != static_cast<int>(existingFilters_.size())) {
                 continue;
             }
 
             switch (issue.column) {
-                case SearchFilterColumn::Name:
+                case SearchFilterUtils::SearchFilterColumn::Name:
                     nameEdit_->setFocus();
                     return;
-                case SearchFilterColumn::Macro:
+                case SearchFilterUtils::SearchFilterColumn::Macro:
                     macroEdit_->setFocus();
                     return;
-                case SearchFilterColumn::Query:
+                case SearchFilterUtils::SearchFilterColumn::Query:
                     queryEdit_->setFocus();
                     return;
             }
@@ -184,22 +188,23 @@ void SaveSearchFilterDialog::updateValidationState()
     candidate.query = queryEdit_->text();
     filters.push_back(std::move(candidate));
 
-    const std::vector<SearchFilterValidationIssue> issues = validateAndNormalizeSearchFilters(filters);
+    const std::vector<SearchFilterUtils::SearchFilterValidationIssue> issues =
+        SearchFilterUtils::validateAndNormalizeSearchFilters(filters);
     const int candidateRow = static_cast<int>(existingFilters_.size());
 
-    for (const SearchFilterValidationIssue& issue : issues) {
+    for (const SearchFilterUtils::SearchFilterValidationIssue& issue : issues) {
         if (issue.row != candidateRow) {
             continue;
         }
 
         switch (issue.column) {
-            case SearchFilterColumn::Name:
+            case SearchFilterUtils::SearchFilterColumn::Name:
                 markFieldInvalid(nameEdit_, nameWarningAction_, issue.message);
                 break;
-            case SearchFilterColumn::Macro:
+            case SearchFilterUtils::SearchFilterColumn::Macro:
                 markFieldInvalid(macroEdit_, macroWarningAction_, issue.message);
                 break;
-            case SearchFilterColumn::Query:
+            case SearchFilterUtils::SearchFilterColumn::Query:
                 markFieldInvalid(queryEdit_, queryWarningAction_, issue.message);
                 break;
         }

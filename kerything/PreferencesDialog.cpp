@@ -1172,7 +1172,7 @@ QWidget* PreferencesDialog::createFiltersPage()
             const QSignalBlocker blocker(filterTable_);
 
             if (item->column() == FilterMacroColumn) {
-                const QString macro = normalizedSearchFilterMacro(item->text());
+                const QString macro = SearchFilterUtils::normalizedSearchFilterMacro(item->text());
                 item->setToolTip(
                     macro.isEmpty()
                         ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
@@ -1198,11 +1198,11 @@ QWidget* PreferencesDialog::createFiltersPage()
         const int row = filterTable_->rowCount();
         filterTable_->insertRow(row);
 
-        auto* nameItem = new QTableWidgetItem(uniqueSearchFilterName(
+        auto* nameItem = new QTableWidgetItem(SearchFilterUtils::uniqueSearchFilterName(
             QStringLiteral("New Filter"),
             filtersFromTable()
         ));
-        nameItem->setData(FilterIdRole, newCustomSearchFilterId());
+        nameItem->setData(FilterIdRole, SearchFilterUtils::newCustomSearchFilterId());
 
         auto* macroItem = new QTableWidgetItem();
         macroItem->setToolTip(QStringLiteral("Optional macro, such as audio. Type audio: in search to use this filter."));
@@ -1237,11 +1237,11 @@ QWidget* PreferencesDialog::createFiltersPage()
         const int row = filterTable_->rowCount();
         filterTable_->insertRow(row);
 
-        auto* nameItem = new QTableWidgetItem(uniqueSearchFilterName(
+        auto* nameItem = new QTableWidgetItem(SearchFilterUtils::uniqueSearchFilterName(
             sourceNameItem->text() + QStringLiteral(" Copy"),
             filtersFromTable()
         ));
-        nameItem->setData(FilterIdRole, newCustomSearchFilterId());
+        nameItem->setData(FilterIdRole, SearchFilterUtils::newCustomSearchFilterId());
 
         auto* macroItem = new QTableWidgetItem();
         macroItem->setToolTip(QStringLiteral("Optional macro, such as audio. Type audio: in search to use this filter."));
@@ -2477,8 +2477,8 @@ std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
         }
 
         filter.name = nameItem->text().trimmed();
-        filter.macro = normalizedSearchFilterMacro(macroItem ? macroItem->text() : QString());
-        filter.query = normalizedSearchFilterQuery(queryItem->text());
+        filter.macro = SearchFilterUtils::normalizedSearchFilterMacro(macroItem ? macroItem->text() : QString());
+        filter.query = SearchFilterUtils::normalizedSearchFilterQuery(queryItem->text());
 
         filters.push_back(std::move(filter));
     }
@@ -2625,7 +2625,7 @@ void PreferencesDialog::clearFilterValidationState() const
             item->setIcon(QIcon());
 
             if (column == FilterMacroColumn) {
-                const QString macro = normalizedSearchFilterMacro(item->text());
+                const QString macro = SearchFilterUtils::normalizedSearchFilterMacro(item->text());
                 item->setToolTip(
                     macro.isEmpty()
                         ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
@@ -2743,7 +2743,8 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
         filters.push_back(std::move(filter));
     }
 
-    const std::vector<SearchFilterValidationIssue> issues = validateAndNormalizeSearchFilters(filters);
+    const std::vector<SearchFilterUtils::SearchFilterValidationIssue> issues =
+        SearchFilterUtils::validateAndNormalizeSearchFilters(filters);
 
     {
         const QSignalBlocker blocker(filterTable_);
@@ -2772,12 +2773,12 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
         return true;
     }
 
-    for (const SearchFilterValidationIssue& issue : issues) {
+    for (const SearchFilterUtils::SearchFilterValidationIssue& issue : issues) {
         const int column = static_cast<int>(issue.column);
         markFilterCellInvalid(issue.row, column, issue.message);
     }
 
-    const SearchFilterValidationIssue& firstIssue = issues.front();
+    const SearchFilterUtils::SearchFilterValidationIssue& firstIssue = issues.front();
 
     if (focusFirstInvalid) {
         constexpr int FiltersPageIndex = 2;

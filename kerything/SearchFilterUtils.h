@@ -9,6 +9,8 @@
 
 #include "Preferences.h"
 
+namespace SearchFilterUtils {
+
 enum class SearchFilterColumn {
     Name,
     Macro,
@@ -31,5 +33,7 @@ struct SearchFilterValidationIssue {
 [[nodiscard]] std::vector<SearchFilterValidationIssue> validateAndNormalizeSearchFilters(
     std::vector<SearchFilterPreference>& filters
 );
+
+} // namespace SearchFilterUtils
 
 #endif // KERYTHING_SEARCHFILTERUTILS_H

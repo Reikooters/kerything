@@ -22,10 +22,8 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
-#include <QSet>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSizePolicy>
@@ -45,6 +43,7 @@
 #include "DeviceCapabilities.h"
 #include "HoverRowHighlight.h"
 #include "PreferencesDialogPage.h"
+#include "SearchFilterUtils.h"
 #include "SearchResultColumns.h"
 
 namespace {
@@ -267,6 +266,45 @@ void PreferencesDialog::setShowPreviewPane(bool enabled)
 
     const QSignalBlocker blocker(showPreviewPaneCheckBox_);
     showPreviewPaneCheckBox_->setChecked(enabled);
+    updateApplyButtonEnabled();
+}
+
+void PreferencesDialog::appendSearchFilter(const SearchFilterPreference& filter)
+{
+    if (!filterTable_) {
+        return;
+    }
+
+    for (int row = 0; row < filterTable_->rowCount(); ++row) {
+        const auto* nameItem = filterTable_->item(row, FilterNameColumn);
+        if (nameItem && nameItem->data(FilterIdRole).toString() == filter.id) {
+            return;
+        }
+    }
+
+    originalSearchFilters_.push_back(filter);
+
+    const int row = filterTable_->rowCount();
+    filterTable_->insertRow(row);
+
+    auto* nameItem = new QTableWidgetItem(filter.name);
+    nameItem->setData(FilterIdRole, filter.id);
+
+    auto* macroItem = new QTableWidgetItem(filter.macro);
+    macroItem->setToolTip(
+        filter.macro.trimmed().isEmpty()
+            ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
+            : QStringLiteral("%1:").arg(filter.macro.trimmed())
+    );
+
+    auto* queryItem = new QTableWidgetItem(filter.query);
+    queryItem->setToolTip(filter.query);
+
+    filterTable_->setItem(row, FilterNameColumn, nameItem);
+    filterTable_->setItem(row, FilterMacroColumn, macroItem);
+    filterTable_->setItem(row, FilterQueryColumn, queryItem);
+
+    updateFilterButtonStates();
     updateApplyButtonEnabled();
 }
 
@@ -2444,199 +2482,22 @@ std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
 
 QString PreferencesDialog::uniqueFilterName(const QString& baseName) const
 {
-    QStringList existingNames;
-
-    if (filterTable_) {
-        for (int row = 0; row < filterTable_->rowCount(); ++row) {
-            if (const auto* item = filterTable_->item(row, FilterNameColumn)) {
-                existingNames << item->text().trimmed().toCaseFolded();
-            }
-        }
-    }
-
-    QString candidate = baseName.trimmed().isEmpty()
-        ? QStringLiteral("New Filter")
-        : baseName.trimmed();
-
-    if (!existingNames.contains(candidate.toCaseFolded())) {
-        return candidate;
-    }
-
-    int suffix = 2;
-    while (true) {
-        const QString numbered = QStringLiteral("%1 %2").arg(candidate).arg(suffix);
-        if (!existingNames.contains(numbered.toCaseFolded())) {
-            return numbered;
-        }
-
-        ++suffix;
-    }
+    return uniqueSearchFilterName(baseName, filtersFromTable());
 }
 
 QString PreferencesDialog::newCustomFilterId() const
 {
-    return QStringLiteral("custom-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    return newCustomSearchFilterId();
 }
 
 QString PreferencesDialog::normalizedFilterMacro(QString macro)
 {
-    macro = macro.trimmed();
-
-    while (macro.endsWith(QLatin1Char(':'))) {
-        macro.chop(1);
-        macro = macro.trimmed();
-    }
-
-    return macro;
-}
-
-QString PreferencesDialog::normalizedExtensionFilterToken(QString token)
-{
-    const qsizetype colon = token.indexOf(QLatin1Char(':'));
-
-    if (colon <= 0) {
-        return token;
-    }
-
-    const QString prefix = token.left(colon + 1);
-    QString extensionList = token.mid(colon + 1);
-
-    if (extensionList.isEmpty() || !extensionList.contains(QLatin1Char(','))) {
-        return token;
-    }
-
-    extensionList.replace(QLatin1Char(','), QLatin1Char(';'));
-    return prefix + extensionList;
-}
-
-bool PreferencesDialog::isBuiltInFilterKeyword(const QString& keyword)
-{
-    const QString folded = keyword.trimmed().toCaseFolded();
-
-    return folded == QStringLiteral("ext") ||
-           folded == QStringLiteral("extension") ||
-           folded == QStringLiteral("file") ||
-           folded == QStringLiteral("files") ||
-           folded == QStringLiteral("folder") ||
-           folded == QStringLiteral("folders") ||
-           folded == QStringLiteral("type");
-}
-
-bool PreferencesDialog::isKnownFilterKeyword(
-    const QString& keyword,
-    const QSet<QString>& macroKeywords
-) {
-    const QString folded = keyword.trimmed().toCaseFolded();
-
-    return isBuiltInFilterKeyword(folded) || macroKeywords.contains(folded);
-}
-
-QStringList PreferencesDialog::filterMacroReferencesInQuery(
-    const QString& query,
-    const QSet<QString>& macroKeywords
-) {
-    QStringList references;
-
-    const QStringList tokens = query.split(
-        QRegularExpression(QStringLiteral("\\s+")),
-        Qt::SkipEmptyParts
-    );
-
-    for (const QString& token : tokens) {
-        const QString trimmedToken = token.trimmed();
-
-        if (trimmedToken.size() <= 1 || !trimmedToken.endsWith(QLatin1Char(':'))) {
-            continue;
-        }
-
-        const QString keyword = trimmedToken.left(trimmedToken.size() - 1).trimmed().toCaseFolded();
-
-        if (macroKeywords.contains(keyword)) {
-            references << keyword;
-        }
-    }
-
-    references.removeDuplicates();
-    return references;
+    return normalizedSearchFilterMacro(std::move(macro));
 }
 
 QString PreferencesDialog::normalizedFilterQuery(QString query)
 {
-    query = query.trimmed();
-
-    if (query.isEmpty()) {
-        return query;
-    }
-
-    QStringList normalizedTokens;
-    const QStringList tokens = query.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-    normalizedTokens.reserve(tokens.size());
-
-    for (const QString& token : tokens) {
-        QString trimmedToken = token.trimmed();
-        const QString foldedToken = trimmedToken.toCaseFolded();
-
-        if (foldedToken == QStringLiteral("ext;")) {
-            trimmedToken = QStringLiteral("ext:");
-        } else if (foldedToken == QStringLiteral("extension;")) {
-            trimmedToken = QStringLiteral("extension:");
-        } else if (foldedToken.startsWith(QStringLiteral("ext;"))) {
-            trimmedToken = QStringLiteral("ext:") + trimmedToken.mid(4);
-        } else if (foldedToken.startsWith(QStringLiteral("extension;"))) {
-            trimmedToken = QStringLiteral("extension:") + trimmedToken.mid(10);
-        } else if (foldedToken == QStringLiteral("file;")) {
-            trimmedToken = QStringLiteral("file:");
-        } else if (foldedToken == QStringLiteral("files;")) {
-            trimmedToken = QStringLiteral("files:");
-        } else if (foldedToken == QStringLiteral("folder;")) {
-            trimmedToken = QStringLiteral("folder:");
-        } else if (foldedToken == QStringLiteral("folders;")) {
-            trimmedToken = QStringLiteral("folders:");
-        } else if (foldedToken == QStringLiteral("type;file")) {
-            trimmedToken = QStringLiteral("type:file");
-        } else if (foldedToken == QStringLiteral("type;files")) {
-            trimmedToken = QStringLiteral("type:files");
-        } else if (foldedToken == QStringLiteral("type;folder")) {
-            trimmedToken = QStringLiteral("type:folder");
-        } else if (foldedToken == QStringLiteral("type;folders")) {
-            trimmedToken = QStringLiteral("type:folders");
-        }
-
-        const QString normalizedFoldedToken = trimmedToken.toCaseFolded();
-
-        if (normalizedFoldedToken.startsWith(QStringLiteral("ext:")) ||
-            normalizedFoldedToken.startsWith(QStringLiteral("extension:"))) {
-            normalizedTokens << normalizedExtensionFilterToken(trimmedToken);
-            continue;
-        }
-
-        normalizedTokens << trimmedToken;
-    }
-
-    return normalizedTokens.join(QLatin1Char(' '));
-}
-
-bool PreferencesDialog::isValidFilterMacro(const QString& macro)
-{
-    if (macro.isEmpty()) {
-        return true;
-    }
-
-    for (const QChar c : macro) {
-        const ushort value = c.unicode();
-
-        const bool valid =
-            (value >= 'A' && value <= 'Z') ||
-            (value >= 'a' && value <= 'z') ||
-            (value >= '0' && value <= '9') ||
-            value == '_';
-
-        if (!valid) {
-            return false;
-        }
-    }
-
-    return true;
+    return normalizedSearchFilterQuery(std::move(query));
 }
 
 QList<int> PreferencesDialog::selectedFilterRows() const
@@ -2880,325 +2741,73 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
 
     clearFilterValidationState();
 
-    QHash<QString, QList<int>> rowsByName;
-    QHash<QString, QList<int>> rowsByMacro;
-    QHash<QString, int> rowByMacro;
-    QHash<QString, QString> queryByMacro;
-    QSet<QString> macroKeywords;
-
-    bool valid = true;
-    int firstInvalidRow = -1;
-    int firstInvalidColumn = -1;
-    QString firstError;
-
-    auto rememberFirstInvalid = [&](int row, int column, const QString& message) {
-        if (firstInvalidRow >= 0) {
-            return;
-        }
-
-        firstInvalidRow = row;
-        firstInvalidColumn = column;
-        firstError = message;
-    };
-
-    for (int row = 0; row < filterTable_->rowCount(); ++row) {
-        const auto* macroItem = filterTable_->item(row, FilterMacroColumn);
-        const QString macro = normalizedFilterMacro(macroItem ? macroItem->text() : QString());
-
-        if (!macro.isEmpty() && isValidFilterMacro(macro)) {
-            macroKeywords.insert(macro.toCaseFolded());
-        }
-    }
-
-    auto normalizedQueryWithKnownSemicolonFixes = [&](QString query) {
-        query = normalizedFilterQuery(query);
-
-        if (query.isEmpty()) {
-            return query;
-        }
-
-        QStringList normalizedTokens;
-        const QStringList tokens = query.split(
-            QRegularExpression(QStringLiteral("\\s+")),
-            Qt::SkipEmptyParts
-        );
-
-        normalizedTokens.reserve(tokens.size());
-
-        for (const QString& token : tokens) {
-            QString trimmedToken = token.trimmed();
-
-            if (trimmedToken.size() > 1 && trimmedToken.endsWith(QLatin1Char(';'))) {
-                const QString keyword = trimmedToken.left(trimmedToken.size() - 1).trimmed();
-
-                if (isKnownFilterKeyword(keyword, macroKeywords)) {
-                    trimmedToken = keyword + QLatin1Char(':');
-                }
-            }
-
-            normalizedTokens << trimmedToken;
-        }
-
-        return normalizedTokens.join(QLatin1Char(' '));
-    };
+    std::vector<SearchFilterPreference> filters;
+    filters.reserve(static_cast<std::size_t>(filterTable_->rowCount()));
 
     for (int row = 0; row < filterTable_->rowCount(); ++row) {
         const auto* nameItem = filterTable_->item(row, FilterNameColumn);
-        auto* macroItem = filterTable_->item(row, FilterMacroColumn);
-        auto* queryItem = filterTable_->item(row, FilterQueryColumn);
+        const auto* macroItem = filterTable_->item(row, FilterMacroColumn);
+        const auto* queryItem = filterTable_->item(row, FilterQueryColumn);
 
-        const QString name = nameItem ? nameItem->text().trimmed() : QString();
-        const QString rawQuery = queryItem ? queryItem->text() : QString();
-        const QString query = normalizedQueryWithKnownSemicolonFixes(rawQuery);
-        const QString rawMacro = macroItem ? macroItem->text() : QString();
-        const QString macro = normalizedFilterMacro(rawMacro);
-        const QString foldedMacro = macro.toCaseFolded();
+        SearchFilterPreference filter;
+        filter.id = nameItem ? nameItem->data(FilterIdRole).toString() : QString();
+        filter.name = nameItem ? nameItem->text() : QString();
+        filter.macro = macroItem ? macroItem->text() : QString();
+        filter.query = queryItem ? queryItem->text() : QString();
+        filters.push_back(std::move(filter));
+    }
 
-        if (macroItem && macroItem->text() != macro) {
-            const QSignalBlocker blocker(filterTable_);
+    const std::vector<SearchFilterValidationIssue> issues = validateAndNormalizeSearchFilters(filters);
 
-            macroItem->setText(macro);
-            macroItem->setToolTip(
-                macro.isEmpty()
-                    ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
-                    : QStringLiteral("%1:").arg(macro)
-            );
-        }
+    {
+        const QSignalBlocker blocker(filterTable_);
 
-        if (queryItem && queryItem->text() != query) {
-            const QSignalBlocker blocker(filterTable_);
+        for (std::size_t rowIndex = 0; rowIndex < filters.size(); ++rowIndex) {
+            const int row = static_cast<int>(rowIndex);
+            const SearchFilterPreference& filter = filters[rowIndex];
 
-            queryItem->setText(query);
-            queryItem->setToolTip(query);
-        }
-
-        if (name.isEmpty()) {
-            const QString message = QStringLiteral("Filter names cannot be empty.");
-
-            markFilterCellInvalid(row, FilterNameColumn, message);
-            rememberFirstInvalid(row, FilterNameColumn, message);
-            valid = false;
-        } else {
-            rowsByName[name.toCaseFolded()].append(row);
-        }
-
-        if (query.isEmpty()) {
-            const QString message = QStringLiteral("Filter queries cannot be empty.");
-
-            markFilterCellInvalid(row, FilterQueryColumn, message);
-            rememberFirstInvalid(row, FilterQueryColumn, message);
-            valid = false;
-        }
-
-        if (!isValidFilterMacro(macro)) {
-            const QString message = QStringLiteral(
-                "Filter macros can only contain letters, numbers, and underscores."
-            );
-
-            markFilterCellInvalid(row, FilterMacroColumn, message);
-            rememberFirstInvalid(row, FilterMacroColumn, message);
-            valid = false;
-        } else if (!macro.isEmpty() && isBuiltInFilterKeyword(macro)) {
-            const QString message = QStringLiteral(
-                "Filter macros cannot use built-in filter keywords such as ext, extension, file, files, folder, folders, or type."
-            );
-
-            markFilterCellInvalid(row, FilterMacroColumn, message);
-            rememberFirstInvalid(row, FilterMacroColumn, message);
-            valid = false;
-        } else if (!macro.isEmpty()) {
-            rowsByMacro[foldedMacro].append(row);
-            rowByMacro.insert(foldedMacro, row);
-            queryByMacro.insert(foldedMacro, query);
-        }
-
-        const QStringList queryTokens = query.split(
-            QRegularExpression(QStringLiteral("\\s+")),
-            Qt::SkipEmptyParts
-        );
-
-        for (const QString& token : queryTokens) {
-            const QString trimmedToken = token.trimmed();
-            const QString foldedToken = trimmedToken.toCaseFolded();
-
-            if (foldedToken.startsWith(QStringLiteral("ext:")) ||
-                foldedToken.startsWith(QStringLiteral("extension:"))) {
-                const qsizetype colon = trimmedToken.indexOf(QLatin1Char(':'));
-                const QString extensionList = colon >= 0
-                    ? trimmedToken.mid(colon + 1)
-                    : QString();
-
-                bool hasExtension = false;
-                const QStringList extensionTokens = extensionList.split(
-                    QRegularExpression(QStringLiteral("[;,]")),
-                    Qt::SkipEmptyParts
+            if (auto* macroItem = filterTable_->item(row, FilterMacroColumn)) {
+                macroItem->setText(filter.macro);
+                macroItem->setToolTip(
+                    filter.macro.isEmpty()
+                        ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
+                        : QStringLiteral("%1:").arg(filter.macro)
                 );
-
-                for (const QString& extensionToken : extensionTokens) {
-                    QString normalizedExtension = extensionToken.trimmed();
-
-                    while (normalizedExtension.startsWith(QLatin1Char('.'))) {
-                        normalizedExtension.remove(0, 1);
-                    }
-
-                    if (!normalizedExtension.isEmpty()) {
-                        hasExtension = true;
-                        break;
-                    }
-                }
-
-                if (!hasExtension) {
-                    const QString message = QStringLiteral(
-                        "Extension filters must include at least one extension. Example: ext:7z or ext:7z;zip."
-                    );
-
-                    markFilterCellInvalid(row, FilterQueryColumn, message);
-                    rememberFirstInvalid(row, FilterQueryColumn, message);
-                    valid = false;
-                    break;
-                }
             }
 
-            if (foldedToken.startsWith(QStringLiteral("type:"))) {
-                if (foldedToken != QStringLiteral("type:file") &&
-                    foldedToken != QStringLiteral("type:files") &&
-                    foldedToken != QStringLiteral("type:folder") &&
-                    foldedToken != QStringLiteral("type:folders")) {
-                    const QString message = QStringLiteral(
-                        "Unknown type filter \"%1\". Supported values are type:file, type:files, type:folder, and type:folders."
-                    ).arg(trimmedToken);
-
-                    markFilterCellInvalid(row, FilterQueryColumn, message);
-                    rememberFirstInvalid(row, FilterQueryColumn, message);
-                    valid = false;
-                    break;
-                }
+            if (auto* queryItem = filterTable_->item(row, FilterQueryColumn)) {
+                queryItem->setText(filter.query);
+                queryItem->setToolTip(filter.query);
             }
-
-            if (trimmedToken.size() <= 1 || !trimmedToken.endsWith(QLatin1Char(':'))) {
-                continue;
-            }
-
-            const QString keyword = trimmedToken.left(trimmedToken.size() - 1).trimmed();
-
-            if (isKnownFilterKeyword(keyword, macroKeywords)) {
-                continue;
-            }
-
-            const QString message = QStringLiteral(
-                "Unknown filter keyword \"%1:\". Check for a typo, or add a filter macro named \"%1\"."
-            ).arg(keyword);
-
-            markFilterCellInvalid(row, FilterQueryColumn, message);
-            rememberFirstInvalid(row, FilterQueryColumn, message);
-            valid = false;
-            break;
         }
     }
 
-    const QString duplicateNameMessage = QStringLiteral("Filter names must be unique.");
-
-    for (auto it = rowsByName.constBegin(); it != rowsByName.constEnd(); ++it) {
-        const QList<int>& rows = it.value();
-
-        if (rows.size() < 2) {
-            continue;
-        }
-
-        for (const int row : rows) {
-            markFilterCellInvalid(row, FilterNameColumn, duplicateNameMessage);
-        }
-
-        rememberFirstInvalid(rows.first(), FilterNameColumn, duplicateNameMessage);
-        valid = false;
-    }
-
-    const QString duplicateMacroMessage = QStringLiteral("Filter macros must be unique.");
-
-    for (auto it = rowsByMacro.constBegin(); it != rowsByMacro.constEnd(); ++it) {
-        const QList<int>& rows = it.value();
-
-        if (rows.size() < 2) {
-            continue;
-        }
-
-        for (const int row : rows) {
-            markFilterCellInvalid(row, FilterMacroColumn, duplicateMacroMessage);
-        }
-
-        rememberFirstInvalid(rows.first(), FilterMacroColumn, duplicateMacroMessage);
-        valid = false;
-    }
-
-    QHash<QString, QStringList> macroReferencesByMacro;
-
-    for (auto it = queryByMacro.constBegin(); it != queryByMacro.constEnd(); ++it) {
-        macroReferencesByMacro.insert(
-            it.key(),
-            filterMacroReferencesInQuery(it.value(), macroKeywords)
-        );
-    }
-
-    QSet<QString> visitingMacros;
-    QSet<QString> visitedMacros;
-
-    auto containsCycle = [&](const QString& macro, auto&& containsCycleRef) -> bool {
-        if (visitingMacros.contains(macro)) {
-            return true;
-        }
-
-        if (visitedMacros.contains(macro)) {
-            return false;
-        }
-
-        visitingMacros.insert(macro);
-
-        const QStringList references = macroReferencesByMacro.value(macro);
-        for (const QString& referencedMacro : references) {
-            if (containsCycleRef(referencedMacro, containsCycleRef)) {
-                return true;
-            }
-        }
-
-        visitingMacros.remove(macro);
-        visitedMacros.insert(macro);
-        return false;
-    };
-
-    for (auto it = rowByMacro.constBegin(); it != rowByMacro.constEnd(); ++it) {
-        visitingMacros.clear();
-
-        if (!containsCycle(it.key(), containsCycle)) {
-            continue;
-        }
-
-        const QString message = QStringLiteral(
-            "Filter macro \"%1:\" creates a circular filter reference."
-        ).arg(it.key());
-
-        markFilterCellInvalid(it.value(), FilterQueryColumn, message);
-        rememberFirstInvalid(it.value(), FilterQueryColumn, message);
-        valid = false;
-    }
-
-    if (valid) {
+    if (issues.empty()) {
         return true;
     }
 
+    for (const SearchFilterValidationIssue& issue : issues) {
+        const int column = static_cast<int>(issue.column);
+        markFilterCellInvalid(issue.row, column, issue.message);
+    }
+
+    const SearchFilterValidationIssue& firstIssue = issues.front();
+
     if (focusFirstInvalid) {
+        constexpr int FiltersPageIndex = 2;
         if (pages_) {
-            pages_->setCurrentIndex(1);
+            pages_->setCurrentIndex(FiltersPageIndex);
         }
 
-        if (navigation_ && navigation_->count() > 1) {
-            navigation_->setCurrentRow(1);
+        if (navigation_ && navigation_->count() > FiltersPageIndex) {
+            navigation_->setCurrentRow(FiltersPageIndex);
         }
 
-        focusFilterCell(firstInvalidRow, firstInvalidColumn);
+        focusFilterCell(firstIssue.row, static_cast<int>(firstIssue.column));
     }
 
     if (errorText) {
-        *errorText = firstError;
+        *errorText = firstIssue.message;
     }
 
     return false;

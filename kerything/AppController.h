@@ -46,6 +46,7 @@ public:
     [[nodiscard]] bool isDaemonConnected() const noexcept;
     [[nodiscard]] bool isDaemonReady() const noexcept;
     [[nodiscard]] std::vector<SearchFilterPreference> searchFilters() const;
+    void addSearchFilter(const SearchFilterPreference& filter);
     [[nodiscard]] bool autoRefreshResultsForLiveUpdates() const;
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
     [[nodiscard]] bool closeToTrayAvailable() const;

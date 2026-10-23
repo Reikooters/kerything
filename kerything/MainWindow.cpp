@@ -4,6 +4,7 @@
 #include "MainWindow.h"
 #include "SearchResultTableView.h"
 #include "PreviewPane.h"
+#include "SaveSearchFilterDialog.h"
 
 #include <algorithm>
 #include <iostream>
@@ -813,6 +814,11 @@ MainWindow::MainWindow(
 
     // Connect search bar to our search logic
     connect(searchLine_, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
+    connect(searchLine_, &QLineEdit::textChanged, this, [this](const QString& text) {
+        if (saveSearchFilterAction_) {
+            saveSearchFilterAction_->setEnabled(!text.trimmed().isEmpty());
+        }
+    });
 
     // Connect filter dropdown to filter logic
     connect(filterDropdown_, &QComboBox::activated, this, [this](int index) {
@@ -1866,6 +1872,28 @@ void MainWindow::rebuildFilterMenu()
     }
 
     filterMenu_->addSeparator();
+
+    saveSearchFilterAction_ = new QAction(
+        QStringLiteral("Save Current Search as Filter..."),
+        filterMenu_
+    );
+    saveSearchFilterAction_->setEnabled(searchLine_ && !searchLine_->text().trimmed().isEmpty());
+    connect(saveSearchFilterAction_, &QAction::triggered, this, [this]() {
+        if (!controller_ || !searchLine_) {
+            return;
+        }
+
+        SaveSearchFilterDialog dialog(
+            searchLine_->text(),
+            controller_->searchFilters(),
+            this
+        );
+
+        if (dialog.exec() == QDialog::Accepted) {
+            controller_->addSearchFilter(dialog.searchFilter());
+        }
+    });
+    filterMenu_->addAction(saveSearchFilterAction_);
 
     auto* manageFiltersAction = new QAction(QStringLiteral("Manage Filters..."), filterMenu_);
     connect(manageFiltersAction, &QAction::triggered, this, [this]() {

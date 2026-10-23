@@ -235,6 +235,7 @@ private:
     QMenu* filterMenu_ = nullptr;
     QMenu* searchMenu_ = nullptr;
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
+    QAction* saveSearchFilterAction_ = nullptr;
     QAction* showFiltersDropdownAct_ = nullptr;
     QAction* matchCaseAct_ = nullptr;
     QAction* matchWholeWordAct_ = nullptr;

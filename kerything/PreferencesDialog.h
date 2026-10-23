@@ -6,7 +6,6 @@
 
 #include <QDialog>
 #include <QHash>
-#include <QSet>
 #include <QStringList>
 #include <vector>
 
@@ -44,6 +43,7 @@ public:
     void setAutoRefreshResultsForLiveUpdates(bool enabled);
     void setShowFiltersDropdown(bool enabled);
     void setShowPreviewPane(bool enabled);
+    void appendSearchFilter(const SearchFilterPreference& filter);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -114,11 +114,6 @@ private:
     bool validateFilters(QString* errorText = nullptr, bool focusFirstInvalid = true) const;
     static QString normalizedFilterMacro(QString macro);
     static QString normalizedFilterQuery(QString query);
-    static QString normalizedExtensionFilterToken(QString token);
-    static bool isValidFilterMacro(const QString& macro);
-    static bool isBuiltInFilterKeyword(const QString& keyword);
-    static bool isKnownFilterKeyword(const QString& keyword, const QSet<QString>& macroKeywords);
-    static QStringList filterMacroReferencesInQuery(const QString& query, const QSet<QString>& macroKeywords);
 
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;

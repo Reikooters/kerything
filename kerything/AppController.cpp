@@ -1484,6 +1484,20 @@ std::vector<SearchFilterPreference> AppController::searchFilters() const
     return preferences_.searchFilters();
 }
 
+void AppController::addSearchFilter(const SearchFilterPreference& filter)
+{
+    std::vector<SearchFilterPreference> filters = preferences_.searchFilters();
+    filters.push_back(filter);
+    preferences_.saveSearchFilters(filters);
+
+    if (preferencesDialog_) {
+        preferencesDialog_->appendSearchFilter(filter);
+    }
+
+    Q_EMIT searchFiltersChanged();
+    requestRefreshAllWindows();
+}
+
 bool AppController::autoRefreshResultsForLiveUpdates() const
 {
     return preferences_.autoRefreshResultsForLiveUpdates();

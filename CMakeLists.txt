@@ -110,6 +110,10 @@ add_executable(kerything
         kerything/PreviewPane.cpp
         kerything/PreviewPane.h
         kerything/SearchResultColumns.h
+        kerything/SearchFilterUtils.cpp
+        kerything/SearchFilterUtils.h
+        kerything/SaveSearchFilterDialog.cpp
+        kerything/SaveSearchFilterDialog.h
         kerything/SearchResultTableView.cpp
         kerything/SearchResultTableView.h
         kerything/SingleInstanceServer.cpp

@@ -1172,7 +1172,7 @@ QWidget* PreferencesDialog::createFiltersPage()
             const QSignalBlocker blocker(filterTable_);
 
             if (item->column() == FilterMacroColumn) {
-                const QString macro = normalizedFilterMacro(item->text());
+                const QString macro = normalizedSearchFilterMacro(item->text());
                 item->setToolTip(
                     macro.isEmpty()
                         ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")
@@ -1198,8 +1198,11 @@ QWidget* PreferencesDialog::createFiltersPage()
         const int row = filterTable_->rowCount();
         filterTable_->insertRow(row);
 
-        auto* nameItem = new QTableWidgetItem(uniqueFilterName(QStringLiteral("New Filter")));
-        nameItem->setData(FilterIdRole, newCustomFilterId());
+        auto* nameItem = new QTableWidgetItem(uniqueSearchFilterName(
+            QStringLiteral("New Filter"),
+            filtersFromTable()
+        ));
+        nameItem->setData(FilterIdRole, newCustomSearchFilterId());
 
         auto* macroItem = new QTableWidgetItem();
         macroItem->setToolTip(QStringLiteral("Optional macro, such as audio. Type audio: in search to use this filter."));
@@ -1234,8 +1237,11 @@ QWidget* PreferencesDialog::createFiltersPage()
         const int row = filterTable_->rowCount();
         filterTable_->insertRow(row);
 
-        auto* nameItem = new QTableWidgetItem(uniqueFilterName(sourceNameItem->text() + QStringLiteral(" Copy")));
-        nameItem->setData(FilterIdRole, newCustomFilterId());
+        auto* nameItem = new QTableWidgetItem(uniqueSearchFilterName(
+            sourceNameItem->text() + QStringLiteral(" Copy"),
+            filtersFromTable()
+        ));
+        nameItem->setData(FilterIdRole, newCustomSearchFilterId());
 
         auto* macroItem = new QTableWidgetItem();
         macroItem->setToolTip(QStringLiteral("Optional macro, such as audio. Type audio: in search to use this filter."));
@@ -2471,33 +2477,13 @@ std::vector<SearchFilterPreference> PreferencesDialog::filtersFromTable() const
         }
 
         filter.name = nameItem->text().trimmed();
-        filter.macro = normalizedFilterMacro(macroItem ? macroItem->text() : QString());
-        filter.query = normalizedFilterQuery(queryItem->text());
+        filter.macro = normalizedSearchFilterMacro(macroItem ? macroItem->text() : QString());
+        filter.query = normalizedSearchFilterQuery(queryItem->text());
 
         filters.push_back(std::move(filter));
     }
 
     return filters;
-}
-
-QString PreferencesDialog::uniqueFilterName(const QString& baseName) const
-{
-    return uniqueSearchFilterName(baseName, filtersFromTable());
-}
-
-QString PreferencesDialog::newCustomFilterId() const
-{
-    return newCustomSearchFilterId();
-}
-
-QString PreferencesDialog::normalizedFilterMacro(QString macro)
-{
-    return normalizedSearchFilterMacro(std::move(macro));
-}
-
-QString PreferencesDialog::normalizedFilterQuery(QString query)
-{
-    return normalizedSearchFilterQuery(std::move(query));
 }
 
 QList<int> PreferencesDialog::selectedFilterRows() const
@@ -2639,7 +2625,7 @@ void PreferencesDialog::clearFilterValidationState() const
             item->setIcon(QIcon());
 
             if (column == FilterMacroColumn) {
-                const QString macro = normalizedFilterMacro(item->text());
+                const QString macro = normalizedSearchFilterMacro(item->text());
                 item->setToolTip(
                     macro.isEmpty()
                         ? QStringLiteral("Optional macro. Example: audio lets you type audio: in the search box.")

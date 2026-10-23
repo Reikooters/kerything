@@ -112,8 +112,6 @@ private:
     bool hasUIChanges() const;
     bool hasGeneralChanges() const;
     bool validateFilters(QString* errorText = nullptr, bool focusFirstInvalid = true) const;
-    static QString normalizedFilterMacro(QString macro);
-    static QString normalizedFilterQuery(QString query);
 
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;
@@ -130,8 +128,6 @@ private:
     );
 
     std::vector<SearchFilterPreference> filtersFromTable() const;
-    QString uniqueFilterName(const QString& baseName) const;
-    QString newCustomFilterId() const;
     QList<int> selectedFilterRows() const;
     void updateFilterButtonStates();
     void moveSelectedFilters(int direction);

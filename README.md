@@ -309,6 +309,7 @@ The following keyboard shortcuts are available in Kerything:
 | `Ctrl + Esc` or `Shift + Alt + Backspace` | Focus search bar and clear all text, active filter, and search options    |
 | `Ctrl + I`                                | Toggle case-sensitive filename matching                                   |
 | `Ctrl + B`                                | Toggle whole-word filename matching                                       |
+| `Ctrl + U`                                | Toggle path matching (search within path)                                 |
 | `Ctrl + R`                                | Toggle regex                                                              |
 | `Alt + P`                                 | Toggle preview pane                                                       |
 | `Down / Up`                               | Move focus from search bar to the results table                           |

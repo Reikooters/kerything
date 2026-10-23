@@ -2282,6 +2282,7 @@ public:
     struct SearchOptions {
         bool matchCase = false;
         bool matchWholeWord = false;
+        bool matchPath = false;
         bool useRegex = false;
     };
 

@@ -13,6 +13,7 @@
 #include "DevicePreferenceChange.h"
 #include "IndexSummary.h"
 #include "Preferences.h"
+#include "SearchFilterUtils.h"
 
 enum class PreferencesDialogPage;
 
@@ -25,6 +26,7 @@ class QPushButton;
 class QStackedWidget;
 class QTableWidget;
 class QTextBrowser;
+class QToolButton;
 
 class PreferencesDialog final : public QDialog {
     Q_OBJECT
@@ -135,6 +137,20 @@ private:
     void markFilterCellInvalid(int row, int column, const QString& message) const;
     void focusFilterCell(int row, int column) const;
     bool hasFilterValidationState() const;
+    void exportFilters();
+    void importFilters();
+    static QString filterImportIssueSummary(
+        const std::vector<SearchFilterUtils::SearchFilterValidationIssue>& issues,
+        const std::vector<SearchFilterPreference>& filters
+    );
+    static bool validateImportedFilters(
+        std::vector<SearchFilterPreference>& filters,
+        QString* errorText
+    );
+    static QString importedFilterConflictSummary(
+        const std::vector<SearchFilterPreference>& existingFilters,
+        const std::vector<SearchFilterPreference>& importedFilters
+    );
 
     Preferences& preferences_;
     std::vector<BlockDevice> knownDevices_;
@@ -168,6 +184,7 @@ private:
     QPushButton* moveFilterUpButton_ = nullptr;
     QPushButton* moveFilterDownButton_ = nullptr;
     QPushButton* restoreDefaultFiltersButton_ = nullptr;
+    QToolButton* filterMoreButton_ = nullptr;
 
     QCheckBox* createNewWindowOnLaunchCheckBox_ = nullptr;
     QCheckBox* carryFilterToNewWindowsCheckBox_ = nullptr;

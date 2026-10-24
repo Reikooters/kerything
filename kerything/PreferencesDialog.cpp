@@ -12,18 +12,26 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialogButtonBox>
+#include <QFile>
+#include <QFileDialog>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSizePolicy>
@@ -36,6 +44,7 @@
 #include <QTextOption>
 #include <QTimeZone>
 #include <QTimer>
+#include <QToolButton>
 #include <QUuid>
 #include <QVBoxLayout>
 
@@ -57,6 +66,19 @@ namespace {
     constexpr int IndexIdRole = Qt::UserRole + 21;
 
     constexpr int FilterIdRole = Qt::UserRole + 40;
+
+    constexpr int SearchFiltersJsonVersion = 1;
+    constexpr qsizetype MaxFilterImportBytes = 4 * 1024 * 1024;
+
+    QString withJsonSuffix(QString path)
+    {
+        if (!path.isEmpty() &&
+            !path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)) {
+            path += QStringLiteral(".json");
+            }
+
+        return path;
+    }
 
     QIcon themedIcon(const QString& iconName, const QString& fallbackIconName)
     {
@@ -1140,6 +1162,20 @@ QWidget* PreferencesDialog::createFiltersPage()
     moveFilterUpButton_ = new QPushButton(QStringLiteral("Move Up"), page);
     moveFilterDownButton_ = new QPushButton(QStringLiteral("Move Down"), page);
     restoreDefaultFiltersButton_ = new QPushButton(QStringLiteral("Restore Defaults"), page);
+    filterMoreButton_ = new QToolButton(page);
+    filterMoreButton_->setText(QStringLiteral("More"));
+    filterMoreButton_->setPopupMode(QToolButton::InstantPopup);
+
+    auto* filterMoreMenu = new QMenu(filterMoreButton_);
+    QAction* importFiltersAction = filterMoreMenu->addAction(
+        themedIcon(QStringLiteral("document-import"), QStringLiteral("document-open")),
+        QStringLiteral("Import Filters…")
+    );
+    QAction* exportFiltersAction = filterMoreMenu->addAction(
+        themedIcon(QStringLiteral("document-export"), QStringLiteral("document-save-as")),
+        QStringLiteral("Export Filters…")
+    );
+    filterMoreButton_->setMenu(filterMoreMenu);
 
     setButtonIcon(addFilterButton_, QStringLiteral("list-add"), QStringLiteral("document-new"));
     setButtonIcon(duplicateFilterButton_, QStringLiteral("edit-copy"), QStringLiteral("document-duplicate"));
@@ -1158,6 +1194,7 @@ QWidget* PreferencesDialog::createFiltersPage()
     buttonLayout->addWidget(removeFilterButton_);
     buttonLayout->addWidget(moveFilterUpButton_);
     buttonLayout->addWidget(moveFilterDownButton_);
+    buttonLayout->addWidget(filterMoreButton_);
     buttonLayout->addStretch();
     buttonLayout->addWidget(restoreDefaultFiltersButton_);
 
@@ -1193,6 +1230,9 @@ QWidget* PreferencesDialog::createFiltersPage()
     connect(filterTable_->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
         updateFilterButtonStates();
     });
+
+    connect(importFiltersAction, &QAction::triggered, this, &PreferencesDialog::importFilters);
+    connect(exportFiltersAction, &QAction::triggered, this, &PreferencesDialog::exportFilters);
 
     connect(addFilterButton_, &QPushButton::clicked, this, [this]() {
         const int row = filterTable_->rowCount();
@@ -2602,6 +2642,442 @@ void PreferencesDialog::moveSelectedFilters(int direction)
 
     updateFilterButtonStates();
     updateApplyButtonEnabled();
+}
+
+QString PreferencesDialog::filterImportIssueSummary(
+    const std::vector<SearchFilterUtils::SearchFilterValidationIssue>& issues,
+    const std::vector<SearchFilterPreference>& filters
+) {
+    std::vector<SearchFilterUtils::SearchFilterValidationIssue> sortedIssues = issues;
+
+    std::ranges::sort(
+        sortedIssues,
+        [](const auto& lhs, const auto& rhs) {
+            if (lhs.row != rhs.row) {
+                return lhs.row < rhs.row;
+            }
+
+            return static_cast<int>(lhs.column) < static_cast<int>(rhs.column);
+        }
+    );
+
+    QStringList lines;
+
+    for (const SearchFilterUtils::SearchFilterValidationIssue& issue : sortedIssues) {
+        QString filterName;
+
+        if (issue.row >= 0 &&
+            static_cast<std::size_t>(issue.row) < filters.size()) {
+            filterName = filters[static_cast<std::size_t>(issue.row)].name.trimmed();
+        }
+
+        if (filterName.isEmpty()) {
+            lines << QStringLiteral("- Filter %1: %2")
+                .arg(issue.row + 1)
+                .arg(issue.message);
+        } else {
+            lines << QStringLiteral("- Filter %1 (%2): %3")
+                .arg(issue.row + 1)
+                .arg(filterName)
+                .arg(issue.message);
+        }
+    }
+
+    return lines.join(QLatin1Char('\n'));
+}
+
+bool PreferencesDialog::validateImportedFilters(
+    std::vector<SearchFilterPreference>& filters,
+    QString* errorText
+) {
+    const std::vector<SearchFilterUtils::SearchFilterValidationIssue> issues =
+        SearchFilterUtils::validateAndNormalizeSearchFilters(filters);
+
+    if (issues.empty()) {
+        return true;
+    }
+
+    if (errorText) {
+        *errorText = filterImportIssueSummary(issues, filters);
+    }
+
+    return false;
+}
+
+QString PreferencesDialog::importedFilterConflictSummary(
+    const std::vector<SearchFilterPreference>& existingFilters,
+    const std::vector<SearchFilterPreference>& importedFilters
+) {
+    QHash<QString, QString> existingNameByFoldedName;
+    QHash<QString, QString> existingNameByFoldedMacro;
+
+    for (const SearchFilterPreference& filter : existingFilters) {
+        const QString name = filter.name.trimmed();
+        if (!name.isEmpty()) {
+            existingNameByFoldedName.insert(name.toCaseFolded(), name);
+        }
+
+        const QString macro = SearchFilterUtils::normalizedSearchFilterMacro(filter.macro);
+        if (!macro.isEmpty()) {
+            existingNameByFoldedMacro.insert(macro.toCaseFolded(), filter.name.trimmed());
+        }
+    }
+
+    QStringList lines;
+
+    for (std::size_t i = 0; i < importedFilters.size(); ++i) {
+        const SearchFilterPreference& filter = importedFilters[i];
+        const int filterNumber = static_cast<int>(i + 1);
+        const QString importedName = filter.name.trimmed();
+        const QString importedMacro = SearchFilterUtils::normalizedSearchFilterMacro(filter.macro);
+
+        if (!importedName.isEmpty()) {
+            const QString existingFilterName =
+                existingNameByFoldedName.value(importedName.toCaseFolded());
+
+            if (!existingFilterName.isEmpty()) {
+                lines << QStringLiteral(
+                    "- Filter %1 (%2): name already exists in your current filters."
+                )
+                    .arg(filterNumber)
+                    .arg(importedName);
+            }
+        }
+
+        if (!importedMacro.isEmpty()) {
+            const QString existingFilterName =
+                existingNameByFoldedMacro.value(importedMacro.toCaseFolded());
+
+            if (!existingFilterName.isEmpty()) {
+                lines << QStringLiteral(
+                    "- Filter %1 (%2): macro \"%3\" is already used by existing filter \"%4\"."
+                )
+                    .arg(filterNumber)
+                    .arg(importedName.isEmpty() ? QStringLiteral("Unnamed") : importedName)
+                    .arg(importedMacro)
+                    .arg(existingFilterName.isEmpty() ? QStringLiteral("Unnamed") : existingFilterName);
+            }
+        }
+    }
+
+    return lines.join(QLatin1Char('\n'));
+}
+
+void PreferencesDialog::exportFilters()
+{
+    if (!filterTable_) {
+        return;
+    }
+
+    QString filterError;
+    if (!validateFilters(&filterError)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Invalid Filters"),
+            QStringLiteral(
+                "The filters cannot be exported because they contain validation errors.\n\n%1"
+            ).arg(filterError)
+        );
+        return;
+    }
+
+    const QString selectedPath = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("Export Filters"),
+        QStringLiteral("kerything-filters.json"),
+        QStringLiteral("JSON files (*.json);;All files (*)")
+    );
+
+    if (selectedPath.isEmpty()) {
+        return;
+    }
+
+    const QString path = withJsonSuffix(selectedPath);
+
+    QJsonArray filtersArray;
+    for (const SearchFilterPreference& filter : filtersFromTable()) {
+        QJsonObject filterObject;
+        filterObject.insert(QStringLiteral("name"), filter.name);
+        filterObject.insert(QStringLiteral("macro"), filter.macro);
+        filterObject.insert(QStringLiteral("query"), filter.query);
+        filtersArray.append(filterObject);
+    }
+
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), SearchFiltersJsonVersion);
+    root.insert(QStringLiteral("filters"), filtersArray);
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Export Filters Failed"),
+            QStringLiteral("Could not write to %1:\n\n%2")
+                .arg(path, file.errorString())
+        );
+        return;
+    }
+
+    const QJsonDocument document(root);
+    if (file.write(document.toJson(QJsonDocument::Indented)) < 0) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Export Filters Failed"),
+            QStringLiteral("Could not write to %1:\n\n%2")
+                .arg(path, file.errorString())
+        );
+        return;
+    }
+
+    QMessageBox::information(
+        this,
+        QStringLiteral("Filters Exported"),
+        QStringLiteral("Exported %1 filters to:\n\n%2")
+            .arg(filtersArray.size())
+            .arg(path)
+    );
+}
+
+void PreferencesDialog::importFilters()
+{
+    if (!filterTable_) {
+        return;
+    }
+
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("Import Filters"),
+        QString(),
+        QStringLiteral("JSON files (*.json);;All files (*)")
+    );
+
+    if (path.isEmpty()) {
+        return;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral("Could not read %1:\n\n%2")
+                .arg(path, file.errorString())
+        );
+        return;
+    }
+
+    const QByteArray bytes = file.read(MaxFilterImportBytes + 1);
+    if (bytes.size() > MaxFilterImportBytes) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral("The selected file is too large to be a Kerything filters export.")
+        );
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
+
+    if (parseError.error != QJsonParseError::NoError) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral(
+                "The selected file is not valid JSON. No changes have been made.\n\n%1"
+            )
+                .arg(parseError.errorString())
+        );
+        return;
+    }
+
+    if (!document.isObject()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral(
+                "The selected file must contain a JSON object. No changes have been made."
+            )
+        );
+        return;
+    }
+
+    const QJsonObject root = document.object();
+
+    const QJsonValue versionValue = root.value(QStringLiteral("version"));
+    if (!versionValue.isUndefined()) {
+        if (!versionValue.isDouble() ||
+            versionValue.toInt(-1) != SearchFiltersJsonVersion) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("Import Filters Failed"),
+                QStringLiteral(
+                    "This filters file uses an unsupported format version. No changes have been made.\n\n"
+                    "Supported version: %1\n\n"
+                    "If this file was exported from a newer version of Kerything, update Kerything and try again."
+                ).arg(SearchFiltersJsonVersion)
+            );
+            return;
+        }
+    }
+
+    const QJsonValue filtersValue = root.value(QStringLiteral("filters"));
+    if (!filtersValue.isArray()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral(
+                "The selected file does not contain a \"filters\" array. No changes have been made."
+            )
+        );
+        return;
+    }
+
+    const QJsonArray filtersArray = filtersValue.toArray();
+    std::vector<SearchFilterPreference> importedFilters;
+    importedFilters.reserve(static_cast<std::size_t>(filtersArray.size()));
+
+    QStringList structureErrors;
+
+    for (qsizetype i = 0; i < filtersArray.size(); ++i) {
+        const QJsonValue value = filtersArray.at(i);
+
+        if (!value.isObject()) {
+            structureErrors << QStringLiteral("- Filter %1 is not an object.").arg(i + 1);
+            continue;
+        }
+
+        const QJsonObject filterObject = value.toObject();
+        const QJsonValue nameValue = filterObject.value(QStringLiteral("name"));
+        const QJsonValue macroValue = filterObject.value(QStringLiteral("macro"));
+        const QJsonValue queryValue = filterObject.value(QStringLiteral("query"));
+
+        if (!nameValue.isString()) {
+            structureErrors << QStringLiteral("- Filter %1 is missing a string \"name\" field.").arg(i + 1);
+        }
+
+        if (!macroValue.isUndefined() && !macroValue.isString()) {
+            structureErrors << QStringLiteral("- Filter %1 has a non-string \"macro\" field.").arg(i + 1);
+        }
+
+        if (!queryValue.isString()) {
+            structureErrors << QStringLiteral("- Filter %1 is missing a string \"query\" field.").arg(i + 1);
+        }
+
+        if (!nameValue.isString() || !queryValue.isString() ||
+            (!macroValue.isUndefined() && !macroValue.isString())) {
+            continue;
+        }
+
+        importedFilters.push_back(SearchFilterPreference{
+            .id = SearchFilterUtils::newCustomSearchFilterId(),
+            .name = nameValue.toString(),
+            .macro = macroValue.toString(),
+            .query = queryValue.toString(),
+        });
+    }
+
+    if (!structureErrors.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral(
+                "The selected file contains invalid filter definitions. No changes have been made.\n\n"
+                "Each filter must be an object with string \"name\" and \"query\" fields. "
+                "The \"macro\" field is optional, but must be a string when present.\n\n"
+                "Edit the JSON file to correct the filter definitions, then try importing it again.\n\n%1"
+            )
+                .arg(structureErrors.join(QLatin1Char('\n')))
+        );
+        return;
+    }
+
+    QString importValidationError;
+    if (!validateImportedFilters(importedFilters, &importValidationError)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Filters Failed"),
+            QStringLiteral(
+                "The imported filters are invalid. No changes have been made.\n\n"
+                "Edit the JSON file to correct the filter definitions, then try importing it again.\n\n%1"
+            )
+                .arg(importValidationError)
+        );
+        return;
+    }
+
+    const qsizetype importedCount = static_cast<qsizetype>(importedFilters.size());
+
+    QMessageBox modeBox(this);
+    modeBox.setIcon(QMessageBox::Question);
+    modeBox.setWindowTitle(QStringLiteral("Import Filters"));
+    modeBox.setText(
+        QStringLiteral(
+            "The selected file contains %1 filters.\n\n"
+            "How would you like to import them?"
+        ).arg(importedFilters.size())
+    );
+
+    QPushButton* addButton = modeBox.addButton(
+        QStringLiteral("Add Imported Filters"),
+        QMessageBox::AcceptRole
+    );
+    QPushButton* replaceButton = modeBox.addButton(
+        QStringLiteral("Replace Existing Filters"),
+        QMessageBox::DestructiveRole
+    );
+    modeBox.addButton(QMessageBox::Cancel);
+    modeBox.setDefaultButton(addButton);
+    modeBox.setEscapeButton(QMessageBox::Cancel);
+
+    modeBox.exec();
+
+    std::vector<SearchFilterPreference> finalFilters;
+
+    if (modeBox.clickedButton() == addButton) {
+        const std::vector<SearchFilterPreference> existingFilters = filtersFromTable();
+        const QString conflictSummary =
+            importedFilterConflictSummary(existingFilters, importedFilters);
+
+        if (!conflictSummary.isEmpty()) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("Import Filters Failed"),
+                QStringLiteral(
+                    "The imported filters conflict with your existing filters. No changes have been made.\n\n"
+                    "To add these filters, edit the JSON file so each imported filter has a unique name and "
+                    "any non-empty macro is unique, or import again and choose Replace Existing Filters.\n\n%1"
+                ).arg(conflictSummary)
+            );
+            return;
+        }
+
+        finalFilters = existingFilters;
+        finalFilters.insert(
+            finalFilters.end(),
+            importedFilters.begin(),
+            importedFilters.end()
+        );
+    }
+    else if (modeBox.clickedButton() == replaceButton) {
+        finalFilters = std::move(importedFilters);
+    }
+    else {
+        return;
+    }
+
+    populateFilterTable(finalFilters);
+    updateApplyButtonEnabled();
+    updateFilterButtonStates();
+
+    QMessageBox::information(
+        this,
+        QStringLiteral("Filters Imported"),
+        QStringLiteral(
+            "Imported %1 filters.\n\n"
+            "The change has not been saved yet. Click Apply or OK to save it."
+        ).arg(importedCount)
+    );
 }
 
 void PreferencesDialog::clearFilterValidationState() const

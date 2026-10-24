@@ -208,22 +208,39 @@ ext:mp4;mkv
 Extension matching is case-insensitive. For example, `ext:jpg` matches `.jpg`,
 `.JPG`, and `.Jpg`.
 
-Kerything matches only the final extension after the last dot. For example,
-`archive.tar.gz` would be matched with the following filter:
+#### Compound extensions
+
+Compound extensions are supported. For example, both of the following can match
+`archive.tar.gz`:
+
+```text
+ext:gz
+ext:tar.gz
+```
+
+Use the final extension when you want all files ending in that last suffix:
 
 ```text
 ext:gz
 ```
 
-This means that currently no results will be returned if you attempt to use a compound extension, such as:
+Use a compound extension when you want only files ending in the full suffix:
 
 ```text
 ext:tar.gz
+ext:tar.zst
+```
+
+The leading dot is optional for compound extensions too, so these are equivalent:
+
+```text
+ext:tar.gz
+ext:.tar.gz
 ```
 
 > [!NOTE]
-> File type filters are based on filename extensions. Kerything does not inspect
-> file contents or perform MIME-type sniffing.
+> Extension filters are based only on filename extensions. Kerything does not
+> inspect file contents or perform MIME-type sniffing.
 
 ### Saved filters
 

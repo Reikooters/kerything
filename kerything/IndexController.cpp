@@ -243,6 +243,39 @@ namespace {
         }
     };
 
+    bool extensionTokenHasCompoundSuffix(std::string_view extension) noexcept
+    {
+        return extension.find('.') != std::string_view::npos;
+    }
+
+    std::string_view indexedExtensionForFilterToken(std::string_view extension)
+    {
+        if (extension.empty()) {
+            return {};
+        }
+
+        const std::size_t dotPos = extension.rfind('.');
+
+        if (dotPos == std::string_view::npos) {
+            return extension;
+        }
+
+        // Match current invalid-query behavior for tokens such as "foo.":
+        // no indexed bucket can be selected, so no results are returned.
+        if (dotPos + 1 >= extension.size()) {
+            return {};
+        }
+
+        return extension.substr(dotPos + 1);
+    }
+
+    bool extensionFilterTokenCanMatchIndexedExtension(
+        std::string_view extension,
+        std::string_view indexedExtension
+    ) {
+        return indexedExtensionForFilterToken(extension) == indexedExtension;
+    }
+
     EffectiveExtensionFilter combineExplicitAndRegexExtensionFilters(
         const IndexController::ExtensionSet& explicitExtensionFilter,
         const std::optional<IndexController::ExtensionSet>& regexExtensionFilter
@@ -262,19 +295,21 @@ namespace {
             return result;
         }
 
-        const IndexController::ExtensionSet& smaller =
-            explicitExtensionFilter.size() <= regexExtensionFilter->size()
-                ? explicitExtensionFilter
-                : *regexExtensionFilter;
-
-        const IndexController::ExtensionSet& larger =
-            explicitExtensionFilter.size() <= regexExtensionFilter->size()
-                ? *regexExtensionFilter
-                : explicitExtensionFilter;
-
-        for (const std::string& extension : smaller) {
-            if (larger.contains(extension)) {
-                result.extensions.insert(extension);
+        /*
+         * explicitExtensionFilter may contain compound suffixes from ext:, such as
+         * "tar.gz". Regex-derived extension filters are final-extension filters,
+         * such as "gz". Keep explicit tokens whose indexed final extension can
+         * survive the regex-derived final-extension constraint.
+         */
+        for (const std::string& explicitExtension : explicitExtensionFilter) {
+            for (const std::string& regexExtension : *regexExtensionFilter) {
+                if (extensionFilterTokenCanMatchIndexedExtension(
+                        explicitExtension,
+                        regexExtension
+                    )) {
+                    result.extensions.insert(explicitExtension);
+                    break;
+                }
             }
         }
 
@@ -985,17 +1020,31 @@ namespace {
         std::size_t estimatedSize = 0;
 
         for (const std::string& extension : extensions) {
+            const std::string_view indexedExtension =
+                indexedExtensionForFilterToken(extension);
+
+            if (indexedExtension.empty()) {
+                continue;
+            }
+
             if (const std::vector<uint32_t>* records =
-                    index.recordIndicesForExtension(extension)) {
+                    index.recordIndicesForExtension(indexedExtension)) {
                 estimatedSize += records->size();
-                    }
+            }
         }
 
         candidates.reserve(estimatedSize);
 
         for (const std::string& extension : extensions) {
+            const std::string_view indexedExtension =
+                indexedExtensionForFilterToken(extension);
+
+            if (indexedExtension.empty()) {
+                continue;
+            }
+
             const std::vector<uint32_t>* records =
-                index.recordIndicesForExtension(extension);
+                index.recordIndicesForExtension(indexedExtension);
 
             if (!records) {
                 continue;
@@ -1024,8 +1073,15 @@ namespace {
         std::size_t count = 0;
 
         for (const std::string& extension : extensions) {
+            const std::string_view indexedExtension =
+                indexedExtensionForFilterToken(extension);
+
+            if (indexedExtension.empty()) {
+                continue;
+            }
+
             if (const std::vector<uint32_t>* records =
-                    index.recordIndicesForExtension(extension)) {
+                    index.recordIndicesForExtension(indexedExtension)) {
                 count += records->size();
             }
         }
@@ -5426,12 +5482,42 @@ bool IndexController::matchesFileExtensionFilter(
         return false;
     }
 
-    // If only single extension being filtered, we can avoid the set lookup.
-    if (extensions.size() == 1) {
-        return extension == *extensions.begin();
+    for (const std::string& requestedExtension : extensions) {
+        if (requestedExtension.empty()) {
+            continue;
+        }
+
+        if (!extensionTokenHasCompoundSuffix(requestedExtension)) {
+            if (extension == requestedExtension) {
+                return true;
+            }
+
+            continue;
+        }
+
+        const std::string_view indexedExtension =
+            indexedExtensionForFilterToken(requestedExtension);
+
+        if (indexedExtension.empty() || extension != indexedExtension) {
+            continue;
+        }
+
+        // "tar.gz" should match "archive.tar.gz" and "backup.archive.tar.gz",
+        // but should not match "archive.gz".
+        if (lowercaseFileName.size() <= requestedExtension.size()) {
+            continue;
+        }
+
+        const std::size_t suffixStart =
+            lowercaseFileName.size() - requestedExtension.size();
+
+        if (lowercaseFileName[suffixStart - 1] == '.' &&
+            lowercaseFileName.substr(suffixStart) == requestedExtension) {
+            return true;
+        }
     }
 
-    return extensions.contains(extension);
+    return false;
 }
 
 std::size_t IndexController::maxSearchResultCount() const

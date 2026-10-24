@@ -8,6 +8,7 @@
 #include <shared_mutex>
 #include <mutex>
 #include <cctype>
+#include <charconv>
 #include <limits>
 #include <numeric>
 #include <utility>
@@ -17,6 +18,7 @@
 #include <malloc.h>
 #endif
 
+#include <QDate>
 #include <QDateTime>
 #include <QFile>
 #include <QHash>
@@ -327,6 +329,20 @@ namespace {
         return std::isalnum(c) || c == '_';
     }
 
+    std::string asciiLowercaseCopy(std::string_view text)
+    {
+        std::string out(text);
+        std::transform(
+            out.begin(),
+            out.end(),
+            out.begin(),
+            [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            }
+        );
+        return out;
+    }
+
     bool isWholeWordMatchAt(
             std::string_view text,
             std::size_t pos,
@@ -390,6 +406,396 @@ namespace {
             : IndexController::contains(haystack, phrase);
     }
 
+    bool parseUnsignedDecimal(std::string_view text, quint64& value)
+    {
+        if (text.empty()) {
+            return false;
+        }
+
+        quint64 parsed = 0;
+        const char* begin = text.data();
+        const char* end = text.data() + text.size();
+
+        const auto result = std::from_chars(begin, end, parsed, 10);
+        if (result.ec != std::errc{} || result.ptr != end) {
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    std::optional<quint64> parseSizeValue(std::string_view text)
+    {
+        if (text.empty()) {
+            return std::nullopt;
+        }
+
+        std::size_t numberEnd = 0;
+        while (numberEnd < text.size() &&
+               std::isdigit(static_cast<unsigned char>(text[numberEnd]))) {
+            ++numberEnd;
+        }
+
+        if (numberEnd == 0) {
+            return std::nullopt;
+        }
+
+        quint64 number = 0;
+        if (!parseUnsignedDecimal(text.substr(0, numberEnd), number)) {
+            return std::nullopt;
+        }
+
+        const std::string unit = asciiLowercaseCopy(text.substr(numberEnd));
+        quint64 multiplier = 1;
+
+        if (unit.empty() || unit == "b") {
+            multiplier = 1;
+        }
+        else if (unit == "k" || unit == "kb" || unit == "kib") {
+            multiplier = 1024ULL;
+        }
+        else if (unit == "m" || unit == "mb" || unit == "mib") {
+            multiplier = 1024ULL * 1024ULL;
+        }
+        else if (unit == "g" || unit == "gb" || unit == "gib") {
+            multiplier = 1024ULL * 1024ULL * 1024ULL;
+        }
+        else if (unit == "t" || unit == "tb" || unit == "tib") {
+            multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+        }
+        else if (unit == "p" || unit == "pb" || unit == "pib") {
+            multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+        }
+        else {
+            return std::nullopt;
+        }
+
+        if (number > std::numeric_limits<quint64>::max() / multiplier) {
+            return std::nullopt;
+        }
+
+        return number * multiplier;
+    }
+
+    bool parseSizeFilter(
+        std::string_view expression,
+        IndexController::ParsedSearchQuery::UInt64Range& out
+    ) {
+        if (expression.empty()) {
+            return false;
+        }
+
+        if (const std::size_t rangePos = expression.find("..");
+            rangePos != std::string_view::npos) {
+            const std::string_view minText = expression.substr(0, rangePos);
+            const std::string_view maxText = expression.substr(rangePos + 2);
+
+            if (minText.empty() && maxText.empty()) {
+                return false;
+            }
+
+            out = {};
+
+            if (!minText.empty()) {
+                const std::optional<quint64> min = parseSizeValue(minText);
+                if (!min) {
+                    return false;
+                }
+
+                out.min = *min;
+            }
+
+            if (!maxText.empty()) {
+                const std::optional<quint64> max = parseSizeValue(maxText);
+                if (!max) {
+                    return false;
+                }
+
+                out.max = *max;
+            }
+
+            if (out.min && out.max && *out.min > *out.max) {
+                return false;
+            }
+
+            return true;
+        }
+
+        if (expression.starts_with(">=")) {
+            const std::optional<quint64> value = parseSizeValue(expression.substr(2));
+            if (!value) {
+                return false;
+            }
+
+            out = {};
+            out.min = *value;
+            return true;
+        }
+
+        if (expression.starts_with("<=")) {
+            const std::optional<quint64> value = parseSizeValue(expression.substr(2));
+            if (!value) {
+                return false;
+            }
+
+            out = {};
+            out.max = *value;
+            return true;
+        }
+
+        if (expression.starts_with('>')) {
+            const std::optional<quint64> value = parseSizeValue(expression.substr(1));
+            if (!value || *value == std::numeric_limits<quint64>::max()) {
+                return false;
+            }
+
+            out = {};
+            out.min = *value + 1;
+            return true;
+        }
+
+        if (expression.starts_with('<')) {
+            const std::optional<quint64> value = parseSizeValue(expression.substr(1));
+            if (!value || *value == 0) {
+                return false;
+            }
+
+            out = {};
+            out.max = *value - 1;
+            return true;
+        }
+
+        if (expression.starts_with('=')) {
+            const std::optional<quint64> exact = parseSizeValue(expression.substr(1));
+            if (!exact) {
+                return false;
+            }
+
+            out = {};
+            out.min = *exact;
+            out.max = *exact;
+            return true;
+        }
+
+        const std::optional<quint64> exact = parseSizeValue(expression);
+        if (!exact) {
+            return false;
+        }
+
+        out = {};
+        out.min = *exact;
+        out.max = *exact;
+        return true;
+    }
+
+    std::optional<qint64> localStartOfDaySecs(const QDate& date)
+    {
+        if (!date.isValid()) {
+            return std::nullopt;
+        }
+
+        const QDateTime startOfDay = date.startOfDay();
+        if (!startOfDay.isValid()) {
+            return std::nullopt;
+        }
+
+        return startOfDay.toSecsSinceEpoch();
+    }
+
+    bool parseIsoDateDayRange(
+        std::string_view text,
+        qint64& startInclusive,
+        qint64& endExclusive
+    ) {
+        const QDate date = QDate::fromString(
+            QString::fromLatin1(text.data(), static_cast<qsizetype>(text.size())),
+            Qt::ISODate
+        );
+
+        if (!date.isValid()) {
+            return false;
+        }
+
+        const std::optional<qint64> start = localStartOfDaySecs(date);
+        const std::optional<qint64> end = localStartOfDaySecs(date.addDays(1));
+
+        if (!start || !end) {
+            return false;
+        }
+
+        startInclusive = *start;
+        endExclusive = *end;
+        return true;
+    }
+
+    bool parseModifiedFilter(
+        std::string_view expression,
+        IndexController::ParsedSearchQuery::Int64HalfOpenRange& out
+    ) {
+        if (expression.empty()) {
+            return false;
+        }
+
+        const QDate today = QDate::currentDate();
+
+        if (expression == "today") {
+            const std::optional<qint64> start = localStartOfDaySecs(today);
+            const std::optional<qint64> end = localStartOfDaySecs(today.addDays(1));
+
+            if (!start || !end) {
+                return false;
+            }
+
+            out = {};
+            out.minInclusive = *start;
+            out.maxExclusive = *end;
+            return true;
+        }
+
+        if (expression == "yesterday") {
+            const QDate yesterday = today.addDays(-1);
+            const std::optional<qint64> start = localStartOfDaySecs(yesterday);
+            const std::optional<qint64> end = localStartOfDaySecs(today);
+
+            if (!start || !end) {
+                return false;
+            }
+
+            out = {};
+            out.minInclusive = *start;
+            out.maxExclusive = *end;
+            return true;
+        }
+
+        if (expression.size() >= 2 && expression.back() == 'd') {
+            quint64 days = 0;
+            if (!parseUnsignedDecimal(expression.substr(0, expression.size() - 1), days) ||
+                days > static_cast<quint64>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+
+            const std::optional<qint64> start =
+                localStartOfDaySecs(today.addDays(-static_cast<int>(days)));
+
+            if (!start) {
+                return false;
+            }
+
+            out = {};
+            out.minInclusive = *start;
+            return true;
+        }
+
+        if (expression.size() >= 2 && expression.back() == 'h') {
+            quint64 hours = 0;
+            if (!parseUnsignedDecimal(expression.substr(0, expression.size() - 1), hours) ||
+                hours > static_cast<quint64>(std::numeric_limits<qint64>::max() / 3600)) {
+                return false;
+            }
+
+            const qint64 now = QDateTime::currentSecsSinceEpoch();
+            const qint64 seconds = static_cast<qint64>(hours) * 3600;
+
+            out = {};
+            out.minInclusive = now - seconds;
+            return true;
+        }
+
+        if (const std::size_t rangePos = expression.find("..");
+            rangePos != std::string_view::npos) {
+            const std::string_view minText = expression.substr(0, rangePos);
+            const std::string_view maxText = expression.substr(rangePos + 2);
+
+            if (minText.empty() && maxText.empty()) {
+                return false;
+            }
+
+            out = {};
+
+            if (!minText.empty()) {
+                qint64 start = 0;
+                qint64 ignoredEnd = 0;
+
+                if (!parseIsoDateDayRange(minText, start, ignoredEnd)) {
+                    return false;
+                }
+
+                out.minInclusive = start;
+            }
+
+            if (!maxText.empty()) {
+                qint64 ignoredStart = 0;
+                qint64 end = 0;
+
+                if (!parseIsoDateDayRange(maxText, ignoredStart, end)) {
+                    return false;
+                }
+
+                out.maxExclusive = end;
+            }
+
+            if (out.minInclusive &&
+                out.maxExclusive &&
+                *out.minInclusive >= *out.maxExclusive) {
+                return false;
+            }
+
+            return true;
+        }
+
+        qint64 start = 0;
+        qint64 end = 0;
+
+        if (!parseIsoDateDayRange(expression, start, end)) {
+            return false;
+        }
+
+        out = {};
+        out.minInclusive = start;
+        out.maxExclusive = end;
+        return true;
+    }
+
+    bool recordMatchesStructuredFilters(
+        const FileRecord& record,
+        const IndexController::ParsedSearchQuery& parsedQuery
+    ) {
+        if (parsedQuery.invalidStructuredFilter) {
+            return false;
+        }
+
+        if (!parsedQuery.sizeFilters.empty()) {
+            // Kerything displays directories as "<DIR>" instead of a byte size,
+            // so size filters should apply to files only.
+            if ((record.flags & FileRecord_IsDir) != 0) {
+                return false;
+            }
+
+            for (const auto& filter : parsedQuery.sizeFilters) {
+                if (filter.min && record.size < *filter.min) {
+                    return false;
+                }
+
+                if (filter.max && record.size > *filter.max) {
+                    return false;
+                }
+            }
+        }
+
+        for (const auto& filter : parsedQuery.modifiedTimeFilters) {
+            if (filter.minInclusive && record.modificationTime < *filter.minInclusive) {
+                return false;
+            }
+
+            if (filter.maxExclusive && record.modificationTime >= *filter.maxExclusive) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     uint32_t makeTrigram(std::string_view text, std::size_t offset)
     {
         return (static_cast<uint32_t>(static_cast<unsigned char>(text[offset])) << 16) |
@@ -401,20 +807,6 @@ namespace {
     {
         return (static_cast<uint32_t>(static_cast<unsigned char>(text[offset])) << 8) |
                static_cast<uint32_t>(static_cast<unsigned char>(text[offset + 1]));
-    }
-
-    std::string asciiLowercaseCopy(std::string_view text)
-    {
-        std::string out(text);
-        std::transform(
-            out.begin(),
-            out.end(),
-            out.begin(),
-            [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            }
-        );
-        return out;
     }
 
     std::string regexPatternFromParsedQuery(
@@ -1112,6 +1504,7 @@ namespace {
     void collectRecordsMatchingNonKeywordFilters(
         const IndexController::DeviceIndex& index,
         const IndexController::ExtensionSet& extensionFilter,
+        const IndexController::ParsedSearchQuery& parsedQuery,
         bool foldersOnly,
         bool filesOnly,
         AppendResultFn&& appendResult
@@ -1128,6 +1521,10 @@ namespace {
             return;
         }
 
+        if (parsedQuery.invalidStructuredFilter) {
+            return;
+        }
+
         auto appendIfMatches = [&](uint32_t recordIdx) {
             if (recordIdx >= index.fileRecords.size()) {
                 return;
@@ -1139,6 +1536,10 @@ namespace {
 
             const FileRecord& rec = index.fileRecords[recordIdx];
             const bool isDirectory = (rec.flags & FileRecord_IsDir) != 0;
+
+            if (!recordMatchesStructuredFilters(rec, parsedQuery)) {
+                return;
+            }
 
             if (foldersOnly && !isDirectory) {
                 return;
@@ -7026,6 +7427,34 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(
             consumeExtensionList(lowercaseToken.substr(4));
         } else if (lowercaseToken.starts_with("extension:")) {
             consumeExtensionList(lowercaseToken.substr(10));
+        } else if (lowercaseToken.starts_with("size:")) {
+            ParsedSearchQuery::UInt64Range filter;
+            if (parseSizeFilter(lowercaseToken.substr(5), filter)) {
+                parsed.sizeFilters.push_back(filter);
+            } else {
+                parsed.invalidStructuredFilter = true;
+            }
+        } else if (lowercaseToken.starts_with("modified:")) {
+            ParsedSearchQuery::Int64HalfOpenRange filter;
+            if (parseModifiedFilter(lowercaseToken.substr(9), filter)) {
+                parsed.modifiedTimeFilters.push_back(filter);
+            } else {
+                parsed.invalidStructuredFilter = true;
+            }
+        } else if (lowercaseToken.starts_with("datemodified:")) {
+            ParsedSearchQuery::Int64HalfOpenRange filter;
+            if (parseModifiedFilter(lowercaseToken.substr(13), filter)) {
+                parsed.modifiedTimeFilters.push_back(filter);
+            } else {
+                parsed.invalidStructuredFilter = true;
+            }
+        } else if (lowercaseToken.starts_with("dm:")) {
+            ParsedSearchQuery::Int64HalfOpenRange filter;
+            if (parseModifiedFilter(lowercaseToken.substr(3), filter)) {
+                parsed.modifiedTimeFilters.push_back(filter);
+            } else {
+                parsed.invalidStructuredFilter = true;
+            }
         } else if (lowercaseToken == "file:" ||
                    lowercaseToken == "files:" ||
                    lowercaseToken == "type:file" ||
@@ -7339,6 +7768,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     debugKeywordCount = keywords.size() + phrases.size();
 
+    if (parsedQuery.invalidStructuredFilter) {
+        return results;
+    }
+
     // No indexed item can be both a file and a folder.
     if (filesOnly && foldersOnly) {
         return results;
@@ -7469,7 +7902,9 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 ++diagnostics->devicesSearched;
             }
 
-            if (!hasExtensionFilter && !foldersOnly && !filesOnly) {
+            if (!hasExtensionFilter && !foldersOnly && !filesOnly &&
+                parsedQuery.sizeFilters.empty() &&
+                parsedQuery.modifiedTimeFilters.empty()) {
                 appendAllVisibleResultsNoFilter(*indexPtr);
                 continue;
             }
@@ -7477,6 +7912,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             collectRecordsMatchingNonKeywordFilters(
                 *indexPtr,
                 extensionFilter,
+                parsedQuery,
                 foldersOnly,
                 filesOnly,
                 appendResult
@@ -7617,6 +8053,10 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             }
 
             if (filesOnly && isDirectory) {
+                return;
+            }
+
+            if (!recordMatchesStructuredFilters(rec, parsedQuery)) {
                 return;
             }
 
@@ -7781,6 +8221,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     const bool foldersOnly = parsedQuery.foldersOnly;
     const bool filesOnly = parsedQuery.filesOnly;
 
+    if (parsedQuery.invalidStructuredFilter) {
+        return searchResult;
+    }
+
     // No indexed item can be both a file and a folder.
     if (filesOnly && foldersOnly) {
         return searchResult;
@@ -7855,6 +8299,7 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             collectRecordsMatchingNonKeywordFilters(
                 *indexPtr,
                 extensionFilter,
+                parsedQuery,
                 foldersOnly,
                 filesOnly,
                 appendResult
@@ -8067,6 +8512,10 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
             }
 
             if (filesOnly && isDirectory) {
+                return;
+            }
+
+            if (!recordMatchesStructuredFilters(rec, parsedQuery)) {
                 return;
             }
 

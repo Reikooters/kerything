@@ -238,9 +238,159 @@ ext:tar.gz
 ext:.tar.gz
 ```
 
+Compound extensions can include multiple extensions. For example, the following
+can match `packagename.pkg.tar.zst`:
+
+```text
+ext:zst
+ext:tar.zst
+ext:pkg.tar.zst
+```
+
 > [!NOTE]
 > Extension filters are based only on filename extensions. Kerything does not
-> inspect file contents or perform MIME-type sniffing.
+> inspect file contents or perform MIME-type sniffing when filtering by
+> extension.
+
+### Size filters
+
+You can narrow results by file size using `size:`.
+
+Exact byte sizes can be written directly:
+
+```text
+size:2048
+size:=2048
+size:2048B
+```
+
+Comparison operators are supported:
+
+```text
+size:>1G
+size:>=1G
+size:<10M
+size:<=10M
+```
+
+Ranges are inclusive:
+
+```text
+size:10M..100M
+```
+
+Open-ended ranges are also supported:
+
+```text
+size:10M..
+size:..100M
+```
+
+Size units are case-insensitive. Kerything uses power-of-two units, so `1M`
+means `1,048,576` bytes.
+
+Supported units include:
+
+```text
+B
+K, KB, KiB
+M, MB, MiB
+G, GB, GiB
+T, TB, TiB
+P, PB, PiB
+```
+
+For example, these are equivalent:
+
+```text
+size:>1g
+size:>1G
+size:>1GiB
+```
+
+Size filters apply to files only. Directories are excluded from size-filtered
+results because Kerything displays the size of directories as `<DIR>` rather
+than as byte sizes.
+
+Size filters can be combined with normal search terms and other filters:
+
+```text
+holiday size:>10M ext:jpg;png
+backup size:1G..10G
+```
+
+### Date Modified filters
+
+You can narrow results by modification date using `modified:`:
+
+```text
+modified:today
+modified:yesterday
+modified:3h
+modified:7d
+modified:2026-01-01
+modified:2026-01-01..2026-10-24
+```
+
+The aliases `datemodified:` and `dm:` are also supported:
+
+```text
+datemodified:today
+dm:3h
+dm:7d
+```
+
+`today` means files modified since local midnight today. `yesterday` means files
+modified from local midnight yesterday up to local midnight today.
+
+A relative hour filter such as:
+
+```text
+modified:3h
+```
+
+means files modified within the last 3 hours.
+
+A relative day filter such as:
+
+```text
+modified:7d
+```
+
+means files modified since local midnight 7 days ago.
+
+Date-only searches match the whole local day:
+
+```text
+modified:2026-10-24
+```
+
+Date ranges are inclusive from the user's perspective:
+
+```text
+modified:2026-01-01..2026-10-24
+```
+
+This matches files modified from `2026-01-01 00:00:00` local time up to, but not
+including, `2026-10-25 00:00:00` local time.
+
+Open-ended date ranges are also supported:
+
+```text
+modified:2026-01-01..
+modified:..2026-10-24
+```
+
+Modified date filters apply to both files and folders.
+
+Date filters can be combined with normal search terms and other filters:
+
+```text
+report modified:today
+notes modified:3h
+invoice modified:7d ext:pdf
+holiday modified:2026-01-01..2026-10-24 size:>5M
+```
 
 ### Saved filters
 

@@ -2276,6 +2276,21 @@ public:
         std::vector<std::string> keywords;
         std::vector<std::string> phrases;
         ExtensionSet extensions;
+
+        struct UInt64Range {
+            std::optional<quint64> min;
+            std::optional<quint64> max;
+        };
+
+        struct Int64HalfOpenRange {
+            std::optional<qint64> minInclusive;
+            std::optional<qint64> maxExclusive;
+        };
+
+        std::vector<UInt64Range> sizeFilters;
+        std::vector<Int64HalfOpenRange> modifiedTimeFilters;
+
+        bool invalidStructuredFilter = false;
         bool foldersOnly = false;
         bool filesOnly = false;
     };

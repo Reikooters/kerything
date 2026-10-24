@@ -18,10 +18,12 @@
 #include "FileModel.h"
 
 class AppController;
+class PreviewPane;
+class QAction;
+class QActionGroup;
 class QCloseEvent;
 class QComboBox;
 class QSplitter;
-class PreviewPane;
 class QToolButton;
 
 /**
@@ -219,6 +221,10 @@ private:
     void setRegexEnabled(bool enabled);
     void resetSearchStateAndFocus();
     void openNewWindowFromThisWindow();
+    [[nodiscard]] Qt::SortOrder initialSortOrderForColumn(int column) const;
+    void applySortColumnFromMenu(int column);
+    void applySortOrderFromMenu(Qt::SortOrder order);
+    void syncSortMenuActions();
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
@@ -241,6 +247,14 @@ private:
     QAction* matchWholeWordAct_ = nullptr;
     QAction* regexAct_ = nullptr;
     QAction* togglePreviewAct_ = nullptr;
+    QAction* sortByNameAct_ = nullptr;
+    QAction* sortByPathAct_ = nullptr;
+    QAction* sortBySizeAct_ = nullptr;
+    QAction* sortByDateModifiedAct_ = nullptr;
+    QAction* sortAscendingAct_ = nullptr;
+    QAction* sortDescendingAct_ = nullptr;
+    QActionGroup* sortColumnActionGroup_ = nullptr;
+    QActionGroup* sortOrderActionGroup_ = nullptr;
     QSplitter* mainSplitter_ = nullptr;
     PreviewPane* previewPane_ = nullptr;
 

@@ -596,6 +596,13 @@ MainWindow::MainWindow(
     connect(tableView_->horizontalHeader(), &QHeaderView::sectionClicked,
             this, &MainWindow::handleSortSectionClicked);
 
+    connect(tableView_->horizontalHeader(), &QHeaderView::sortIndicatorChanged,
+        this, [this](int section, Qt::SortOrder order) {
+            Q_UNUSED(section);
+            Q_UNUSED(order);
+            syncSortMenuActions();
+        });
+
     // Table Styling
     tableView_->setAlternatingRowColors(true);
     tableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1201,6 +1208,90 @@ MainWindow::MainWindow(
     addAction(togglePreviewAct_);
     viewMenu->addAction(togglePreviewAct_);
 
+    viewMenu->addSeparator();
+
+    // View Menu > Sort by
+    auto* sortByMenu = viewMenu->addMenu(
+        QIcon::fromTheme(
+            QStringLiteral("view-sort"),
+            QIcon::fromTheme(
+                QStringLiteral("sort-name"),
+                QIcon::fromTheme(QStringLiteral("format-list-unordered"))
+            )
+        ),
+        QStringLiteral("Sort by")
+    );
+
+    sortColumnActionGroup_ = new QActionGroup(this);
+    sortColumnActionGroup_->setExclusive(true);
+
+    sortByNameAct_ = new QAction(QStringLiteral("Name"), this);
+    sortByNameAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
+    sortByNameAct_->setCheckable(true);
+    sortByNameAct_->setStatusTip(QStringLiteral("Sort results by file name"));
+    sortColumnActionGroup_->addAction(sortByNameAct_);
+    addAction(sortByNameAct_);
+    sortByMenu->addAction(sortByNameAct_);
+    connect(sortByNameAct_, &QAction::triggered, this, [this]() {
+        applySortColumnFromMenu(SearchResultColumn::Name);
+    });
+
+    sortByPathAct_ = new QAction(QStringLiteral("Path"), this);
+    sortByPathAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_2));
+    sortByPathAct_->setCheckable(true);
+    sortByPathAct_->setStatusTip(QStringLiteral("Sort results by parent path"));
+    sortColumnActionGroup_->addAction(sortByPathAct_);
+    addAction(sortByPathAct_);
+    sortByMenu->addAction(sortByPathAct_);
+    connect(sortByPathAct_, &QAction::triggered, this, [this]() {
+        applySortColumnFromMenu(SearchResultColumn::Path);
+    });
+
+    sortBySizeAct_ = new QAction(QStringLiteral("Size"), this);
+    sortBySizeAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_3));
+    sortBySizeAct_->setCheckable(true);
+    sortBySizeAct_->setStatusTip(QStringLiteral("Sort results by size"));
+    sortColumnActionGroup_->addAction(sortBySizeAct_);
+    addAction(sortBySizeAct_);
+    sortByMenu->addAction(sortBySizeAct_);
+    connect(sortBySizeAct_, &QAction::triggered, this, [this]() {
+        applySortColumnFromMenu(SearchResultColumn::Size);
+    });
+
+    sortByDateModifiedAct_ = new QAction(QStringLiteral("Date Modified"), this);
+    sortByDateModifiedAct_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_4));
+    sortByDateModifiedAct_->setCheckable(true);
+    sortByDateModifiedAct_->setStatusTip(QStringLiteral("Sort results by modified date"));
+    sortColumnActionGroup_->addAction(sortByDateModifiedAct_);
+    addAction(sortByDateModifiedAct_);
+    sortByMenu->addAction(sortByDateModifiedAct_);
+    connect(sortByDateModifiedAct_, &QAction::triggered, this, [this]() {
+        applySortColumnFromMenu(SearchResultColumn::DateModified);
+    });
+
+    sortByMenu->addSeparator();
+
+    sortOrderActionGroup_ = new QActionGroup(this);
+    sortOrderActionGroup_->setExclusive(true);
+
+    sortAscendingAct_ = new QAction(QStringLiteral("Ascending"), this);
+    sortAscendingAct_->setCheckable(true);
+    sortAscendingAct_->setStatusTip(QStringLiteral("Sort results in ascending order"));
+    sortOrderActionGroup_->addAction(sortAscendingAct_);
+    sortByMenu->addAction(sortAscendingAct_);
+    connect(sortAscendingAct_, &QAction::triggered, this, [this]() {
+        applySortOrderFromMenu(Qt::AscendingOrder);
+    });
+
+    sortDescendingAct_ = new QAction(QStringLiteral("Descending"), this);
+    sortDescendingAct_->setCheckable(true);
+    sortDescendingAct_->setStatusTip(QStringLiteral("Sort results in descending order"));
+    sortOrderActionGroup_->addAction(sortDescendingAct_);
+    sortByMenu->addAction(sortDescendingAct_);
+    connect(sortDescendingAct_, &QAction::triggered, this, [this]() {
+        applySortOrderFromMenu(Qt::DescendingOrder);
+    });
+
     // Search Menu
     searchMenu_ = menuBar()->addMenu(QStringLiteral("Search"));
     searchMenu_->addAction(matchCaseAct_);
@@ -1286,6 +1377,7 @@ MainWindow::MainWindow(
 
         tableView_->horizontalHeader()->setSortIndicator(defaultSortColumn, defaultSortOrder);
         lastSortSection_ = defaultSortColumn;
+        syncSortMenuActions();
 
         const bool defaultPreviewVisible = controller_ && controller_->showPreviewPane();
         setPreviewPaneVisible(defaultPreviewVisible);
@@ -1513,6 +1605,7 @@ void MainWindow::applyNewWindowState(const NewWindowState& state)
     if (tableView_ && tableView_->horizontalHeader()) {
         tableView_->horizontalHeader()->setSortIndicator(state.sortColumn, state.sortOrder);
         lastSortSection_ = state.sortColumn;
+        syncSortMenuActions();
 
         if (static_cast<int>(state.columnWidths.size()) == SearchResultColumn::Count) {
             for (int column = 0; column < SearchResultColumn::Count; ++column) {
@@ -2440,6 +2533,7 @@ void MainWindow::handleSortSectionClicked(int section)
     lastSortSection_ = section;
 
     if (!switchedColumn) {
+        syncSortMenuActions();
         return;
     }
 
@@ -2448,6 +2542,7 @@ void MainWindow::handleSortSectionClicked(int section)
         (section == SearchResultColumn::DateModified && controller_->sortDateDescendingFirst());
 
     if (!shouldPreferDescending) {
+        syncSortMenuActions();
         return;
     }
 
@@ -2463,6 +2558,109 @@ void MainWindow::handleSortSectionClicked(int section)
         header->setSortIndicator(section, Qt::DescendingOrder);
         model_->sort(section, Qt::DescendingOrder);
     }
+
+    syncSortMenuActions();
+}
+
+Qt::SortOrder MainWindow::initialSortOrderForColumn(int column) const
+{
+    if (!controller_) {
+        return Qt::AscendingOrder;
+    }
+
+    switch (column) {
+        case SearchResultColumn::Name:
+        case SearchResultColumn::Path:
+            return Qt::AscendingOrder;
+
+        case SearchResultColumn::Size:
+            return controller_->sortSizeDescendingFirst()
+                ? Qt::DescendingOrder
+                : Qt::AscendingOrder;
+
+        case SearchResultColumn::DateModified:
+            return controller_->sortDateDescendingFirst()
+                ? Qt::DescendingOrder
+                : Qt::AscendingOrder;
+
+        default:
+            return Qt::AscendingOrder;
+    }
+}
+
+void MainWindow::applySortColumnFromMenu(int column)
+{
+    if (!tableView_ || !model_) {
+        return;
+    }
+
+    auto* header = tableView_->horizontalHeader();
+    if (!header) {
+        return;
+    }
+
+    const int currentColumn = header->sortIndicatorSection();
+    const Qt::SortOrder currentOrder = header->sortIndicatorOrder();
+
+    const Qt::SortOrder nextOrder =
+        currentColumn == column
+            ? (currentOrder == Qt::AscendingOrder ? Qt::DescendingOrder : Qt::AscendingOrder)
+            : initialSortOrderForColumn(column);
+
+    lastSortSection_ = column;
+    header->setSortIndicator(column, nextOrder);
+    model_->sort(column, nextOrder);
+    syncSortMenuActions();
+}
+
+void MainWindow::applySortOrderFromMenu(Qt::SortOrder order)
+{
+    if (!tableView_ || !model_) {
+        return;
+    }
+
+    auto* header = tableView_->horizontalHeader();
+    if (!header) {
+        return;
+    }
+
+    const int column = header->sortIndicatorSection();
+
+    lastSortSection_ = column;
+    header->setSortIndicator(column, order);
+    model_->sort(column, order);
+    syncSortMenuActions();
+}
+
+void MainWindow::syncSortMenuActions()
+{
+    if (!tableView_) {
+        return;
+    }
+
+    auto* header = tableView_->horizontalHeader();
+    if (!header) {
+        return;
+    }
+
+    const int column = header->sortIndicatorSection();
+    const Qt::SortOrder order = header->sortIndicatorOrder();
+
+    auto setCheckedBlocked = [](QAction* action, bool checked) {
+        if (!action || action->isChecked() == checked) {
+            return;
+        }
+
+        const QSignalBlocker blocker(action);
+        action->setChecked(checked);
+    };
+
+    setCheckedBlocked(sortByNameAct_, column == SearchResultColumn::Name);
+    setCheckedBlocked(sortByPathAct_, column == SearchResultColumn::Path);
+    setCheckedBlocked(sortBySizeAct_, column == SearchResultColumn::Size);
+    setCheckedBlocked(sortByDateModifiedAct_, column == SearchResultColumn::DateModified);
+    setCheckedBlocked(sortAscendingAct_, order == Qt::AscendingOrder);
+    setCheckedBlocked(sortDescendingAct_, order == Qt::DescendingOrder);
 }
 
 void MainWindow::setMatchCaseEnabled(bool enabled)

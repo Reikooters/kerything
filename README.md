@@ -277,6 +277,7 @@ Ranges are inclusive:
 
 ```text
 size:10M..100M
+size:10M-100M
 ```
 
 Open-ended ranges are also supported:
@@ -284,6 +285,8 @@ Open-ended ranges are also supported:
 ```text
 size:10M..
 size:..100M
+size:10M-
+size:-100M
 ```
 
 Size units are case-insensitive. Kerything uses power-of-two units, so `1M`
@@ -330,6 +333,7 @@ modified:3h
 modified:7d
 modified:2026-01-01
 modified:2026-01-01..2026-10-24
+modified:2026-01-01-2026-10-24
 ```
 
 The aliases `datemodified:` and `dm:` are also supported:
@@ -369,6 +373,7 @@ Date ranges are inclusive from the user's perspective:
 
 ```text
 modified:2026-01-01..2026-10-24
+modified:2026-01-01-2026-10-24
 ```
 
 This matches files modified from `2026-01-01 00:00:00` local time up to, but not
@@ -380,6 +385,16 @@ Open-ended date ranges are also supported:
 modified:2026-01-01..
 modified:..2026-10-24
 ```
+
+> [!NOTE]
+> Open-ended date ranges must use `..`, not `-`. These are **not** supported:
+>
+> ```text
+> modified:2026-01-01-
+> modified:-2026-10-24
+> ```
+>
+> This avoids ambiguity because ISO dates already contain hyphens.
 
 Modified date filters apply to both files and folders.
 

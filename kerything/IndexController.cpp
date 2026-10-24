@@ -478,6 +478,39 @@ namespace {
         return number * multiplier;
     }
 
+    std::optional<std::size_t> rangeSeparatorPosForSizeFilter(std::string_view expression)
+    {
+        if (const std::size_t dotRangePos = expression.find("..");
+            dotRangePos != std::string_view::npos) {
+            return dotRangePos;
+        }
+
+        if (const std::size_t hyphenRangePos = expression.find('-');
+            hyphenRangePos != std::string_view::npos) {
+            return hyphenRangePos;
+        }
+
+        return std::nullopt;
+    }
+
+    std::optional<std::size_t> rangeSeparatorPosForModifiedFilter(std::string_view expression)
+    {
+        if (const std::size_t dotRangePos = expression.find("..");
+            dotRangePos != std::string_view::npos) {
+            return dotRangePos;
+        }
+
+        // ISO date range shorthand: YYYY-MM-DD-YYYY-MM-DD
+        // The separator hyphen is the one after the first 10-character date.
+        static constexpr std::size_t IsoDateLength = 10;
+        if (expression.size() > IsoDateLength &&
+            expression[IsoDateLength] == '-') {
+            return IsoDateLength;
+        }
+
+        return std::nullopt;
+    }
+
     bool parseSizeFilter(
         std::string_view expression,
         IndexController::ParsedSearchQuery::UInt64Range& out
@@ -486,10 +519,13 @@ namespace {
             return false;
         }
 
-        if (const std::size_t rangePos = expression.find("..");
-            rangePos != std::string_view::npos) {
-            const std::string_view minText = expression.substr(0, rangePos);
-            const std::string_view maxText = expression.substr(rangePos + 2);
+        if (const std::optional<std::size_t> rangePos =
+                rangeSeparatorPosForSizeFilter(expression)) {
+            const std::size_t separatorLength =
+                expression.substr(*rangePos).starts_with("..") ? 2 : 1;
+
+            const std::string_view minText = expression.substr(0, *rangePos);
+            const std::string_view maxText = expression.substr(*rangePos + separatorLength);
 
             if (minText.empty() && maxText.empty()) {
                 return false;
@@ -687,25 +723,13 @@ namespace {
             return true;
         }
 
-        if (expression.size() >= 2 && expression.back() == 'h') {
-            quint64 hours = 0;
-            if (!parseUnsignedDecimal(expression.substr(0, expression.size() - 1), hours) ||
-                hours > static_cast<quint64>(std::numeric_limits<qint64>::max() / 3600)) {
-                return false;
-            }
+        if (const std::optional<std::size_t> rangePos =
+                rangeSeparatorPosForModifiedFilter(expression)) {
+            const std::size_t separatorLength =
+                expression.substr(*rangePos).starts_with("..") ? 2 : 1;
 
-            const qint64 now = QDateTime::currentSecsSinceEpoch();
-            const qint64 seconds = static_cast<qint64>(hours) * 3600;
-
-            out = {};
-            out.minInclusive = now - seconds;
-            return true;
-        }
-
-        if (const std::size_t rangePos = expression.find("..");
-            rangePos != std::string_view::npos) {
-            const std::string_view minText = expression.substr(0, rangePos);
-            const std::string_view maxText = expression.substr(rangePos + 2);
+            const std::string_view minText = expression.substr(0, *rangePos);
+            const std::string_view maxText = expression.substr(*rangePos + separatorLength);
 
             if (minText.empty() && maxText.empty()) {
                 return false;

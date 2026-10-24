@@ -456,10 +456,6 @@ void FileModel::setSearchHighlightTerms(
 ) {
     terms.removeAll(QString());
 
-    for (QString& term : terms) {
-        term = term.trimmed();
-    }
-
     terms.removeDuplicates();
 
     if (searchHighlightTerms_ == terms &&

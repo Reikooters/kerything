@@ -2274,9 +2274,15 @@ public:
 
     struct ParsedSearchQuery {
         std::vector<std::string> keywords;
+        std::vector<std::string> phrases;
         ExtensionSet extensions;
         bool foldersOnly = false;
         bool filesOnly = false;
+    };
+
+    enum class SearchQueryParseMode : uint8_t {
+        Normal,
+        Regex
     };
 
     struct SearchOptions {
@@ -2408,7 +2414,10 @@ public:
      */
     static bool contains(std::string_view haystack, std::string_view needle);
 
-    static ParsedSearchQuery parseSearchQuery(std::string_view query);
+    static ParsedSearchQuery parseSearchQuery(
+        std::string_view query,
+        SearchQueryParseMode mode = SearchQueryParseMode::Normal
+    );
     static std::string normalizeExtensionToken(std::string_view extension);
     static std::string_view finalExtension(std::string_view lowercaseFileName);
     static bool matchesFileExtensionFilter(

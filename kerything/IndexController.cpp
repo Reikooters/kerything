@@ -194,6 +194,11 @@ namespace {
         std::string lowercaseText;
     };
 
+    struct QueryPhrase {
+        std::string text;
+        std::string lowercaseText;
+    };
+
     struct QueryTrigram {
         uint32_t trigram = 0;
         std::size_t postingCount = 0;
@@ -369,6 +374,20 @@ namespace {
         return options.matchWholeWord
             ? containsWholeWord(haystack, needle)
             : IndexController::contains(haystack, needle);
+    }
+
+    bool matchesPhrase(
+        std::string_view haystack,
+        std::string_view phrase,
+        const IndexController::SearchOptions& options
+    ) {
+        if (phrase.empty()) {
+            return true;
+        }
+
+        return options.matchWholeWord
+            ? containsWholeWord(haystack, phrase)
+            : IndexController::contains(haystack, phrase);
     }
 
     uint32_t makeTrigram(std::string_view text, std::size_t offset)
@@ -1388,15 +1407,16 @@ namespace {
     std::vector<CandidateSource> candidateSourcesForDevice(
         const IndexController::DeviceIndex& index,
         const std::vector<QueryKeyword>& queryKeywords,
+        const std::vector<QueryPhrase>& queryPhrases,
         const IndexController::ExtensionSet& extensionFilter,
         IndexController::SearchDiagnostics* diagnostics
     ) {
         std::vector<CandidateSource> sources;
         std::size_t bestGramEstimate = std::numeric_limits<std::size_t>::max();
 
-        for (const QueryKeyword& queryKeyword : queryKeywords) {
+        auto appendGramsForLiteral = [&](std::string_view literal) {
             const std::vector<QueryGram> grams =
-                gramsForKeyword(index, queryKeyword.lowercaseText);
+                gramsForKeyword(index, literal);
 
             sources.reserve(sources.size() + grams.size());
 
@@ -1411,6 +1431,14 @@ namespace {
                     gram.postingCount
                 });
             }
+        };
+
+        for (const QueryKeyword& queryKeyword : queryKeywords) {
+            appendGramsForLiteral(queryKeyword.lowercaseText);
+        }
+
+        for (const QueryPhrase& queryPhrase : queryPhrases) {
+            appendGramsForLiteral(queryPhrase.lowercaseText);
         }
 
         if (!extensionFilter.empty()) {
@@ -6937,7 +6965,10 @@ IndexController::UpsertApplyResult IndexController::applyUpsertOperation(
         : UpsertApplyResult::Applied;
 }
 
-IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string_view query)
+IndexController::ParsedSearchQuery IndexController::parseSearchQuery(
+    std::string_view query,
+    SearchQueryParseMode mode
+)
 {
     ParsedSearchQuery parsed;
 
@@ -6986,25 +7017,10 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
         }
     };
 
-    std::size_t start = 0;
-    while (start < query.size()) {
-        while (start < query.size() &&
-               std::isspace(static_cast<unsigned char>(query[start]))) {
-            ++start;
+    auto consumeToken = [&](std::string_view token, std::string_view lowercaseToken) {
+        if (token.empty()) {
+            return;
         }
-
-        if (start >= query.size()) {
-            break;
-        }
-
-        std::size_t end = start;
-        while (end < query.size() &&
-               !std::isspace(static_cast<unsigned char>(query[end]))) {
-            ++end;
-        }
-
-        const std::string_view token(query.data() + start, end - start);
-        const std::string_view lowercaseToken(lowercaseQuery.data() + start, end - start);
 
         if (lowercaseToken.starts_with("ext:")) {
             consumeExtensionList(lowercaseToken.substr(4));
@@ -7023,9 +7039,120 @@ IndexController::ParsedSearchQuery IndexController::parseSearchQuery(std::string
         } else {
             parsed.keywords.emplace_back(token);
         }
+    };
 
-        start = end;
+    if (mode == SearchQueryParseMode::Regex) {
+        std::size_t start = 0;
+        while (start < query.size()) {
+            while (start < query.size() &&
+                   std::isspace(static_cast<unsigned char>(query[start]))) {
+                ++start;
+            }
+
+            if (start >= query.size()) {
+                break;
+            }
+
+            std::size_t end = start;
+            while (end < query.size() &&
+                   !std::isspace(static_cast<unsigned char>(query[end]))) {
+                ++end;
+            }
+
+            consumeToken(
+                std::string_view(query.data() + start, end - start),
+                std::string_view(lowercaseQuery.data() + start, end - start)
+            );
+
+            start = end;
+        }
+
+        return parsed;
     }
+
+    std::string token;
+    std::string lowercaseToken;
+
+    auto flushToken = [&]() {
+        consumeToken(token, lowercaseToken);
+        token.clear();
+        lowercaseToken.clear();
+    };
+
+    auto appendByte = [&](char c) {
+        token.push_back(c);
+        lowercaseToken.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(c)))
+        );
+    };
+
+    std::size_t pos = 0;
+
+    while (pos < query.size()) {
+        const char c = query[pos];
+
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            flushToken();
+
+            while (pos < query.size() &&
+                   std::isspace(static_cast<unsigned char>(query[pos]))) {
+                ++pos;
+            }
+
+            continue;
+        }
+
+        if (c == '\\') {
+            if (pos + 1 < query.size() && query[pos + 1] == '"') {
+                appendByte('"');
+                pos += 2;
+                continue;
+            }
+
+            appendByte(c);
+            ++pos;
+            continue;
+        }
+
+        if (c != '"') {
+            appendByte(c);
+            ++pos;
+            continue;
+        }
+
+        flushToken();
+        ++pos;
+
+        std::string phrase;
+
+        while (pos < query.size()) {
+            const char phraseChar = query[pos];
+
+            if (phraseChar == '\\' && pos + 1 < query.size()) {
+                const char escaped = query[pos + 1];
+
+                if (escaped == '"' || escaped == '\\') {
+                    phrase.push_back(escaped);
+                    pos += 2;
+                    continue;
+                }
+            }
+
+            if (phraseChar == '"') {
+                ++pos;
+                break;
+            }
+
+            phrase.push_back(phraseChar);
+            ++pos;
+        }
+
+        if (!phrase.empty()) {
+            parsed.phrases.push_back(std::move(phrase));
+        }
+    }
+
+    flushToken();
 
     return parsed;
 }
@@ -7201,14 +7328,16 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
 
     const auto parseAndSetupStart = Clock::now();
 
-    const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
+    const ParsedSearchQuery parsedQuery =
+        parseSearchQuery(query, SearchQueryParseMode::Normal);
     const std::vector<std::string>& keywords = parsedQuery.keywords;
+    const std::vector<std::string>& phrases = parsedQuery.phrases;
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
     const bool hasExtensionFilter = !extensionFilter.empty();
     const bool foldersOnly = parsedQuery.foldersOnly;
     const bool filesOnly = parsedQuery.filesOnly;
 
-    debugKeywordCount = keywords.size();
+    debugKeywordCount = keywords.size() + phrases.size();
 
     // No indexed item can be both a file and a folder.
     if (filesOnly && foldersOnly) {
@@ -7244,10 +7373,30 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
         queryKeywords.push_back(std::move(queryKeyword));
     }
 
+    std::vector<QueryPhrase> queryPhrases;
+    queryPhrases.reserve(phrases.size());
+
+    for (const std::string& phrase : phrases) {
+        QueryPhrase queryPhrase;
+        queryPhrase.text = phrase;
+        queryPhrase.lowercaseText = phrase;
+
+        std::transform(
+            queryPhrase.lowercaseText.begin(),
+            queryPhrase.lowercaseText.end(),
+            queryPhrase.lowercaseText.begin(),
+            [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            }
+        );
+
+        queryPhrases.push_back(std::move(queryPhrase));
+    }
+
     parseAndSetupMs = elapsedMsSince(parseAndSetupStart);
 
     // IF EMPTY: Return everything matching non-trigram filters.
-    if (keywords.empty()) {
+    if (keywords.empty() && phrases.empty()) {
         const auto emptyQueryReserveStart = Clock::now();
 
         std::size_t totalSize = 0;
@@ -7397,6 +7546,7 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
             candidateSourcesForDevice(
                 *indexPtr,
                 queryKeywords,
+                queryPhrases,
                 extensionFilter,
                 diagnostics
             );
@@ -7513,6 +7663,16 @@ std::vector<IndexController::RecordHandle> IndexController::performTrigramSearch
                 }
             }
 
+            for (const auto& queryPhrase : queryPhrases) {
+                const std::string& phrase = options.matchCase
+                    ? queryPhrase.text
+                    : queryPhrase.lowercaseText;
+
+                if (!matchesPhrase(name, phrase, options)) {
+                    return;
+                }
+            }
+
             appendResult(*indexPtr, recordIdx);
         };
 
@@ -7613,7 +7773,8 @@ IndexController::RegexSearchResult IndexController::performRegexSearchWithError(
     RegexSearchResult searchResult;
     std::vector<RecordHandle>& results = searchResult.records;
 
-    const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
+    const ParsedSearchQuery parsedQuery =
+        parseSearchQuery(query, SearchQueryParseMode::Regex);
     const std::vector<std::string>& regexTokens = parsedQuery.keywords;
     const ExtensionSet& extensionFilter = parsedQuery.extensions;
     const bool hasExtensionFilter = !extensionFilter.empty();
@@ -8026,7 +8187,8 @@ std::optional<QString> IndexController::validateRegexSearchQuery(
     const std::string& query,
     SearchOptions options
 ) const {
-    const ParsedSearchQuery parsedQuery = parseSearchQuery(query);
+    const ParsedSearchQuery parsedQuery =
+        parseSearchQuery(query, SearchQueryParseMode::Regex);
 
     if (parsedQuery.keywords.empty()) {
         return std::nullopt;

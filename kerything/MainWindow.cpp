@@ -168,20 +168,23 @@ namespace {
     {
         QStringList terms;
 
-        const QStringList parts = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        const IndexController::ParsedSearchQuery parsed =
+            IndexController::parseSearchQuery(text.toStdString());
 
-        for (const QString& part : parts) {
-            const QString term = part.trimmed();
+        for (const std::string& keyword : parsed.keywords) {
+            const QString term = QString::fromStdString(keyword);
 
-            if (term.isEmpty()) {
-                continue;
+            if (!term.isEmpty()) {
+                terms << term;
             }
+        }
 
-            if (term.contains(QLatin1Char(':'))) {
-                continue;
+        for (const std::string& phrase : parsed.phrases) {
+            const QString term = QString::fromStdString(phrase);
+
+            if (!term.isEmpty()) {
+                terms << term;
             }
-
-            terms << term;
         }
 
         terms.removeDuplicates();
@@ -189,9 +192,9 @@ namespace {
     }
 
     QString effectiveSearchQueryWithFilterMacros(
-            const QString& text,
-            const std::vector<SearchFilterPreference>& filters
-        ) {
+        const QString& text,
+        const std::vector<SearchFilterPreference>& filters
+    ) {
         if (filters.empty()) {
             return text;
         }
@@ -507,6 +510,12 @@ namespace {
         addNormal(QStringLiteral("cma"), QStringLiteral("prefix"));
         addNormal(QStringLiteral("cmak"), QStringLiteral("prefix"));
         addNormal(QStringLiteral("cmake"), QStringLiteral("prefix"));
+
+        // Exact phrase searches.
+        addNormal(QStringLiteral("\" \""), QStringLiteral("phrase"));
+        addNormal(QStringLiteral("\"source code\""), QStringLiteral("phrase"));
+        addNormal(QStringLiteral("\"my holiday\""), QStringLiteral("phrase"));
+        addNormal(QStringLiteral("ext:jpg \"my holiday\""), QStringLiteral("phrase+filter"));
 
         // Whole-word checks.
         addWholeWord(QStringLiteral("as"));
@@ -2046,7 +2055,14 @@ void MainWindow::updateSearchLineFilterHint()
                     "Filters such as files:, folders:, ext:mp4, ext:wav;mp3, or a custom filter macro such as audio: can still be used."
                 )
                 : QStringLiteral(
-                    "Search indexed file names. You can use filters such as files:, folders:, ext:mp4, ext:wav;mp3, or a custom filter macro such as audio:."
+                    "Search indexed file names.\n\n"
+                    "Use spaces for AND search:\n"
+                    "  my holiday       matches names containing both words anywhere\n\n"
+                    "Use double quotes for exact phrases:\n"
+                    "  \"my holiday\"     matches that exact substring\n"
+                    "  \" \"              matches names containing a space\n\n"
+                    "Use \\\" to search for a literal quote character.\n\n"
+                    "You can use filters such as files:, folders:, ext:mp4, ext:wav;mp3, or a custom filter macro such as audio:."
                 )
         );
         updateFilterChip();
@@ -2086,7 +2102,9 @@ void MainWindow::updateSearchLineFilterHint()
             )
             : QStringLiteral(
                 "Active filter: %1\n"
-                "Query fragment: %2"
+                "Query fragment: %2\n\n"
+                "Use double quotes for exact phrases, e.g. \"my holiday\".\n"
+                "Use \" \" to search for names containing spaces."
             ).arg(
                 activeSearchFilterName_,
                 activeSearchFilter_

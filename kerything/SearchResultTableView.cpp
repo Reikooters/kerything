@@ -113,14 +113,13 @@ namespace {
             : text.toCaseFolded();
 
         for (const QString& term : terms) {
-            const QString trimmedTerm = term.trimmed();
-            if (trimmedTerm.isEmpty()) {
+            if (term.isEmpty()) {
                 continue;
             }
 
             const QString searchTerm = matchCase
-                ? trimmedTerm
-                : trimmedTerm.toCaseFolded();
+                ? term
+                : term.toCaseFolded();
 
             qsizetype pos = 0;
 

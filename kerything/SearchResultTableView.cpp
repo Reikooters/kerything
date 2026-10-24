@@ -6,6 +6,7 @@
 #include <QAbstractItemModel>
 #include <QApplication>
 #include <QEvent>
+#include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -24,14 +25,61 @@ namespace {
     constexpr const char* HoveredRowProperty = "_kerything_hovered_row";
 
     /*
-     * QStyledItemDelegate/style text drawing applies small style-private spacing
-     * that QTextLine::draw() does not reproduce exactly. These values align the
-     * custom highlighted text path with the normal, non-highlighted item text
-     * placement for the current table style.
+     * Draw result text and decorations inside stable rects instead of using the
+     * style's internal text/elision and decoration layout paths. Some styles make
+     * item sub-rects depend on current text width or available column width, which
+     * can shift text/icons when content barely fits or starts eliding.
      */
-    constexpr int HighlightedTextHorizontalInsetLeft = 2;
-    constexpr int HighlightedTextHorizontalInsetRight = 3;
-    constexpr int HighlightedTextDrawCorrection = 1;
+    constexpr int ResultTextLeftInset = 2;
+    constexpr int ResultTextRightInset = 6;
+    constexpr int ResultDecorationLeftInset = 3;
+    constexpr int ResultDecorationTextSpacing = 4;
+
+    void drawTextLayoutLine(
+        QPainter* painter,
+        const QRect& contentRect,
+        const QString& text,
+        const QFont& font,
+        const QColor& textColor,
+        const QList<QTextLayout::FormatRange>& formats = {}
+    ) {
+        if (contentRect.width() <= 0 || contentRect.height() <= 0 || text.isEmpty()) {
+            return;
+        }
+
+        QTextLayout layout(text, font);
+        layout.setFormats(formats);
+
+        layout.beginLayout();
+        QTextLine line = layout.createLine();
+        layout.endLayout();
+
+        if (!line.isValid()) {
+            return;
+        }
+
+        painter->setPen(textColor);
+        painter->setClipRect(contentRect);
+
+        const qreal y = contentRect.top() + (contentRect.height() - line.height()) / 2.0;
+        line.draw(
+            painter,
+            QPointF(contentRect.left(), y)
+        );
+    }
+
+    QString elidePlainText(
+        const QString& text,
+        const QFontMetrics& fontMetrics,
+        Qt::TextElideMode elideMode,
+        int width
+    ) {
+        if (text.isEmpty() || width <= 0) {
+            return QString();
+        }
+
+        return fontMetrics.elidedText(text, elideMode, width);
+    }
 
     int hoveredRowForView(const QWidget* view)
     {
@@ -329,6 +377,85 @@ namespace {
         return highlightSpansForText(text, terms, matchCase, matchWholeWord);
     }
 
+    QList<HighlightSpan> highlightSpansForElidedText(
+        const QString& originalText,
+        const QString& elidedText,
+        const QStringList& terms,
+        bool matchCase,
+        bool matchWholeWord,
+        bool useRegex,
+        const re2::RE2* regex = nullptr
+    ) {
+        static constexpr QChar Ellipsis = QChar(0x2026);
+
+        if (originalText == elidedText) {
+            return highlightSpansForText(
+                elidedText,
+                terms,
+                matchCase,
+                matchWholeWord,
+                useRegex,
+                regex
+            );
+        }
+
+        if (elidedText.isEmpty()) {
+            return {};
+        }
+
+        /*
+         * elideHighlightedText() only right-elides, so the visible text is a prefix
+         * of originalText followed by U+2026. Highlight any full-text match that
+         * intersects that visible prefix. This preserves partial highlighting for
+         * cases like:
+         *
+         *   original: SettingsHandlers_AppControl.dll
+         *   query:    AppControl
+         *   elided:   SettingsHandlers_AppC…
+         *
+         * where "AppC" should still be highlighted.
+         */
+        const qsizetype visiblePrefixLength =
+            elidedText.endsWith(Ellipsis)
+                ? elidedText.size() - 1
+                : elidedText.size();
+
+        if (visiblePrefixLength <= 0) {
+            return {};
+        }
+
+        const QList<HighlightSpan> originalSpans =
+            highlightSpansForText(
+                originalText,
+                terms,
+                matchCase,
+                matchWholeWord,
+                useRegex,
+                regex
+            );
+
+        QList<HighlightSpan> clippedSpans;
+
+        for (const HighlightSpan& span : originalSpans) {
+            const qsizetype spanStart = span.start;
+            const qsizetype spanEnd = span.start + span.length;
+
+            const qsizetype clippedStart = std::max<qsizetype>(spanStart, 0);
+            const qsizetype clippedEnd = std::min<qsizetype>(spanEnd, visiblePrefixLength);
+
+            if (clippedEnd <= clippedStart) {
+                continue;
+            }
+
+            clippedSpans.append(HighlightSpan{
+                .start = clippedStart,
+                .length = clippedEnd - clippedStart,
+            });
+        }
+
+        return clippedSpans;
+    }
+
     QList<QTextLayout::FormatRange> formatRangesForSpans(
         const QList<HighlightSpan>& spans,
         const QFont& font,
@@ -407,7 +534,15 @@ namespace {
             const QString candidate = text.left(mid) + Ellipsis;
 
             const QList<HighlightSpan> candidateSpans =
-                highlightSpansForText(candidate, terms, matchCase, matchWholeWord, useRegex, regex);
+                highlightSpansForElidedText(
+                    text,
+                    candidate,
+                    terms,
+                    matchCase,
+                    matchWholeWord,
+                    useRegex,
+                    regex
+                );
             const QList<QTextLayout::FormatRange> candidateFormats =
                 formatRangesForSpans(candidateSpans, font, Qt::black);
 
@@ -422,7 +557,7 @@ namespace {
         return best;
     }
 
-    class HighlightedSearchTermDelegate final : public QStyledItemDelegate {
+    class SearchResultTextDelegate final : public QStyledItemDelegate {
     public:
         using QStyledItemDelegate::QStyledItemDelegate;
 
@@ -437,32 +572,9 @@ namespace {
 
             const QStringList terms = index.data(FileModel::HighlightTermsRole).toStringList();
 
-            if (terms.isEmpty()) {
-                QStyledItemDelegate::paint(painter, opt, index);
-                painter->restore();
-                return;
-            }
-
             const bool matchCase = index.data(FileModel::HighlightMatchCaseRole).toBool();
             const bool matchWholeWord = index.data(FileModel::HighlightMatchWholeWordRole).toBool();
             const bool useRegex = index.data(FileModel::HighlightUseRegexRole).toBool();
-
-            const re2::RE2* highlightRegex = nullptr;
-
-            if (useRegex) {
-                regexHighlightCache_.update(
-                    terms.isEmpty() ? QString() : terms.first(),
-                    matchCase
-                );
-
-                if (!regexHighlightCache_.valid) {
-                    QStyledItemDelegate::paint(painter, opt, index);
-                    painter->restore();
-                    return;
-                }
-
-                highlightRegex = regexHighlightCache_.regex.get();
-            }
 
             const QString plainText = opt.text;
 
@@ -471,39 +583,50 @@ namespace {
                 : QApplication::style();
 
             /*
-             * Compute the text rectangle while opt.text still contains the real text.
-             * Some styles use the text-bearing option when calculating item sub-rects.
-             * Clearing opt.text before this can shift the custom QTextLayout drawing
-             * slightly compared with the default delegate.
+             * Let the style draw only the item background, selection, focus, etc.
+             * Text and decorations are drawn manually below from opt.rect-based
+             * geometry so their positions do not change when content approaches the
+             * elision threshold.
              */
-            const QRect textRect = style->subElementRect(
-                QStyle::SE_ItemViewItemText,
-                &opt,
-                opt.widget
-            );
-
-            const qreal drawX = textRect.left() + HighlightedTextHorizontalInsetLeft;
-            const int availableWidth = std::max(
-                0,
-                textRect.width() - HighlightedTextHorizontalInsetLeft - HighlightedTextHorizontalInsetRight - HighlightedTextDrawCorrection
-            );
-
-            /*
-             * Keep the left clip edge at the style-provided text rect. Some glyphs have
-             * negative left bearing/antialiasing overhang; clipping at the shifted draw
-             * origin can make a shifted QTextLayout still appear visually too far left.
-             * The right edge is inset so elided text still respects the same practical
-             * right padding.
-             */
-            const QRect clipRect = textRect.adjusted(
-                0,
-                0,
-                -HighlightedTextHorizontalInsetLeft,
-                0
-            );
-
             QStyleOptionViewItem backgroundOpt = opt;
             backgroundOpt.text.clear();
+
+            const QIcon itemIcon = backgroundOpt.icon;
+            const bool hasItemIcon = !itemIcon.isNull();
+
+            const QSize iconSize = opt.decorationSize.isValid()
+                ? opt.decorationSize
+                : QSize(16, 16);
+
+            QRect decorationRect;
+
+            int contentLeft = opt.rect.left() + ResultTextLeftInset;
+
+            if (hasItemIcon) {
+                decorationRect = QRect(
+                    opt.rect.left() + ResultDecorationLeftInset,
+                    opt.rect.top() + (opt.rect.height() - iconSize.height()) / 2,
+                    iconSize.width(),
+                    iconSize.height()
+                );
+
+                contentLeft =
+                    decorationRect.right() +
+                    1 +
+                    ResultDecorationTextSpacing +
+                    ResultTextLeftInset;
+            }
+
+            const int contentRight = opt.rect.right() - ResultTextRightInset;
+
+            const QRect contentRect(
+                contentLeft,
+                opt.rect.top(),
+                std::max(0, contentRight - contentLeft + 1),
+                opt.rect.height()
+            );
+
+            backgroundOpt.icon = QIcon();
 
             style->drawControl(
                 QStyle::CE_ItemViewItem,
@@ -512,10 +635,88 @@ namespace {
                 backgroundOpt.widget
             );
 
+            if (hasItemIcon && decorationRect.isValid()) {
+                const QIcon::Mode iconMode =
+                    opt.state & QStyle::State_Enabled
+                        ? QIcon::Normal
+                        : QIcon::Disabled;
+
+                const QIcon::State iconState =
+                    opt.state & QStyle::State_Open
+                        ? QIcon::On
+                        : QIcon::Off;
+
+                painter->save();
+                painter->setClipRect(opt.rect);
+
+                itemIcon.paint(
+                    painter,
+                    decorationRect,
+                    opt.decorationAlignment,
+                    iconMode,
+                    iconState
+                );
+
+                painter->restore();
+            }
+
             const bool selected = opt.state & QStyle::State_Selected;
             const QColor textColor = selected
                 ? opt.palette.color(QPalette::Active, QPalette::HighlightedText)
                 : opt.palette.color(QPalette::Active, QPalette::Text);
+
+            const int availableWidth = std::max(0, contentRect.width());
+
+            if (terms.isEmpty()) {
+                const QString elidedText = elidePlainText(
+                    plainText,
+                    opt.fontMetrics,
+                    opt.textElideMode,
+                    availableWidth
+                );
+
+                drawTextLayoutLine(
+                    painter,
+                    contentRect,
+                    elidedText,
+                    opt.font,
+                    textColor
+                );
+
+                painter->restore();
+                return;
+            }
+
+            const re2::RE2* highlightRegex = nullptr;
+
+            if (useRegex) {
+                regexHighlightCache_.update(
+                    terms.first(),
+                    matchCase
+                );
+
+                if (!regexHighlightCache_.valid) {
+                    const QString elidedText = elidePlainText(
+                        plainText,
+                        opt.fontMetrics,
+                        opt.textElideMode,
+                        availableWidth
+                    );
+
+                    drawTextLayoutLine(
+                        painter,
+                        contentRect,
+                        elidedText,
+                        opt.font,
+                        textColor
+                    );
+
+                    painter->restore();
+                    return;
+                }
+
+                highlightRegex = regexHighlightCache_.regex.get();
+            }
 
             const QString elidedText = elideHighlightedText(
                 plainText,
@@ -529,7 +730,8 @@ namespace {
             );
 
             QList<HighlightSpan> spans =
-                highlightSpansForText(
+                highlightSpansForElidedText(
+                    plainText,
                     elidedText,
                     terms,
                     matchCase,
@@ -538,33 +740,17 @@ namespace {
                     highlightRegex
                 );
 
-            if (spans.isEmpty()) {
-                opt.text = elidedText;
-                QStyledItemDelegate::paint(painter, opt, index);
-                painter->restore();
-                return;
-            }
-
             QList<QTextLayout::FormatRange> formats =
                 formatRangesForSpans(spans, opt.font, textColor);
 
-            QTextLayout layout(elidedText, opt.font);
-            layout.setFormats(formats);
-
-            layout.beginLayout();
-            QTextLine line = layout.createLine();
-            layout.endLayout();
-
-            painter->setPen(textColor);
-            painter->setClipRect(clipRect);
-
-            if (line.isValid()) {
-                const qreal y = textRect.top() + (textRect.height() - line.height()) / 2.0;
-                line.draw(
-                    painter,
-                    QPointF(drawX + HighlightedTextDrawCorrection, y)
-                );
-            }
+            drawTextLayoutLine(
+                painter,
+                contentRect,
+                elidedText,
+                opt.font,
+                textColor,
+                formats
+            );
 
             painter->restore();
         }
@@ -579,7 +765,12 @@ SearchResultTableView::SearchResultTableView(QWidget* parent)
 {
     setItemDelegateForColumn(
         SearchResultColumn::Name,
-        new HighlightedSearchTermDelegate(this)
+        new SearchResultTextDelegate(this)
+    );
+
+    setItemDelegateForColumn(
+        SearchResultColumn::Path,
+        new SearchResultTextDelegate(this)
     );
 }
 

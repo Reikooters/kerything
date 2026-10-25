@@ -20,6 +20,13 @@ struct DevicePreferenceChange {
 
     bool wasLiveUpdatesEnabled = true;
     bool liveUpdatesEnabled = true;
+    bool refreshIndexBeforeEnablingLiveUpdates = false;
+
+    bool wasSaveIndexToDisk = true;
+    bool saveIndexToDisk = true;
+
+    bool wasRefreshOnStartup = true;
+    bool refreshOnStartup = true;
 
     [[nodiscard]] bool becameEnabled() const noexcept
     {
@@ -44,6 +51,16 @@ struct DevicePreferenceChange {
     [[nodiscard]] bool liveUpdatesEnabledChanged() const noexcept
     {
         return liveUpdatesEnabled != wasLiveUpdatesEnabled;
+    }
+
+    [[nodiscard]] bool saveIndexToDiskChanged() const noexcept
+    {
+        return saveIndexToDisk != wasSaveIndexToDisk;
+    }
+
+    [[nodiscard]] bool refreshOnStartupChanged() const noexcept
+    {
+        return refreshOnStartup != wasRefreshOnStartup;
     }
 };
 

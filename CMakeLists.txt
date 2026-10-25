@@ -99,6 +99,8 @@ add_executable(kerything
         kerything/HoverRowHighlight.h
         kerything/IndexController.cpp
         kerything/IndexController.h
+        kerything/IndexPersistenceManager.cpp
+        kerything/IndexPersistenceManager.h
         kerything/MainWindow.cpp
         kerything/MainWindow.h
         kerything/Preferences.cpp

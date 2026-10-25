@@ -5,10 +5,12 @@
 #define KERYTHING_INDEXCONTROLLER_H
 
 #include <execution>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <QDir>
+#include <QDateTime>
 #include <QObject>
 #include <QStringList>
 #include <shared_mutex>
@@ -31,6 +33,16 @@ class IndexController final : public QObject {
 
 public:
     explicit IndexController(QObject* parent = nullptr);
+
+    struct SavedIndexInfo {
+        bool available = false;
+        qint64 sizeBytes = 0;
+        QDateTime modifiedAt;
+    };
+
+    using SavedIndexInfoProvider = std::function<SavedIndexInfo(const QString& deviceId)>;
+
+    void setSavedIndexInfoProvider(SavedIndexInfoProvider provider);
 
     struct TransparentStringHash {
         using is_transparent = void;
@@ -2345,6 +2357,24 @@ public:
         qsizetype ignoredUnindexedNamespace = 0;
     };
 
+    struct CoreSnapshot {
+        QString deviceId;
+        QString devNode;
+        QString fsType;
+        QString label;
+        QStringList mountPoints;
+        QString primaryMountPoint;
+        std::vector<BlockDeviceMountInfo> mounts;
+        bool mounted = false;
+        bool showOfflineResults = true;
+        qint64 lastIndexedTime = 0;
+
+        std::vector<FileRecord> fileRecords;
+        std::vector<FileRecordNamespace> fileRecordNamespaces;
+        std::vector<char> stringPool;
+        std::vector<uint64_t> deletedRecordBits;
+    };
+
     const DeviceIndex* deviceIndex(quint64 indexId) const;
 
     quint64 addDevice(
@@ -2404,6 +2434,8 @@ public:
     void buildBigramIndexParallelByRequestId(quint32 requestId);
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
+    [[nodiscard]] std::optional<CoreSnapshot> coreSnapshotForDeviceId(const QString& deviceId) const;
+    bool addDeviceFromCoreSnapshot(CoreSnapshot snapshot);
     [[nodiscard]] QString memoryStatsText() const;
     [[nodiscard]] std::vector<IndexSummary> indexSummaries() const;
     LiveUpdateApplyResult applyLiveUpdateOperations(
@@ -2552,6 +2584,8 @@ private:
     // To go from requestId -> in-memory index, use:
     // requestId -> indexId -> in-memory index
     std::unordered_map<quint64, quint64> indexIdByRequestId_;
+
+    SavedIndexInfoProvider savedIndexInfoProvider_;
 };
 
 #endif //KERYTHING_INDEXCONTROLLER_H

@@ -29,6 +29,8 @@ struct IndexedDevicePreference {
     bool scanWhenUnmounted = true;
     bool showOfflineResults = true;
     bool liveUpdatesEnabled = true;
+    bool saveIndexToDisk = true;
+    bool refreshOnStartup = true;
 
     QDateTime lastSeenAt;
     QDateTime lastIndexedAt;

@@ -4,6 +4,10 @@
 #ifndef KERYTHING_INDEXSUMMARY_H
 #define KERYTHING_INDEXSUMMARY_H
 
+#include <QDateTime>
+#include <QString>
+#include <QStringList>
+
 struct IndexSummary {
     quint64 indexId = 0;
     QString deviceId;
@@ -20,6 +24,10 @@ struct IndexSummary {
     bool mounted = false;
     bool searchable = false;
     bool showOfflineResults = true;
+
+    bool savedIndexAvailable = false;
+    qint64 savedIndexSizeBytes = 0;
+    QDateTime savedIndexModifiedAt;
 };
 
 #endif // KERYTHING_INDEXSUMMARY_H

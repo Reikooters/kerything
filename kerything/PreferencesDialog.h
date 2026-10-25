@@ -54,6 +54,7 @@ Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);
     void refreshIndexRequested(const QString& deviceId);
     void forgetIndexRequested(const QString& deviceId);
+    void deleteSavedIndexRequested(const QString& deviceId);
     void searchFiltersApplied();
     void autoRefreshResultsForLiveUpdatesApplied(bool enabled);
     void searchResultHighlightingApplied(bool enabled);
@@ -76,6 +77,7 @@ private:
     enum IndexColumn {
         IndexNameColumn = 0,
         IndexStatusColumn,
+        IndexSavedColumn,
         IndexRecordsColumn,
         IndexFilesystemColumn,
         IndexMountPointColumn,
@@ -118,10 +120,14 @@ private:
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;
     bool showOfflineResultsForDevice(const QString& deviceId) const;
+    bool saveIndexToDiskForDevice(const QString& deviceId) const;
+    bool refreshOnStartupForDevice(const QString& deviceId) const;
     bool isBtrfsDevice(const QString& deviceId) const;
     bool unmountedScanningSupportedForDevice(const QString& deviceId) const;
     bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     bool liveUpdatesSupportedForDevice(const QString& deviceId) const;
+    bool refreshIndexBeforeEnablingLiveUpdatesForDevice(const QString& deviceId) const;
+    bool shouldShowRefreshIndexBeforeEnablingLiveUpdatesForDevice(const QString& deviceId) const;
     void toggleDeviceRowChecked(int row);
 
     static QString displayNameForIndexSummary(
@@ -169,13 +175,17 @@ private:
     QPushButton* refreshSelectedDeviceIndexButton_ = nullptr;
     QCheckBox* scanWhenUnmountedCheckBox_ = nullptr;
     QCheckBox* showOfflineResultsCheckBox_ = nullptr;
+    QCheckBox* saveIndexToDiskCheckBox_ = nullptr;
+    QCheckBox* refreshOnStartupCheckBox_ = nullptr;
     QLabel* liveUpdatesWarningIconLabel_ = nullptr;
     QCheckBox* liveUpdatesEnabledCheckBox_ = nullptr;
+    QCheckBox* refreshIndexBeforeEnablingLiveUpdatesCheckBox_ = nullptr;
     QTextBrowser* selectedDeviceDetailsText_ = nullptr;
 
     QTableWidget* indexTable_ = nullptr;
     QPushButton* refreshIndexButton_ = nullptr;
     QPushButton* forgetIndexButton_ = nullptr;
+    QPushButton* deleteSavedIndexButton_ = nullptr;
 
     QTableWidget* filterTable_ = nullptr;
     QPushButton* addFilterButton_ = nullptr;

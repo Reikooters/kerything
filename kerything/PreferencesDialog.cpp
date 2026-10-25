@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -61,9 +62,13 @@ namespace {
     constexpr int ScanWhenUnmountedRole = Qt::UserRole + 3;
     constexpr int ShowOfflineResultsRole = Qt::UserRole + 4;
     constexpr int LiveUpdatesEnabledRole = Qt::UserRole + 5;
+    constexpr int SaveIndexToDiskRole = Qt::UserRole + 6;
+    constexpr int RefreshOnStartupRole = Qt::UserRole + 7;
+    constexpr int RefreshIndexBeforeEnablingLiveUpdatesRole = Qt::UserRole + 8;
 
     constexpr int IndexDeviceIdRole = Qt::UserRole + 20;
     constexpr int IndexIdRole = Qt::UserRole + 21;
+    constexpr int IndexSavedAvailableRole = Qt::UserRole + 22;
 
     constexpr int FilterIdRole = Qt::UserRole + 40;
 
@@ -96,6 +101,31 @@ namespace {
 
         button->setIcon(themedIcon(iconName, fallbackIconName));
         button->setIconSize(QSize(16, 16));
+    }
+
+    QString formatSavedIndexSize(qint64 bytes)
+    {
+        if (bytes < 0) {
+            return QStringLiteral("—");
+        }
+
+        static constexpr double KiB = 1024.0;
+        static constexpr double MiB = KiB * 1024.0;
+        static constexpr double GiB = MiB * 1024.0;
+
+        if (bytes >= static_cast<qint64>(GiB)) {
+            return QStringLiteral("%1 GiB").arg(bytes / GiB, 0, 'f', 2);
+        }
+
+        if (bytes >= static_cast<qint64>(MiB)) {
+            return QStringLiteral("%1 MiB").arg(bytes / MiB, 0, 'f', 2);
+        }
+
+        if (bytes >= static_cast<qint64>(KiB)) {
+            return QStringLiteral("%1 KiB").arg(bytes / KiB, 0, 'f', 2);
+        }
+
+        return QStringLiteral("%1 B").arg(bytes);
     }
 
     bool moveTableSelectionToEdge(QTableWidget* table, QKeyEvent* keyEvent)
@@ -339,6 +369,9 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
         bool scanWhenUnmounted = true;
         bool showOfflineResults = true;
         bool liveUpdatesEnabled = true;
+        bool saveIndexToDisk = true;
+        bool refreshOnStartup = true;
+        bool refreshIndexBeforeEnablingLiveUpdates = true;
     };
 
     QHash<QString, CurrentDeviceState> currentStateByDeviceId;
@@ -367,6 +400,10 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
                 .scanWhenUnmounted = item->data(ScanWhenUnmountedRole).toBool(),
                 .showOfflineResults = item->data(ShowOfflineResultsRole).toBool(),
                 .liveUpdatesEnabled = item->data(LiveUpdatesEnabledRole).toBool(),
+                .saveIndexToDisk = item->data(SaveIndexToDiskRole).toBool(),
+                .refreshOnStartup = item->data(RefreshOnStartupRole).toBool(),
+                .refreshIndexBeforeEnablingLiveUpdates =
+                    item->data(RefreshIndexBeforeEnablingLiveUpdatesRole).toBool(),
             });
         }
     }
@@ -403,6 +440,12 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
         item->setData(ScanWhenUnmountedRole, it->scanWhenUnmounted);
         item->setData(ShowOfflineResultsRole, it->showOfflineResults);
         item->setData(LiveUpdatesEnabledRole, it->liveUpdatesEnabled);
+        item->setData(SaveIndexToDiskRole, it->saveIndexToDisk);
+        item->setData(RefreshOnStartupRole, it->refreshOnStartup);
+        item->setData(
+            RefreshIndexBeforeEnablingLiveUpdatesRole,
+            it->refreshIndexBeforeEnablingLiveUpdates
+        );
     }
 
     int rowToSelect = -1;
@@ -634,13 +677,40 @@ QWidget* PreferencesDialog::createDevicesPage()
         optionsGroup
     );
 
+    saveIndexToDiskCheckBox_ = new QCheckBox(
+        QStringLiteral("Save this device's index to disk for faster startup"),
+        optionsGroup
+    );
+    saveIndexToDiskCheckBox_->setToolTip(
+        QStringLiteral(
+            "Stores this device's index in your user data directory so Kerything can load it\n"
+            "next time without waiting for a full scan."
+        )
+    );
+
+    refreshOnStartupCheckBox_ = new QCheckBox(
+        QStringLiteral("Refresh this device's index when Kerything starts"),
+        optionsGroup
+    );
+    refreshOnStartupCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, Kerything performs a full scan of this device on startup.\n"
+            "This occurs after loading the saved index if one is available.\n\n"
+            "If saving this device's index to disk is enabled, you can disable this\n"
+            "option for devices that rarely change."
+        )
+    );
+
     optionsLayout->addWidget(selectedDeviceDetailsText_);
     optionsLayout->addWidget(scanWhenUnmountedCheckBox_);
     optionsLayout->addWidget(showOfflineResultsCheckBox_);
+    optionsLayout->addWidget(saveIndexToDiskCheckBox_);
+    optionsLayout->addWidget(refreshOnStartupCheckBox_);
 
     auto* liveUpdatesRow = new QWidget(optionsGroup);
-    auto* liveUpdatesRowLayout = new QHBoxLayout(liveUpdatesRow);
+    auto* liveUpdatesRowLayout = new QGridLayout(liveUpdatesRow);
     liveUpdatesRowLayout->setContentsMargins(0, 0, 0, 0);
+    liveUpdatesRowLayout->setHorizontalSpacing(18);
 
     liveUpdatesWarningIconLabel_ = new QLabel(liveUpdatesRow);
     liveUpdatesWarningIconLabel_->setPixmap(
@@ -653,9 +723,22 @@ QWidget* PreferencesDialog::createDevicesPage()
         liveUpdatesRow
     );
 
-    liveUpdatesRowLayout->addWidget(liveUpdatesWarningIconLabel_);
-    liveUpdatesRowLayout->addWidget(liveUpdatesEnabledCheckBox_);
-    liveUpdatesRowLayout->addStretch();
+    refreshIndexBeforeEnablingLiveUpdatesCheckBox_ = new QCheckBox(
+        QStringLiteral("Refresh this device's index now"),
+        liveUpdatesRow
+    );
+    refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setToolTip(
+        QStringLiteral(
+            "When applying this change to live updates, perform a full rescan of the device first.\n"
+            "This option is not saved as a preference; it only affects this Apply/OK action."
+        )
+    );
+    refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setVisible(false);
+
+    liveUpdatesRowLayout->addWidget(liveUpdatesWarningIconLabel_, 0, 0);
+    liveUpdatesRowLayout->addWidget(liveUpdatesEnabledCheckBox_, 0, 1);
+    liveUpdatesRowLayout->addWidget(refreshIndexBeforeEnablingLiveUpdatesCheckBox_, 0, 2);
+    liveUpdatesRowLayout->setColumnStretch(3, 1);
 
     optionsLayout->addWidget(liveUpdatesRow);
 
@@ -684,7 +767,10 @@ QWidget* PreferencesDialog::createDevicesPage()
         if (!deviceTable_ ||
             !scanWhenUnmountedCheckBox_ ||
             !showOfflineResultsCheckBox_ ||
-            !liveUpdatesEnabledCheckBox_) {
+            !saveIndexToDiskCheckBox_ ||
+            !refreshOnStartupCheckBox_ ||
+            !liveUpdatesEnabledCheckBox_ ||
+            !refreshIndexBeforeEnablingLiveUpdatesCheckBox_) {
             return;
         }
 
@@ -695,7 +781,10 @@ QWidget* PreferencesDialog::createDevicesPage()
 
         const QSignalBlocker scanBlocker(scanWhenUnmountedCheckBox_);
         const QSignalBlocker offlineBlocker(showOfflineResultsCheckBox_);
+        const QSignalBlocker saveBlocker(saveIndexToDiskCheckBox_);
+        const QSignalBlocker refreshStartupBlocker(refreshOnStartupCheckBox_);
         const QSignalBlocker liveUpdatesBlocker(liveUpdatesEnabledCheckBox_);
+        const QSignalBlocker refreshLiveIndexBlocker(refreshIndexBeforeEnablingLiveUpdatesCheckBox_);
 
         if (deviceId.isEmpty()) {
             selectedDeviceDetailsText_->setHtml(QStringLiteral("No device selected."));
@@ -704,8 +793,15 @@ QWidget* PreferencesDialog::createDevicesPage()
             scanWhenUnmountedCheckBox_->setChecked(false);
             showOfflineResultsCheckBox_->setEnabled(false);
             showOfflineResultsCheckBox_->setChecked(false);
+            saveIndexToDiskCheckBox_->setEnabled(false);
+            saveIndexToDiskCheckBox_->setChecked(false);
+            refreshOnStartupCheckBox_->setEnabled(false);
+            refreshOnStartupCheckBox_->setChecked(false);
             liveUpdatesEnabledCheckBox_->setEnabled(false);
             liveUpdatesEnabledCheckBox_->setChecked(false);
+            refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setEnabled(false);
+            refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setChecked(false);
+            refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setVisible(false);
 
             if (refreshSelectedDeviceIndexButton_) {
                 refreshSelectedDeviceIndexButton_->setEnabled(false);
@@ -763,14 +859,29 @@ QWidget* PreferencesDialog::createDevicesPage()
             knownDeviceIt->mountedFsType.trimmed().toLower() == QStringLiteral("fuseblk");
 
         scanWhenUnmountedCheckBox_->setEnabled(unmountedScanningSupported);
+        showOfflineResultsCheckBox_->setEnabled(true);
+        saveIndexToDiskCheckBox_->setEnabled(true);
+        refreshOnStartupCheckBox_->setEnabled(saveIndexToDiskForDevice(deviceId));
         liveUpdatesEnabledCheckBox_->setEnabled(liveUpdatesSupported);
 
         scanWhenUnmountedCheckBox_->setChecked(
             unmountedScanningSupported && scanWhenUnmountedForDevice(deviceId)
         );
         showOfflineResultsCheckBox_->setChecked(showOfflineResultsForDevice(deviceId));
+        saveIndexToDiskCheckBox_->setChecked(saveIndexToDiskForDevice(deviceId));
+        refreshOnStartupCheckBox_->setChecked(refreshOnStartupForDevice(deviceId));
         liveUpdatesEnabledCheckBox_->setChecked(
             liveUpdatesSupported && liveUpdatesEnabledForDevice(deviceId)
+        );
+
+        const bool showRefreshLiveIndexNow =
+            shouldShowRefreshIndexBeforeEnablingLiveUpdatesForDevice(deviceId);
+
+        refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setVisible(showRefreshLiveIndexNow);
+        refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setEnabled(showRefreshLiveIndexNow);
+        refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setChecked(
+            showRefreshLiveIndexNow &&
+            refreshIndexBeforeEnablingLiveUpdatesForDevice(deviceId)
         );
 
         if (unmountedScanningSupported) {
@@ -903,14 +1014,68 @@ QWidget* PreferencesDialog::createDevicesPage()
         updateApplyButtonEnabled();
     });
 
+    connect(saveIndexToDiskCheckBox_, &QCheckBox::toggled, this, [this](bool checked) {
+        const int row = deviceTable_ ? deviceTable_->currentRow() : -1;
+        auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
+        if (item) {
+            item->setData(SaveIndexToDiskRole, checked);
+
+            if (!checked) {
+                item->setData(RefreshOnStartupRole, true);
+            }
+        }
+
+        if (refreshOnStartupCheckBox_) {
+            refreshOnStartupCheckBox_->setEnabled(checked);
+            if (!checked) {
+                const QSignalBlocker blocker(refreshOnStartupCheckBox_);
+                refreshOnStartupCheckBox_->setChecked(true);
+            }
+        }
+
+        updateApplyButtonEnabled();
+    });
+
+    connect(refreshOnStartupCheckBox_, &QCheckBox::toggled, this, [this](bool checked) {
+        const int row = deviceTable_ ? deviceTable_->currentRow() : -1;
+        auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
+        if (item) {
+            item->setData(RefreshOnStartupRole, checked);
+        }
+
+        updateApplyButtonEnabled();
+    });
+
     connect(liveUpdatesEnabledCheckBox_, &QCheckBox::toggled, this, [this](bool checked) {
         const int row = deviceTable_ ? deviceTable_->currentRow() : -1;
         auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
         if (item) {
             item->setData(LiveUpdatesEnabledRole, checked);
+
+            const QString deviceId = item->data(DeviceIdRole).toString();
+            const bool showRefreshLiveIndexNow =
+                shouldShowRefreshIndexBeforeEnablingLiveUpdatesForDevice(deviceId);
+
+            if (refreshIndexBeforeEnablingLiveUpdatesCheckBox_) {
+                const QSignalBlocker blocker(refreshIndexBeforeEnablingLiveUpdatesCheckBox_);
+                refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setVisible(showRefreshLiveIndexNow);
+                refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setEnabled(showRefreshLiveIndexNow);
+                refreshIndexBeforeEnablingLiveUpdatesCheckBox_->setChecked(
+                    showRefreshLiveIndexNow &&
+                    refreshIndexBeforeEnablingLiveUpdatesForDevice(deviceId)
+                );
+            }
         }
 
         updateApplyButtonEnabled();
+    });
+
+    connect(refreshIndexBeforeEnablingLiveUpdatesCheckBox_, &QCheckBox::toggled, this, [this](bool checked) {
+        const int row = deviceTable_ ? deviceTable_->currentRow() : -1;
+        auto* item = row >= 0 ? deviceTable_->item(row, DeviceEnabledColumn) : nullptr;
+        if (item) {
+            item->setData(RefreshIndexBeforeEnablingLiveUpdatesRole, checked);
+        }
     });
 
     connect(refreshSelectedDeviceIndexButton_, &QPushButton::clicked, this, [this]() {
@@ -958,6 +1123,7 @@ QWidget* PreferencesDialog::createIndexesPage()
     indexTable_->setHorizontalHeaderLabels({
         QStringLiteral("Name"),
         QStringLiteral("Status"),
+        QStringLiteral("Saved index"),
         QStringLiteral("Records"),
         QStringLiteral("Filesystem"),
         QStringLiteral("Mount point"),
@@ -974,6 +1140,7 @@ QWidget* PreferencesDialog::createIndexesPage()
     indexTable_->verticalHeader()->setVisible(false);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexNameColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexStatusColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexSavedColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexRecordsColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexFilesystemColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexMountPointColumn, QHeaderView::Stretch);
@@ -989,15 +1156,19 @@ QWidget* PreferencesDialog::createIndexesPage()
 
     refreshIndexButton_ = new QPushButton(QStringLiteral("Refresh Index"), page);
     forgetIndexButton_ = new QPushButton(QStringLiteral("Forget Index"), page);
+    deleteSavedIndexButton_ = new QPushButton(QStringLiteral("Delete Saved Index"), page);
 
     setButtonIcon(refreshIndexButton_, QStringLiteral("view-refresh"), QStringLiteral("reload"));
     setButtonIcon(forgetIndexButton_, QStringLiteral("edit-delete"), QStringLiteral("list-remove"));
+    setButtonIcon(deleteSavedIndexButton_, QStringLiteral("edit-delete"), QStringLiteral("list-remove"));
 
     refreshIndexButton_->setEnabled(false);
     forgetIndexButton_->setEnabled(false);
+    deleteSavedIndexButton_->setEnabled(false);
 
     buttonLayout->addWidget(refreshIndexButton_);
     buttonLayout->addWidget(forgetIndexButton_);
+    buttonLayout->addWidget(deleteSavedIndexButton_);
     buttonLayout->addStretch();
 
     layout->addLayout(buttonLayout);
@@ -1007,9 +1178,15 @@ QWidget* PreferencesDialog::createIndexesPage()
         const bool hasSelection = row >= 0 && row < indexTable_->rowCount();
 
         QString deviceId;
+        bool savedIndexAvailable = false;
+
         if (hasSelection) {
             if (const auto* item = indexTable_->item(row, IndexNameColumn)) {
                 deviceId = item->data(IndexDeviceIdRole).toString();
+            }
+
+            if (const auto* item = indexTable_->item(row, IndexSavedColumn)) {
+                savedIndexAvailable = item->data(IndexSavedAvailableRole).toBool();
             }
         }
 
@@ -1030,6 +1207,18 @@ QWidget* PreferencesDialog::createIndexesPage()
             forgetIndexButton_->setEnabled(hasSelection && !deviceId.isEmpty());
             forgetIndexButton_->setToolTip(
                 QStringLiteral("Forget this in-memory index and remove its files from search results.")
+            );
+        }
+
+        if (deleteSavedIndexButton_) {
+            deleteSavedIndexButton_->setEnabled(hasSelection && !deviceId.isEmpty() && savedIndexAvailable);
+            deleteSavedIndexButton_->setToolTip(
+                savedIndexAvailable
+                    ? QStringLiteral(
+                        "Delete this device's saved index from disk.\n"
+                        "This does not forget the current in-memory index."
+                    )
+                    : QStringLiteral("No saved index is available for this device.")
             );
         }
     };
@@ -1095,6 +1284,41 @@ QWidget* PreferencesDialog::createIndexesPage()
         }
 
         Q_EMIT forgetIndexRequested(deviceId);
+    });
+
+    connect(deleteSavedIndexButton_, &QPushButton::clicked, this, [this]() {
+        if (!indexTable_) {
+            return;
+        }
+
+        const int row = indexTable_->currentRow();
+        const auto* item = row >= 0 ? indexTable_->item(row, IndexNameColumn) : nullptr;
+        const QString deviceId = item ? item->data(IndexDeviceIdRole).toString() : QString();
+        const QString name = item ? item->text() : QStringLiteral("this device");
+
+        if (deviceId.isEmpty()) {
+            return;
+        }
+
+        QMessageBox confirmBox(this);
+        confirmBox.setIcon(QMessageBox::Warning);
+        confirmBox.setWindowTitle(QStringLiteral("Delete Saved Index?"));
+        confirmBox.setText(
+            QStringLiteral(
+                "Delete the saved index for %1 from disk?\n\n"
+                "This does not delete files from the device and does not forget the current in-memory index. "
+                "If no saved index exists, this action has no effect."
+            ).arg(name)
+        );
+        confirmBox.setStandardButtons(QMessageBox::Discard | QMessageBox::Cancel);
+        confirmBox.setDefaultButton(QMessageBox::Cancel);
+        confirmBox.button(QMessageBox::Discard)->setText(QStringLiteral("Delete Saved Index"));
+
+        if (confirmBox.exec() != QMessageBox::Discard) {
+            return;
+        }
+
+        Q_EMIT deleteSavedIndexRequested(deviceId);
     });
 
     if (indexTable_->rowCount() > 0) {
@@ -2049,6 +2273,9 @@ void PreferencesDialog::populateDeviceTable()
             LiveUpdatesEnabledRole,
             DeviceCapabilities::deviceSupportsLiveUpdates(blockDevice) && preference.liveUpdatesEnabled
         );
+        enabledItem->setData(SaveIndexToDiskRole, preference.saveIndexToDisk);
+        enabledItem->setData(RefreshOnStartupRole, preference.refreshOnStartup);
+        enabledItem->setData(RefreshIndexBeforeEnablingLiveUpdatesRole, true);
         deviceTable_->setItem(row, DeviceEnabledColumn, enabledItem);
 
         auto* nameItem = new QTableWidgetItem(BlockDeviceDisplayUtils::displayNameForBlockDevice(blockDevice));
@@ -2184,6 +2411,32 @@ void PreferencesDialog::populateIndexTable()
             );
         }
         indexTable_->setItem(row, IndexStatusColumn, statusItem);
+
+        QString savedIndexText = QStringLiteral("—");
+        QString savedIndexToolTip = QStringLiteral("No saved index is available for this device.");
+
+        if (summary.savedIndexAvailable) {
+            savedIndexText = formatSavedIndexSize(summary.savedIndexSizeBytes);
+
+            QString modifiedText = QStringLiteral("unknown time");
+            if (summary.savedIndexModifiedAt.isValid()) {
+                modifiedText = summary.savedIndexModifiedAt
+                    .toLocalTime()
+                    .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+            }
+
+            savedIndexToolTip = QStringLiteral(
+                "Saved index available\n"
+                "Size: %1\n"
+                "Modified: %2"
+            ).arg(savedIndexText, modifiedText);
+        }
+
+        auto* savedIndexItem = new QTableWidgetItem(savedIndexText);
+        savedIndexItem->setData(IndexSavedAvailableRole, summary.savedIndexAvailable);
+        savedIndexItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        savedIndexItem->setToolTip(savedIndexToolTip);
+        indexTable_->setItem(row, IndexSavedColumn, savedIndexItem);
 
         const qsizetype liveRecords = std::max<qsizetype>(
             0,
@@ -2351,6 +2604,38 @@ bool PreferencesDialog::showOfflineResultsForDevice(const QString& deviceId) con
     return true;
 }
 
+bool PreferencesDialog::saveIndexToDiskForDevice(const QString& deviceId) const
+{
+    if (!deviceTable_) {
+        return true;
+    }
+
+    for (int row = 0; row < deviceTable_->rowCount(); ++row) {
+        const auto* item = deviceTable_->item(row, DeviceEnabledColumn);
+        if (item && item->data(DeviceIdRole).toString() == deviceId) {
+            return item->data(SaveIndexToDiskRole).toBool();
+        }
+    }
+
+    return true;
+}
+
+bool PreferencesDialog::refreshOnStartupForDevice(const QString& deviceId) const
+{
+    if (!deviceTable_) {
+        return true;
+    }
+
+    for (int row = 0; row < deviceTable_->rowCount(); ++row) {
+        const auto* item = deviceTable_->item(row, DeviceEnabledColumn);
+        if (item && item->data(DeviceIdRole).toString() == deviceId) {
+            return item->data(RefreshOnStartupRole).toBool();
+        }
+    }
+
+    return true;
+}
+
 bool PreferencesDialog::isBtrfsDevice(const QString& deviceId) const
 {
     const auto knownDeviceIt = knownDeviceById_.constFind(deviceId);
@@ -2420,6 +2705,39 @@ bool PreferencesDialog::liveUpdatesSupportedForDevice(const QString& deviceId) c
         );
 
     return DeviceCapabilities::preferenceSupportsLiveUpdates(preference);
+}
+
+bool PreferencesDialog::refreshIndexBeforeEnablingLiveUpdatesForDevice(const QString& deviceId) const
+{
+    if (!deviceTable_) {
+        return true;
+    }
+
+    for (int row = 0; row < deviceTable_->rowCount(); ++row) {
+        const auto* item = deviceTable_->item(row, DeviceEnabledColumn);
+        if (item && item->data(DeviceIdRole).toString() == deviceId) {
+            return item->data(RefreshIndexBeforeEnablingLiveUpdatesRole).toBool();
+        }
+    }
+
+    return true;
+}
+
+bool PreferencesDialog::shouldShowRefreshIndexBeforeEnablingLiveUpdatesForDevice(const QString& deviceId) const
+{
+    if (deviceId.isEmpty() || !liveUpdatesSupportedForDevice(deviceId)) {
+        return false;
+    }
+
+    const IndexedDevicePreference original =
+        originalPreferencesByDeviceId_.value(
+            deviceId,
+            IndexedDevicePreference{ .deviceId = deviceId }
+        );
+
+    return original.enabled &&
+           !original.liveUpdatesEnabled &&
+           liveUpdatesEnabledForDevice(deviceId);
 }
 
 void PreferencesDialog::toggleDeviceRowChecked(int row)
@@ -3333,6 +3651,14 @@ bool PreferencesDialog::hasDeviceChanges() const
             return true;
         }
 
+        if (item->data(SaveIndexToDiskRole).toBool() != original.saveIndexToDisk) {
+            return true;
+        }
+
+        if (item->data(RefreshOnStartupRole).toBool() != original.refreshOnStartup) {
+            return true;
+        }
+
         const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
         const bool liveUpdatesEnabled =
             liveUpdatesSupported && item->data(LiveUpdatesEnabledRole).toBool();
@@ -3731,9 +4057,13 @@ bool PreferencesDialog::applyChanges()
         const bool scanWhenUnmounted =
             unmountedScanningSupported && item->data(ScanWhenUnmountedRole).toBool();
         const bool showOfflineResults = item->data(ShowOfflineResultsRole).toBool();
+        const bool saveIndexToDisk = item->data(SaveIndexToDiskRole).toBool();
+        const bool refreshOnStartup = item->data(RefreshOnStartupRole).toBool();
         const bool liveUpdatesSupported = liveUpdatesSupportedForDevice(deviceId);
         const bool liveUpdatesEnabled =
             liveUpdatesSupported && item->data(LiveUpdatesEnabledRole).toBool();
+        const bool refreshIndexBeforeEnablingLiveUpdates =
+            refreshIndexBeforeEnablingLiveUpdatesForDevice(deviceId);
 
         const BlockDevice& blockDevice = blockDeviceIt.value();
 
@@ -3753,13 +4083,17 @@ bool PreferencesDialog::applyChanges()
         preference.scanWhenUnmounted = scanWhenUnmounted;
         preference.showOfflineResults = showOfflineResults;
         preference.liveUpdatesEnabled = liveUpdatesEnabled;
+        preference.saveIndexToDisk = saveIndexToDisk;
+        preference.refreshOnStartup = refreshOnStartup;
 
         preferences_.saveIndexedDevicePreference(preference);
 
         if (enabled != original.enabled ||
             scanWhenUnmounted != original.scanWhenUnmounted ||
             showOfflineResults != original.showOfflineResults ||
-            liveUpdatesEnabled != original.liveUpdatesEnabled) {
+            liveUpdatesEnabled != original.liveUpdatesEnabled ||
+            saveIndexToDisk != original.saveIndexToDisk ||
+            refreshOnStartup != original.refreshOnStartup) {
             changes.append(DevicePreferenceChange{
                 .deviceId = deviceId,
                 .wasEnabled = originallyEnabled,
@@ -3770,12 +4104,21 @@ bool PreferencesDialog::applyChanges()
                 .showOfflineResults = showOfflineResults,
                 .wasLiveUpdatesEnabled = original.liveUpdatesEnabled,
                 .liveUpdatesEnabled = liveUpdatesEnabled,
+                .refreshIndexBeforeEnablingLiveUpdates = refreshIndexBeforeEnablingLiveUpdates,
+                .wasSaveIndexToDisk = original.saveIndexToDisk,
+                .saveIndexToDisk = saveIndexToDisk,
+                .wasRefreshOnStartup = original.refreshOnStartup,
+                .refreshOnStartup = refreshOnStartup,
             });
-            }
+        }
 
         item->setData(InitialEnabledRole, enabled);
         item->setData(ScanWhenUnmountedRole, scanWhenUnmounted);
+        item->setData(ShowOfflineResultsRole, showOfflineResults);
         item->setData(LiveUpdatesEnabledRole, liveUpdatesEnabled);
+        item->setData(SaveIndexToDiskRole, saveIndexToDisk);
+        item->setData(RefreshOnStartupRole, refreshOnStartup);
+        item->setData(RefreshIndexBeforeEnablingLiveUpdatesRole, true);
     }
 
     originalPreferencesByDeviceId_.clear();

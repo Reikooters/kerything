@@ -506,6 +506,8 @@ IndexedDevicePreference Preferences::loadDevicePreference(const QString& deviceI
     preference.scanWhenUnmounted = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("scanWhenUnmounted")), true).toBool();
     preference.showOfflineResults = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("showOfflineResults")), true).toBool();
     preference.liveUpdatesEnabled = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("liveUpdatesEnabled")), true).toBool();
+    preference.saveIndexToDisk = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("saveIndexToDisk")), true).toBool();
+    preference.refreshOnStartup = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("refreshOnStartup")), true).toBool();
     preference.lastSeenAt = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("lastSeenAt"))).toDateTime();
     preference.lastIndexedAt = settings_.value(devicePreferenceKey(deviceId, QStringLiteral("lastIndexedAt"))).toDateTime();
 
@@ -529,6 +531,8 @@ void Preferences::saveDevicePreference(const IndexedDevicePreference& preference
     settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("scanWhenUnmounted")), preference.scanWhenUnmounted);
     settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("showOfflineResults")), preference.showOfflineResults);
     settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("liveUpdatesEnabled")), preference.liveUpdatesEnabled);
+    settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("saveIndexToDisk")), preference.saveIndexToDisk);
+    settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("refreshOnStartup")), preference.refreshOnStartup);
     settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("lastSeenAt")), preference.lastSeenAt);
     settings_.setValue(devicePreferenceKey(preference.deviceId, QStringLiteral("lastIndexedAt")), preference.lastIndexedAt);
 

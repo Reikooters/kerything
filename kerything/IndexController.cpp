@@ -3219,6 +3219,12 @@ IndexController::IndexController(QObject* parent)
 {
 }
 
+void IndexController::setSavedIndexInfoProvider(SavedIndexInfoProvider provider)
+{
+    std::unique_lock lock(indexMutex_);
+    savedIndexInfoProvider_ = std::move(provider);
+}
+
 void IndexController::DeviceIndex::buildBigramIndexParallel()
 {
 #ifdef KERYTHING_ENABLE_LOGGING
@@ -4709,6 +4715,103 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
 #endif
 }
 
+std::optional<IndexController::CoreSnapshot> IndexController::coreSnapshotForDeviceId(
+    const QString& deviceId
+) const {
+    if (deviceId.isEmpty()) {
+        return std::nullopt;
+    }
+
+    std::shared_lock lock(indexMutex_);
+
+    for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndexPtr || deviceIndexPtr->deviceId != deviceId || !deviceIndexPtr->isReady) {
+            continue;
+        }
+
+        const DeviceIndex& device = *deviceIndexPtr;
+
+        CoreSnapshot snapshot;
+        snapshot.deviceId = device.deviceId;
+        snapshot.devNode = device.devNode;
+        snapshot.fsType = device.fsType;
+        snapshot.label = device.label;
+        snapshot.mountPoints = device.mountPoints;
+        snapshot.primaryMountPoint = device.primaryMountPoint;
+        snapshot.mounts = device.mounts;
+        snapshot.mounted = device.mounted;
+        snapshot.showOfflineResults = device.showOfflineResults;
+        snapshot.lastIndexedTime = device.lastIndexedTime;
+        snapshot.fileRecords = device.fileRecords;
+        snapshot.fileRecordNamespaces = device.fileRecordNamespaces;
+        snapshot.stringPool = device.stringPool;
+        snapshot.deletedRecordBits = device.deletedRecordBits;
+
+        return snapshot;
+    }
+
+    return std::nullopt;
+}
+
+bool IndexController::addDeviceFromCoreSnapshot(CoreSnapshot snapshot)
+{
+    if (snapshot.deviceId.isEmpty() || snapshot.devNode.isEmpty()) {
+        return false;
+    }
+
+    std::unique_ptr<DeviceIndex> deviceIndex = std::make_unique<DeviceIndex>();
+
+    {
+        std::unique_lock lock(indexMutex_);
+
+        for (const auto& [existingIndexId, existingIndex] : indexByIndexId_) {
+            if (existingIndex && existingIndex->deviceId == snapshot.deviceId) {
+                removeDeviceByIndexIdUnlocked(existingIndexId);
+                break;
+            }
+        }
+
+        const quint64 indexId = nextIndexId_++;
+
+        deviceIndex->indexId = indexId;
+        deviceIndex->deviceId = snapshot.deviceId;
+        deviceIndex->devNode = snapshot.devNode;
+        deviceIndex->fsType = snapshot.fsType;
+        deviceIndex->label = snapshot.label;
+        deviceIndex->mountPoints = snapshot.mountPoints;
+        deviceIndex->primaryMountPoint = snapshot.primaryMountPoint;
+        deviceIndex->mounts = snapshot.mounts;
+        deviceIndex->mounted = snapshot.mounted;
+        deviceIndex->showOfflineResults = snapshot.showOfflineResults;
+        deviceIndex->lastIndexedTime = snapshot.lastIndexedTime;
+        deviceIndex->fileRecords = std::move(snapshot.fileRecords);
+        deviceIndex->fileRecordNamespaces = std::move(snapshot.fileRecordNamespaces);
+        deviceIndex->stringPool = std::move(snapshot.stringPool);
+        deviceIndex->deletedRecordBits = std::move(snapshot.deletedRecordBits);
+
+        DeviceIndex* raw = deviceIndex.get();
+        indexByIndexId_.emplace(indexId, std::move(deviceIndex));
+
+        if (indexId >= indexLookupByIndexId_.size()) {
+            indexLookupByIndexId_.resize(static_cast<std::size_t>(indexId) + 1, nullptr);
+        }
+
+        indexLookupByIndexId_[static_cast<std::size_t>(indexId)] = raw;
+        indexIdByDevNode_[raw->devNode] = indexId;
+
+        raw->buildLowercaseStringPool();
+        raw->resolveParentPointers();
+        raw->buildTrigramIndexParallel();
+        raw->buildBigramIndexParallel();
+        raw->buildExtensionIndex();
+        raw->isReady = true;
+    }
+
+    return true;
+}
+
 QString IndexController::memoryStatsText() const
 {
     std::shared_lock lock(indexMutex_);
@@ -5791,60 +5894,78 @@ QString IndexController::memoryStatsText() const
 
 std::vector<IndexSummary> IndexController::indexSummaries() const
 {
-    std::shared_lock lock(indexMutex_);
-
     std::vector<IndexSummary> summaries;
-    summaries.reserve(indexByIndexId_.size());
+    SavedIndexInfoProvider savedIndexInfoProvider;
 
-    for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
-        Q_UNUSED(indexId);
+    {
+        std::shared_lock lock(indexMutex_);
 
-        if (!deviceIndexPtr) {
+        summaries.reserve(indexByIndexId_.size());
+
+        for (const auto& [indexId, deviceIndexPtr] : indexByIndexId_) {
+            Q_UNUSED(indexId);
+
+            if (!deviceIndexPtr) {
+                continue;
+            }
+
+            const DeviceIndex& device = *deviceIndexPtr;
+
+            qsizetype deletedRecordCount = 0;
+            for (uint32_t recordIdx = 0;
+                 recordIdx < static_cast<uint32_t>(device.fileRecords.size());
+                 ++recordIdx) {
+                if (device.isDeletedRecord(recordIdx)) {
+                    ++deletedRecordCount;
+                }
+            }
+
+            QString displayName = device.primaryMountPoint.trimmed();
+
+            if (displayName.isEmpty()) {
+                displayName = device.label.trimmed();
+            }
+
+            if (displayName.isEmpty()) {
+                displayName = device.devNode.trimmed();
+            }
+
+            if (displayName.isEmpty()) {
+                displayName = device.deviceId.trimmed();
+            }
+
+            summaries.push_back(IndexSummary{
+                .indexId = device.indexId,
+                .deviceId = device.deviceId,
+                .displayName = displayName,
+                .label = device.label,
+                .devNode = device.devNode,
+                .fsType = device.fsType,
+                .primaryMountPoint = device.primaryMountPoint,
+                .mountPoints = device.mountPoints,
+                .lastIndexedTime = device.lastIndexedTime,
+                .recordCount = static_cast<qsizetype>(device.fileRecords.size()),
+                .deletedRecordCount = deletedRecordCount,
+                .ready = device.isReady,
+                .mounted = device.mounted,
+                .searchable = device.isSearchable(),
+                .showOfflineResults = device.showOfflineResults,
+            });
+        }
+
+        savedIndexInfoProvider = savedIndexInfoProvider_;
+    }
+
+    for (IndexSummary& summary : summaries) {
+        if (!savedIndexInfoProvider || summary.deviceId.isEmpty()) {
             continue;
         }
 
-        const DeviceIndex& device = *deviceIndexPtr;
+        const SavedIndexInfo savedInfo = savedIndexInfoProvider(summary.deviceId);
 
-        qsizetype deletedRecordCount = 0;
-        for (uint32_t recordIdx = 0;
-             recordIdx < static_cast<uint32_t>(device.fileRecords.size());
-             ++recordIdx) {
-            if (device.isDeletedRecord(recordIdx)) {
-                ++deletedRecordCount;
-            }
-        }
-
-        QString displayName = device.primaryMountPoint.trimmed();
-
-        if (displayName.isEmpty()) {
-            displayName = device.label.trimmed();
-        }
-
-        if (displayName.isEmpty()) {
-            displayName = device.devNode.trimmed();
-        }
-
-        if (displayName.isEmpty()) {
-            displayName = device.deviceId.trimmed();
-        }
-
-        summaries.push_back(IndexSummary{
-            .indexId = device.indexId,
-            .deviceId = device.deviceId,
-            .displayName = displayName,
-            .label = device.label,
-            .devNode = device.devNode,
-            .fsType = device.fsType,
-            .primaryMountPoint = device.primaryMountPoint,
-            .mountPoints = device.mountPoints,
-            .lastIndexedTime = device.lastIndexedTime,
-            .recordCount = static_cast<qsizetype>(device.fileRecords.size()),
-            .deletedRecordCount = deletedRecordCount,
-            .ready = device.isReady,
-            .mounted = device.mounted,
-            .searchable = device.isSearchable(),
-            .showOfflineResults = device.showOfflineResults,
-        });
+        summary.savedIndexAvailable = savedInfo.available;
+        summary.savedIndexSizeBytes = savedInfo.sizeBytes;
+        summary.savedIndexModifiedAt = savedInfo.modifiedAt;
     }
 
     std::ranges::sort(

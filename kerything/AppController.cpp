@@ -7,12 +7,20 @@
 #include <iostream>
 #include <QApplication>
 #include <QAction>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QIcon>
+#include <QLabel>
 #include <QLocale>
 #include <QMenu>
+#include <QPointer>
+#include <QProgressBar>
+#include <QPushButton>
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QWidget>
+#include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include "DaemonClient.h"
 #include "DeviceCapabilities.h"
@@ -95,7 +103,20 @@ AppController::AppController(QApplication& app, QObject* parent)
     liveMetadataRefreshTimer_.setSingleShot(true);
     liveMetadataRefreshTimer_.setInterval(1000);
     connect(&liveMetadataRefreshTimer_, &QTimer::timeout,
-            this, &AppController::requestLiveMetadataRefreshAllWindows);
+                this, &AppController::requestLiveMetadataRefreshAllWindows);
+
+    // Set a timer to save indexes when there have been no live updates for a while.
+    dirtyIndexSaveQuietTimer_.setSingleShot(true);
+    dirtyIndexSaveQuietTimer_.setInterval(60'000);
+    connect(&dirtyIndexSaveQuietTimer_, &QTimer::timeout,
+            this, &AppController::saveDirtyIndexesNow);
+
+    // Set a timer to ensure indexes are always eventually saved, even when there
+    // have been continuous live updates.
+    dirtyIndexSaveMaxTimer_.setSingleShot(true);
+    dirtyIndexSaveMaxTimer_.setInterval(10 * 60'000);
+    connect(&dirtyIndexSaveMaxTimer_, &QTimer::timeout,
+            this, &AppController::saveDirtyIndexesNow);
 
     // When another launch asks the primary instance to open a window, route that
     // request into application logic here.
@@ -155,6 +176,26 @@ bool AppController::start() {
 
     // Create index controller
     indexController_ = new IndexController(this);
+    indexPersistenceManager_ = new IndexPersistenceManager(this);
+
+    const QPointer<IndexPersistenceManager> persistenceManager = indexPersistenceManager_;
+
+    indexController_->setSavedIndexInfoProvider([persistenceManager](const QString& deviceId) {
+        if (!persistenceManager) {
+            return IndexController::SavedIndexInfo{};
+        }
+
+        const IndexPersistenceManager::SavedIndexInfo savedInfo =
+            persistenceManager->savedIndexInfo(deviceId);
+
+        return IndexController::SavedIndexInfo{
+            .available = savedInfo.available,
+            .sizeBytes = savedInfo.sizeBytes,
+            .modifiedAt = savedInfo.modifiedAt,
+        };
+    });
+
+    loadSavedIndexes();
 
     connect(indexController_, &IndexController::deviceRemoved,
         this, [this](quint64 indexId) {
@@ -446,6 +487,11 @@ bool AppController::start() {
                 // Clean up the requestId as the scan has completed successfully
                 indexController_->removeRequestId(requestId);
 
+                if (deviceIdMatches) {
+                    markIndexDirtyForDevice(deviceId);
+                    saveDirtyIndexesNow();
+                }
+
                 updateOpenPreferencesDialog();
                 Q_EMIT indexesChanged();
 
@@ -659,6 +705,10 @@ bool AppController::start() {
 
                 const IndexController::LiveUpdateApplyResult result =
                     indexController_->applyLiveUpdateOperations(deviceId, operations);
+
+                if (result.upserted > 0 || result.deleted > 0 || result.metadataChanged > 0) {
+                    markIndexDirtyForDevice(deviceId);
+                }
 
                 if (result.upserted > 0 || result.deleted > 0) {
                     scheduleLiveUpdateRefresh();
@@ -1067,9 +1117,142 @@ void AppController::showCloseToTrayMessageOnce()
 
 void AppController::quitApplication()
 {
+    if (quittingExplicitly_) {
+        return;
+    }
+
     quittingExplicitly_ = true;
+    quitAfterPendingIndexSaves_ = true;
+
+    dirtyIndexSaveQuietTimer_.stop();
+    dirtyIndexSaveMaxTimer_.stop();
+
+    cleanupWindows();
+    cleanupTrayHiddenWindows();
+
+    for (auto& window : windows_) {
+        if (window) {
+            window->hide();
+        }
+    }
+
+    saveDirtyIndexesNow();
+
+    if (savingIndexDeviceIds_.isEmpty()) {
+        finishQuitApplication();
+        return;
+    }
+
+    showSavingBeforeQuitDialog();
+}
+
+void AppController::finishQuitApplication()
+{
+    quitAfterPendingIndexSaves_ = false;
+
+    if (savingBeforeQuitDialog_) {
+        savingBeforeQuitDialog_->close();
+        savingBeforeQuitDialog_ = nullptr;
+    }
+
     app_.setQuitOnLastWindowClosed(true);
     app_.quit();
+}
+
+void AppController::showSavingBeforeQuitDialog()
+{
+    if (savingBeforeQuitDialog_) {
+        updateSavingBeforeQuitDialog();
+        savingBeforeQuitDialog_->show();
+        savingBeforeQuitDialog_->raise();
+        savingBeforeQuitDialog_->activateWindow();
+        return;
+    }
+
+    auto* dialog = new QDialog(nullptr);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("Saving Indexes"));
+    dialog->setModal(true);
+    dialog->resize(420, 140);
+
+    auto* layout = new QVBoxLayout(dialog);
+
+    savingBeforeQuitLabel_ = new QLabel(dialog);
+    savingBeforeQuitLabel_->setWordWrap(true);
+    layout->addWidget(savingBeforeQuitLabel_);
+
+    auto* progress = new QProgressBar(dialog);
+    progress->setRange(0, 0);
+    layout->addWidget(progress);
+
+    auto* buttons = new QDialogButtonBox(dialog);
+    savingBeforeQuitNowButton_ = buttons->addButton(
+        QStringLiteral("Quit Now"),
+        QDialogButtonBox::DestructiveRole
+    );
+    savingBeforeQuitNowButton_->setVisible(false);
+    layout->addWidget(buttons);
+
+    connect(savingBeforeQuitNowButton_, &QPushButton::clicked,
+            this, &AppController::quitNowWithoutWaitingForIndexSaves);
+
+    connect(dialog, &QObject::destroyed, this, [this]() {
+        savingBeforeQuitDialog_ = nullptr;
+        savingBeforeQuitLabel_ = nullptr;
+        savingBeforeQuitNowButton_ = nullptr;
+    });
+
+    savingBeforeQuitDialog_ = dialog;
+    updateSavingBeforeQuitDialog();
+
+    QTimer::singleShot(15'000, this, [this]() {
+        if (!savingBeforeQuitDialog_ || !savingBeforeQuitNowButton_) {
+            return;
+        }
+
+        savingBeforeQuitNowButton_->setVisible(true);
+        updateSavingBeforeQuitDialog();
+    });
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void AppController::updateSavingBeforeQuitDialog()
+{
+    if (!savingBeforeQuitLabel_) {
+        return;
+    }
+
+    QString text = QStringLiteral(
+        "<b>Saving indexes before quitting…</b><br>"
+        "Kerything is saving updated indexes so searches are available next time it starts."
+    );
+
+    if (savingBeforeQuitNowButton_ && savingBeforeQuitNowButton_->isVisible()) {
+        text += QStringLiteral(
+            "<br><br>"
+            "<b>This is taking longer than expected.</b><br>"
+            "You can quit now; Kerything will use the previous saved indexes next time."
+        );
+    }
+
+    savingBeforeQuitLabel_->setText(text);
+}
+
+void AppController::quitNowWithoutWaitingForIndexSaves()
+{
+    if (trayIcon_ && trayIcon_->isVisible()) {
+        trayIcon_->showMessage(
+            QStringLiteral("Kerything quit before saving all indexes"),
+            QStringLiteral("Previous saved indexes will be used next time."),
+            QSystemTrayIcon::Warning,
+            7000
+        );
+    }
+
+    finishQuitApplication();
 }
 
 void AppController::openNewWindow(MainWindow* sourceWindow) {
@@ -1216,6 +1399,9 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
     connect(dialog, &PreferencesDialog::forgetIndexRequested,
             this, &AppController::forgetIndex);
 
+    connect(dialog, &PreferencesDialog::deleteSavedIndexRequested,
+        this, &AppController::deleteSavedIndex);
+
     connect(dialog, &PreferencesDialog::searchFiltersApplied,
             this, [this]() {
                 Q_EMIT searchFiltersChanged();
@@ -1329,6 +1515,29 @@ void AppController::forgetIndex(const QString& deviceId)
     );
 
     requestRefreshAllWindows();
+}
+
+void AppController::deleteSavedIndex(const QString& deviceId)
+{
+    if (deviceId.isEmpty() || !indexPersistenceManager_) {
+        return;
+    }
+
+    QString errorText;
+    if (!indexPersistenceManager_->removeSavedIndex(deviceId, &errorText)) {
+        requestWindowStatusMessage(
+            QStringLiteral("Could not delete saved index: %1").arg(errorText),
+            7000
+        );
+        return;
+    }
+
+    requestWindowStatusMessage(
+        QStringLiteral("Saved index deleted."),
+        3000
+    );
+
+    updateOpenPreferencesDialog();
 }
 
 void AppController::requestWindowStatusMessage(const QString& message, const int timeoutMs) {
@@ -1691,6 +1900,276 @@ void AppController::updateOpenPreferencesDialog()
     }
 }
 
+void AppController::loadSavedIndexes()
+{
+    if (!indexController_ || !indexPersistenceManager_) {
+        return;
+    }
+
+    for (const IndexedDevicePreference& preference : preferences_.indexedDevicePreferences()) {
+        if (!preference.enabled || !preference.saveIndexToDisk) {
+            continue;
+        }
+
+        startAsyncIndexLoad(preference.deviceId);
+    }
+}
+
+void AppController::startAsyncIndexLoad(const QString& deviceId)
+{
+    if (!indexPersistenceManager_ ||
+        deviceId.isEmpty() ||
+        loadingIndexDeviceIds_.contains(deviceId)) {
+        return;
+    }
+
+    if (!indexPersistenceManager_->hasSavedIndex(deviceId)) {
+        return;
+    }
+
+    loadingIndexDeviceIds_.insert(deviceId);
+
+    auto* watcher = new QFutureWatcher<IndexLoadResult>(this);
+    indexLoadDeviceIdsByWatcher_.insert(watcher, deviceId);
+
+    connect(
+        watcher,
+        &QFutureWatcher<IndexLoadResult>::finished,
+        this,
+        &AppController::onAsyncIndexLoadFinished
+    );
+
+    IndexPersistenceManager* persistenceManager = indexPersistenceManager_;
+
+    watcher->setFuture(QtConcurrent::run([persistenceManager, deviceId]() {
+        IndexLoadResult result;
+        result.deviceId = deviceId;
+
+        QString errorText;
+        result.snapshot = persistenceManager->loadCoreSnapshot(deviceId, &errorText);
+        result.success = result.snapshot.has_value();
+        result.errorText = errorText;
+
+        return result;
+    }));
+}
+
+void AppController::onAsyncIndexLoadFinished()
+{
+    QObject* senderObject = sender();
+    if (!qobject_cast<QFutureWatcherBase*>(senderObject)) {
+        return;
+    }
+
+    auto* watcher = static_cast<QFutureWatcher<IndexLoadResult>*>(senderObject);
+
+    const QString trackedDeviceId = indexLoadDeviceIdsByWatcher_.take(watcher);
+    loadingIndexDeviceIds_.remove(trackedDeviceId);
+
+    IndexLoadResult result = watcher->result();
+    watcher->deleteLater();
+
+    if (!result.success || !result.snapshot) {
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cerr << "GUI: failed to load saved index"
+                  << " deviceId=" << result.deviceId.toStdString()
+                  << " error=" << result.errorText.toStdString()
+                  << "\n";
+#endif
+        return;
+    }
+
+    const std::optional<IndexedDevicePreference> preference =
+        preferences_.indexedDevicePreference(result.deviceId);
+
+    if (preference) {
+        result.snapshot->showOfflineResults = preference->showOfflineResults;
+    }
+
+    if (!indexController_->addDeviceFromCoreSnapshot(std::move(*result.snapshot))) {
+        return;
+    }
+
+    if (const std::optional<BlockDevice> blockDevice = knownDeviceById(result.deviceId)) {
+        updateIndexedDeviceRuntimeState(*blockDevice);
+    }
+
+    addLiveUpdateIndexedDevice(result.deviceId);
+
+    updateOpenPreferencesDialog();
+    Q_EMIT indexesChanged();
+    requestRefreshAllWindows();
+
+    requestWindowStatusMessage(
+        QStringLiteral("Loaded saved index."),
+        3000
+    );
+}
+
+void AppController::maybeSaveIndexForDevice(const QString& deviceId)
+{
+    if (deviceId.isEmpty() || !indexController_ || !indexPersistenceManager_) {
+        return;
+    }
+
+    if (savingIndexDeviceIds_.contains(deviceId)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+        std::cout << "GUI: skipping index save because a save is already in progress"
+                  << " deviceId=" << deviceId.toStdString()
+                  << "\n";
+#endif
+        dirtyIndexDeviceIds_.insert(deviceId);
+        return;
+    }
+
+    const std::optional<IndexedDevicePreference> preference =
+        preferences_.indexedDevicePreference(deviceId);
+
+    if (!preference || !preference->enabled || !preference->saveIndexToDisk) {
+        return;
+    }
+
+    std::optional<IndexController::CoreSnapshot> snapshot =
+        indexController_->coreSnapshotForDeviceId(deviceId);
+
+    if (!snapshot) {
+        return;
+    }
+
+    startAsyncIndexSave(deviceId, std::move(*snapshot));
+}
+
+void AppController::startAsyncIndexSave(
+    const QString& deviceId,
+    IndexController::CoreSnapshot snapshot
+) {
+    if (!indexPersistenceManager_ || deviceId.isEmpty()) {
+        return;
+    }
+
+    savingIndexDeviceIds_.insert(deviceId);
+
+    auto* watcher = new QFutureWatcher<IndexSaveResult>(this);
+    indexSaveDeviceIdsByWatcher_.insert(watcher, deviceId);
+
+    connect(
+        watcher,
+        &QFutureWatcher<IndexSaveResult>::finished,
+        this,
+        &AppController::onAsyncIndexSaveFinished
+    );
+
+    IndexPersistenceManager* persistenceManager = indexPersistenceManager_;
+
+    watcher->setFuture(QtConcurrent::run(
+        [persistenceManager, snapshot = std::move(snapshot)]() mutable {
+            IndexSaveResult result;
+            result.deviceId = snapshot.deviceId;
+            result.recordCount = static_cast<qsizetype>(snapshot.fileRecords.size());
+            result.stringPoolBytes = static_cast<qsizetype>(snapshot.stringPool.size());
+
+            QString errorText;
+            result.success = persistenceManager->saveCoreSnapshot(snapshot, &errorText);
+            result.errorText = errorText;
+
+            return result;
+        }
+    ));
+}
+
+void AppController::onAsyncIndexSaveFinished()
+{
+    QObject* senderObject = sender();
+    if (!qobject_cast<QFutureWatcherBase*>(senderObject)) {
+        return;
+    }
+
+    auto* watcher = static_cast<QFutureWatcher<IndexSaveResult>*>(senderObject);
+
+    const QString trackedDeviceId = indexSaveDeviceIdsByWatcher_.take(watcher);
+    savingIndexDeviceIds_.remove(trackedDeviceId);
+
+    const IndexSaveResult result = watcher->result();
+    watcher->deleteLater();
+
+    if (!result.success) {
+        std::cerr << "GUI: failed to save index"
+                  << " deviceId=" << result.deviceId.toStdString()
+                  << " error=" << result.errorText.toStdString()
+                  << "\n";
+        dirtyIndexDeviceIds_.insert(result.deviceId);
+        scheduleDirtyIndexSave();
+        return;
+    }
+
+#ifdef KERYTHING_ENABLE_LOGGING
+    std::cout << "GUI: saved index"
+                  << " deviceId=" << result.deviceId.toStdString()
+                  << " records=" << result.recordCount
+                  << " stringPoolBytes=" << result.stringPoolBytes
+                  << "\n";
+#endif
+
+    updateOpenPreferencesDialog();
+
+    if (dirtyIndexDeviceIds_.contains(result.deviceId)) {
+        scheduleDirtyIndexSave();
+    }
+
+    if (quitAfterPendingIndexSaves_) {
+        if (savingIndexDeviceIds_.isEmpty()) {
+            finishQuitApplication();
+        } else {
+            updateSavingBeforeQuitDialog();
+        }
+    }
+}
+
+void AppController::markIndexDirtyForDevice(const QString& deviceId)
+{
+    if (deviceId.isEmpty()) {
+        return;
+    }
+
+    const std::optional<IndexedDevicePreference> preference =
+        preferences_.indexedDevicePreference(deviceId);
+
+    if (!preference || !preference->enabled || !preference->saveIndexToDisk) {
+        return;
+    }
+
+    dirtyIndexDeviceIds_.insert(deviceId);
+    scheduleDirtyIndexSave();
+}
+
+void AppController::scheduleDirtyIndexSave()
+{
+    if (dirtyIndexDeviceIds_.isEmpty()) {
+        dirtyIndexSaveQuietTimer_.stop();
+        dirtyIndexSaveMaxTimer_.stop();
+        return;
+    }
+
+    dirtyIndexSaveQuietTimer_.start();
+
+    if (!dirtyIndexSaveMaxTimer_.isActive()) {
+        dirtyIndexSaveMaxTimer_.start();
+    }
+}
+
+void AppController::saveDirtyIndexesNow()
+{
+    dirtyIndexSaveQuietTimer_.stop();
+    dirtyIndexSaveMaxTimer_.stop();
+
+    const QSet<QString> dirtyDeviceIds = dirtyIndexDeviceIds_;
+    dirtyIndexDeviceIds_.clear();
+
+    for (const QString& deviceId : dirtyDeviceIds) {
+        maybeSaveIndexForDevice(deviceId);
+    }
+}
+
 bool AppController::requestKnownDevices(quint32* requestIdOut) {
     if (!daemonClient_ || !daemonClient_->isReady()) {
         return false;
@@ -1726,6 +2205,7 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
     maybeShowFirstRunDevicePicker(blockDevices);
     preferences_.updateKnownDevices(blockDevices);
     updateIndexedDeviceRuntimeStates(blockDevices);
+    addReadyLoadedIndexesToLiveUpdates();
 
     for (const BlockDevice& previousDevice : previousKnownDevices) {
         if (previousDevice.deviceId.isEmpty()) {
@@ -1779,7 +2259,7 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
 #endif
 
     if (manualRefresh) {
-        const qsizetype scansStarted = scanEnabledKnownDevices(blockDevices);
+        const qsizetype scansStarted = scanEnabledKnownDevices(blockDevices, false);
 
         if (scansStarted == 0) {
             requestWindowStatusMessage(
@@ -1798,13 +2278,14 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
         /*
          * Initial startup behavior: scan enabled devices that are currently eligible.
          */
-        scanEnabledKnownDevices(blockDevices);
+        scanEnabledKnownDevices(blockDevices, true);
     } else {
         /*
          * Later daemon-pushed updates: scan only important transitions.
          */
         scanEnabledKnownDevices(
-            devicesNeedingScanAfterKnownDeviceUpdate(previousKnownDevices, blockDevices)
+            devicesNeedingScanAfterKnownDeviceUpdate(previousKnownDevices, blockDevices),
+            false
         );
     }
 
@@ -1856,7 +2337,10 @@ void AppController::maybeShowFirstRunDevicePicker(const std::vector<BlockDevice>
     preferences_.setInitialDeviceSelectionCompleted(true);
 }
 
-qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices) {
+qsizetype AppController::scanEnabledKnownDevices(
+    const std::vector<BlockDevice>& blockDevices,
+    bool respectRefreshOnStartupPreference
+) {
     if (!daemonClient_ || !daemonClient_->isReady()) {
         return 0;
     }
@@ -1878,6 +2362,21 @@ qsizetype AppController::scanEnabledKnownDevices(const std::vector<BlockDevice>&
         }
 
         const auto preference = preferences_.indexedDevicePreference(blockDevice.deviceId);
+
+        if (respectRefreshOnStartupPreference &&
+            preference &&
+            !preference->refreshOnStartup &&
+            preference->saveIndexToDisk &&
+            indexPersistenceManager_ &&
+            indexPersistenceManager_->hasSavedIndex(blockDevice.deviceId)) {
+#ifdef KERYTHING_ENABLE_LOGGING
+            std::cout << "GUI: skipping startup scan because saved index is available and refreshOnStartup=false"
+                      << " deviceId=" << blockDevice.deviceId.toStdString()
+                      << "\n";
+#endif
+            continue;
+        }
+
         if (!blockDevice.mounted) {
             const bool canScanUnmounted = DeviceCapabilities::deviceSupportsUnmountedScanning(blockDevice);
             const bool scanWhenUnmounted =
@@ -1961,13 +2460,30 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
                 removeLiveUpdateIndexedDevice(change.deviceId);
             }
             else if (deviceSupportsLiveUpdates(change.deviceId)) {
-                if (requestScanForDeviceId(change.deviceId)) {
-                    requestWindowStatusMessage(
-                        QStringLiteral("Refreshing index before enabling live updates…"),
-                        3000
-                    );
+                if (change.refreshIndexBeforeEnablingLiveUpdates) {
+                    if (requestScanForDeviceId(change.deviceId)) {
+                        requestWindowStatusMessage(
+                            QStringLiteral("Refreshing index before enabling live updates…"),
+                            3000
+                        );
+                    } else {
+                        syncLiveUpdateDevices();
+                    }
                 } else {
-                    syncLiveUpdateDevices();
+                    bool hasReadyIndex = false;
+
+                    for (const IndexSummary& summary : indexSummaries()) {
+                        if (summary.deviceId == change.deviceId && summary.ready) {
+                            hasReadyIndex = true;
+                            break;
+                        }
+                    }
+
+                    if (hasReadyIndex) {
+                        addLiveUpdateIndexedDevice(change.deviceId);
+                    } else {
+                        syncLiveUpdateDevices();
+                    }
                 }
             }
         }
@@ -2011,7 +2527,7 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
         }
     }
 
-    scanEnabledKnownDevices(devicesToScan);
+    scanEnabledKnownDevices(devicesToScan, false);
     requestRefreshAllWindows();
 }
 
@@ -2290,6 +2806,21 @@ void AppController::removeLiveUpdateIndexedDevice(const QString& deviceId)
     }
 
     syncLiveUpdateDevices();
+}
+
+void AppController::addReadyLoadedIndexesToLiveUpdates()
+{
+    if (!indexController_) {
+        return;
+    }
+
+    for (const IndexSummary& summary : indexSummaries()) {
+        if (!summary.ready || summary.deviceId.isEmpty()) {
+            continue;
+        }
+
+        addLiveUpdateIndexedDevice(summary.deviceId);
+    }
 }
 
 bool AppController::liveUpdatesEnabledForDevice(const QString& deviceId) const

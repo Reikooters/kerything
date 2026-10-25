@@ -10,10 +10,12 @@
 #include <QHash>
 #include <QSet>
 #include <QTimer>
+#include <QFutureWatcher>
 
 #include "DaemonClient.h"
 #include "DevicePreferenceChange.h"
 #include "IndexController.h"
+#include "IndexPersistenceManager.h"
 #include "IndexSummary.h"
 #include "Preferences.h"
 #include "PreferencesDialogPage.h"
@@ -25,6 +27,9 @@ class SingleInstanceServer;
 class QAction;
 class QMenu;
 class QSystemTrayIcon;
+class QDialog;
+class QLabel;
+class QPushButton;
 
 class AppController final : public QObject {
     Q_OBJECT
@@ -40,6 +45,7 @@ public:
     void refreshIndexes();
     void refreshIndex(const QString& deviceId);
     void forgetIndex(const QString& deviceId);
+    void deleteSavedIndex(const QString& deviceId);
     void requestRefreshAllWindows();
     void requestSearchHighlightRepaintAllWindows();
     void requestWindowStatusMessage(const QString& message, int timeoutMs);
@@ -52,6 +58,10 @@ public:
     [[nodiscard]] bool closeToTrayAvailable() const;
     void maybeShowCloseToTrayNoticeForClosingWindow(MainWindow* closingWindow);
     void quitApplication();
+    void finishQuitApplication();
+    void showSavingBeforeQuitDialog();
+    void updateSavingBeforeQuitDialog();
+    void quitNowWithoutWaitingForIndexSaves();
     [[nodiscard]] int defaultSortColumn() const;
     [[nodiscard]] Qt::SortOrder defaultSortOrder() const;
     [[nodiscard]] bool sortDateDescendingFirst() const;
@@ -103,7 +113,10 @@ private:
         const std::vector<BlockDevice>& oldDevices,
         const std::vector<BlockDevice>& newDevices
     ) const;
-    qsizetype scanEnabledKnownDevices(const std::vector<BlockDevice>& blockDevices);
+    qsizetype scanEnabledKnownDevices(
+        const std::vector<BlockDevice>& blockDevices,
+        bool respectRefreshOnStartupPreference
+    );
     void applyDevicePreferenceChanges(const QList<DevicePreferenceChange>& changes);
     void cancelActiveScansForDevice(const QString& deviceId, bool removeDeviceIndex);
     void updateIndexedDeviceRuntimeState(const BlockDevice& blockDevice);
@@ -121,15 +134,52 @@ private:
     void requestLiveMetadataRefreshAllWindows();
     void addLiveUpdateIndexedDevice(const QString& deviceId);
     void removeLiveUpdateIndexedDevice(const QString& deviceId);
+    void addReadyLoadedIndexesToLiveUpdates();
     [[nodiscard]] bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     bool requestScanForDeviceId(const QString& deviceId);
     void syncLiveUpdateDevices();
+    void loadSavedIndexes();
+    void startAsyncIndexLoad(const QString& deviceId);
+    void onAsyncIndexLoadFinished();
+    void maybeSaveIndexForDevice(const QString& deviceId);
+    void startAsyncIndexSave(const QString& deviceId, IndexController::CoreSnapshot snapshot);
+    void onAsyncIndexSaveFinished();
+    void markIndexDirtyForDevice(const QString& deviceId);
+    void scheduleDirtyIndexSave();
+    void saveDirtyIndexesNow();
+
+    struct IndexSaveResult {
+        QString deviceId;
+        bool success = false;
+        QString errorText;
+        qsizetype recordCount = 0;
+        qsizetype stringPoolBytes = 0;
+    };
+
+    struct IndexLoadResult {
+        QString deviceId;
+        bool success = false;
+        QString errorText;
+        std::optional<IndexController::CoreSnapshot> snapshot;
+    };
 
     QApplication& app_;
     SingleInstanceServer* instanceServer_ = nullptr;
     DaemonClient* daemonClient_ = nullptr;
     IndexController* indexController_ = nullptr;
+    IndexPersistenceManager* indexPersistenceManager_ = nullptr;
     Preferences preferences_;
+
+    QSet<QString> savingIndexDeviceIds_;
+    QSet<QString> loadingIndexDeviceIds_;
+    QSet<QString> dirtyIndexDeviceIds_;
+    QHash<QFutureWatcher<IndexSaveResult>*, QString> indexSaveDeviceIdsByWatcher_;
+    QHash<QFutureWatcher<IndexLoadResult>*, QString> indexLoadDeviceIdsByWatcher_;
+
+    QPointer<QDialog> savingBeforeQuitDialog_;
+    QLabel* savingBeforeQuitLabel_ = nullptr;
+    QPushButton* savingBeforeQuitNowButton_ = nullptr;
+    bool quitAfterPendingIndexSaves_ = false;
 
     // requestId -> stable deviceId
     QHash<quint32, QString> scanRequestDeviceIds_;
@@ -147,6 +197,8 @@ private:
     QList<QPointer<MainWindow>> windows_;
     QTimer liveUpdateRefreshTimer_;
     QTimer liveMetadataRefreshTimer_;
+    QTimer dirtyIndexSaveQuietTimer_;
+    QTimer dirtyIndexSaveMaxTimer_;
     bool liveUpdateRefreshPausedDirty_ = false;
 
     QSystemTrayIcon* trayIcon_ = nullptr;

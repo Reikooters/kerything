@@ -78,11 +78,8 @@ private:
     enum IndexColumn {
         IndexNameColumn = 0,
         IndexStatusColumn,
-        IndexSavedColumn,
         IndexRecordsColumn,
         IndexFilesystemColumn,
-        IndexMountPointColumn,
-        IndexDeviceColumn,
         IndexLastIndexedColumn,
         IndexColumnCount
     };
@@ -108,6 +105,7 @@ private:
     void populateFilterTable(const std::vector<SearchFilterPreference>& filters);
     void updateSelectedDeviceDetailsHeight();
     void scheduleSelectedDeviceDetailsHeightUpdate();
+    void updateSelectedIndexDetails();
     void updateApplyButtonEnabled();
     bool applyChanges();
     bool hasChanges() const;
@@ -184,6 +182,7 @@ private:
     QTextBrowser* selectedDeviceDetailsText_ = nullptr;
 
     QTableWidget* indexTable_ = nullptr;
+    QTextBrowser* selectedIndexDetailsText_ = nullptr;
     QPushButton* refreshIndexButton_ = nullptr;
     QPushButton* refreshStaleIndexesButton_ = nullptr;
     QPushButton* forgetIndexButton_ = nullptr;

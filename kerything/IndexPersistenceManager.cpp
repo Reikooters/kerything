@@ -173,6 +173,7 @@ bool IndexPersistenceManager::saveCoreSnapshot(
     out << snapshot.mounted;
     out << snapshot.showOfflineResults;
     out << snapshot.lastIndexedTime;
+    out << snapshot.lastUpdatedTime;
 
     writeVector(out, snapshot.fileRecords);
     writeVector(out, snapshot.fileRecordNamespaces);
@@ -221,7 +222,7 @@ std::optional<IndexController::CoreSnapshot> IndexPersistenceManager::loadCoreSn
     in >> magic;
     in >> version;
 
-    if (magic != FormatMagic || version != FormatVersion) {
+    if (magic != FormatMagic || version < 1 || version > FormatVersion) {
         if (errorText) {
             *errorText = QStringLiteral("Unsupported saved index format.");
         }
@@ -249,6 +250,7 @@ std::optional<IndexController::CoreSnapshot> IndexPersistenceManager::loadCoreSn
     in >> snapshot.mounted;
     in >> snapshot.showOfflineResults;
     in >> snapshot.lastIndexedTime;
+    in >> snapshot.lastUpdatedTime;
 
     static constexpr quint64 MaxRecords = 100'000'000;
     static constexpr quint64 MaxStringBytes = 16ull * 1024ull * 1024ull * 1024ull;

@@ -376,6 +376,10 @@ namespace {
         html += detailsRow(QStringLiteral("Offline results:"), yesNo(summary.showOfflineResults));
         html += detailsRow(QStringLiteral("Filesystem:"), displayOrDash(summary.fsType));
         html += detailsRow(QStringLiteral("Last full scan:"), formatIndexTime(summary.lastIndexedTime).toHtmlEscaped());
+        html += detailsRow(
+            QStringLiteral("Last updated:"),
+            formatIndexTime(summary.lastUpdatedTime).toHtmlEscaped()
+        );
         html += QStringLiteral("</table>");
 
         html += detailsSectionTitle(QStringLiteral("Records"));
@@ -513,6 +517,22 @@ PreferencesDialog::PreferencesDialog(
 
 bool PreferencesDialog::eventFilter(QObject* watched, QEvent* event)
 {
+    if (selectedIndexDetailsText_ &&
+        (watched == selectedIndexDetailsText_->viewport() ||
+         watched == selectedIndexDetailsText_->verticalScrollBar())) {
+        switch (event->type()) {
+            case QEvent::Wheel:
+            case QEvent::MouseButtonPress:
+            case QEvent::MouseMove:
+            case QEvent::MouseButtonRelease:
+                noteSelectedIndexDetailsUserScroll();
+                break;
+
+            default:
+                break;
+        }
+    }
+
     if (event->type() == QEvent::KeyPress) {
         auto* keyEvent = dynamic_cast<QKeyEvent*>(event);
 
@@ -572,7 +592,7 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
     if (page == PreferencesDialogPage::Devices) {
         scheduleSelectedDeviceDetailsHeightUpdate();
     } else if (page == PreferencesDialogPage::Indexes) {
-        updateSelectedIndexDetails();
+        scheduleSelectedIndexDetailsUpdate();
     }
 }
 
@@ -761,14 +781,22 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
 void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& indexSummaries)
 {
     QString selectedDeviceId;
+    quint64 selectedIndexId = 0;
+    int selectedDetailsScrollValue = 0;
 
     if (indexTable_) {
         const int currentRow = indexTable_->currentRow();
         if (currentRow >= 0 && currentRow < indexTable_->rowCount()) {
             if (const auto* item = indexTable_->item(currentRow, IndexNameColumn)) {
                 selectedDeviceId = item->data(IndexDeviceIdRole).toString();
+                selectedIndexId = item->data(IndexIdRole).toULongLong();
             }
         }
+    }
+
+    if (selectedIndexDetailsText_ && selectedIndexDetailsText_->verticalScrollBar()) {
+        selectedDetailsScrollValue =
+            selectedIndexDetailsText_->verticalScrollBar()->value();
     }
 
     indexSummaries_ = indexSummaries;
@@ -795,10 +823,18 @@ void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& index
     }
 
     if (rowToSelect >= 0) {
+        /*
+         * Preserve the currently displayed index identity across the table rebuild.
+         * setCurrentCell() can emit currentCellChanged(), which refreshes the details
+         * immediately, so these need to be restored before changing the current cell.
+         */
+        selectedIndexDetailsDeviceId_ = selectedDeviceId;
+        selectedIndexDetailsIndexId_ = selectedIndexId;
+
         indexTable_->setCurrentCell(rowToSelect, IndexNameColumn);
     }
 
-    updateSelectedIndexDetails();
+    scheduleSelectedIndexDetailsUpdate();
 }
 
 void PreferencesDialog::updateSelectedIndexDetails()
@@ -809,6 +845,9 @@ void PreferencesDialog::updateSelectedIndexDetails()
 
     const int row = indexTable_->currentRow();
     if (row < 0 || row >= indexTable_->rowCount()) {
+        selectedIndexDetailsDeviceId_.clear();
+        selectedIndexDetailsIndexId_ = 0;
+        ++selectedIndexDetailsScrollRestoreToken_;
         selectedIndexDetailsText_->setHtml(QStringLiteral("No index selected."));
         return;
     }
@@ -822,6 +861,15 @@ void PreferencesDialog::updateSelectedIndexDetails()
         ? nameItem->data(IndexIdRole).toULongLong()
         : 0;
 
+    const bool sameDisplayedIndex =
+        selectedIndexDetailsIndexId_ == indexId &&
+        selectedIndexDetailsDeviceId_ == deviceId;
+
+    const int previousScrollValue =
+        sameDisplayedIndex && selectedIndexDetailsText_->verticalScrollBar()
+            ? selectedIndexDetailsText_->verticalScrollBar()->value()
+            : 0;
+
     const auto summaryIt = std::ranges::find_if(
         indexSummaries_,
         [&](const IndexSummary& summary) {
@@ -834,6 +882,9 @@ void PreferencesDialog::updateSelectedIndexDetails()
     );
 
     if (summaryIt == indexSummaries_.end()) {
+        selectedIndexDetailsDeviceId_.clear();
+        selectedIndexDetailsIndexId_ = 0;
+        ++selectedIndexDetailsScrollRestoreToken_;
         selectedIndexDetailsText_->setHtml(QStringLiteral("No index selected."));
         return;
     }
@@ -846,13 +897,55 @@ void PreferencesDialog::updateSelectedIndexDetails()
         ? nameItem->text()
         : displayNameForIndexSummary(*summaryIt, knownDeviceById_);
 
+    const quint64 restoreToken = ++selectedIndexDetailsScrollRestoreToken_;
+
     selectedIndexDetailsText_->setHtml(
         selectedIndexDetailsHtml(*summaryIt, displayName, knownDevice)
     );
 
-    if (selectedIndexDetailsText_->verticalScrollBar()) {
-        selectedIndexDetailsText_->verticalScrollBar()->setValue(0);
+    selectedIndexDetailsDeviceId_ = deviceId;
+    selectedIndexDetailsIndexId_ = indexId;
+
+    auto* scrollBar = selectedIndexDetailsText_->verticalScrollBar();
+    if (!scrollBar) {
+        return;
     }
+
+    auto restoreScroll = [this, restoreToken, previousScrollValue]() {
+        if (restoreToken != selectedIndexDetailsScrollRestoreToken_ ||
+            !selectedIndexDetailsText_ ||
+            !selectedIndexDetailsText_->verticalScrollBar()) {
+            return;
+        }
+
+        auto* currentScrollBar = selectedIndexDetailsText_->verticalScrollBar();
+        currentScrollBar->setValue(std::clamp(
+            previousScrollValue,
+            currentScrollBar->minimum(),
+            currentScrollBar->maximum()
+        ));
+    };
+
+    if (!sameDisplayedIndex) {
+        scrollBar->setValue(0);
+        return;
+    }
+
+    restoreScroll();
+
+    connect(
+        scrollBar,
+        &QScrollBar::rangeChanged,
+        selectedIndexDetailsText_,
+        [restoreScroll](int, int) {
+            restoreScroll();
+        },
+        Qt::SingleShotConnection
+    );
+
+    QTimer::singleShot(0, this, restoreScroll);
+    QTimer::singleShot(25, this, restoreScroll);
+    QTimer::singleShot(100, this, restoreScroll);
 }
 
 void PreferencesDialog::updateSelectedDeviceDetailsHeight()
@@ -895,6 +988,49 @@ void PreferencesDialog::updateSelectedDeviceDetailsHeight()
     }
 }
 
+void PreferencesDialog::noteSelectedIndexDetailsUserScroll()
+{
+    selectedIndexDetailsLastUserScrollMs_ = QDateTime::currentMSecsSinceEpoch();
+
+    /*
+     * Cancel any queued delayed restore captured before the user's latest scroll.
+     * Otherwise a singleShot restore can pull the scroll position backwards while
+     * the user is still scrolling.
+     */
+    ++selectedIndexDetailsScrollRestoreToken_;
+}
+
+void PreferencesDialog::scheduleSelectedIndexDetailsUpdate()
+{
+    static constexpr qint64 UserScrollIdleDelayMs = 250;
+
+    if (!selectedIndexDetailsText_) {
+        return;
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 msSinceUserScroll = now - selectedIndexDetailsLastUserScrollMs_;
+
+    if (selectedIndexDetailsLastUserScrollMs_ > 0 &&
+        msSinceUserScroll >= 0 &&
+        msSinceUserScroll < UserScrollIdleDelayMs) {
+        if (selectedIndexDetailsUpdatePending_) {
+            return;
+        }
+
+        selectedIndexDetailsUpdatePending_ = true;
+
+        QTimer::singleShot(UserScrollIdleDelayMs - msSinceUserScroll, this, [this]() {
+            selectedIndexDetailsUpdatePending_ = false;
+            scheduleSelectedIndexDetailsUpdate();
+        });
+
+        return;
+    }
+
+    updateSelectedIndexDetails();
+}
+
 void PreferencesDialog::scheduleSelectedDeviceDetailsHeightUpdate()
 {
     if (!selectedDeviceDetailsText_) {
@@ -932,7 +1068,7 @@ void PreferencesDialog::populateNavigation()
         if (index == static_cast<int>(PreferencesDialogPage::Devices)) {
             scheduleSelectedDeviceDetailsHeightUpdate();
         } else if (index == static_cast<int>(PreferencesDialogPage::Indexes)) {
-            updateSelectedIndexDetails();
+            scheduleSelectedIndexDetailsUpdate();
         }
     });
 }
@@ -1473,6 +1609,7 @@ QWidget* PreferencesDialog::createIndexesPage()
         QStringLiteral("Records"),
         QStringLiteral("Filesystem"),
         QStringLiteral("Last full scan"),
+        QStringLiteral("Last updated"),
     });
 
     indexTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1487,6 +1624,7 @@ QWidget* PreferencesDialog::createIndexesPage()
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexRecordsColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexFilesystemColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexLastIndexedColumn, QHeaderView::ResizeToContents);
+    indexTable_->horizontalHeader()->setSectionResizeMode(IndexLastUpdatedColumn, QHeaderView::ResizeToContents);
     installHoverRowHighlight(indexTable_);
 
     populateIndexTable();
@@ -1506,7 +1644,7 @@ QWidget* PreferencesDialog::createIndexesPage()
     selectedIndexDetailsText_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     selectedIndexDetailsText_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     selectedIndexDetailsText_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    selectedIndexDetailsText_->setMinimumHeight(190);
+    selectedIndexDetailsText_->setMinimumHeight(200);
     selectedIndexDetailsText_->setFocusPolicy(Qt::NoFocus);
     selectedIndexDetailsText_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     selectedIndexDetailsText_->setAutoFillBackground(false);
@@ -1521,6 +1659,10 @@ QWidget* PreferencesDialog::createIndexesPage()
         "}"
     ));
     selectedIndexDetailsText_->document()->setDocumentMargin(0);
+    selectedIndexDetailsText_->viewport()->installEventFilter(this);
+    if (selectedIndexDetailsText_->verticalScrollBar()) {
+        selectedIndexDetailsText_->verticalScrollBar()->installEventFilter(this);
+    }
 
     detailsLayout->addWidget(selectedIndexDetailsText_);
 
@@ -1633,7 +1775,7 @@ QWidget* PreferencesDialog::createIndexesPage()
     };
 
     connect(indexTable_, &QTableWidget::currentCellChanged, this, [this, updateIndexButtonStates]() {
-        updateSelectedIndexDetails();
+        scheduleSelectedIndexDetailsUpdate();
         updateIndexButtonStates();
     });
 
@@ -1741,7 +1883,7 @@ QWidget* PreferencesDialog::createIndexesPage()
     }
 
     QTimer::singleShot(0, this, [this, updateIndexButtonStates]() {
-        updateSelectedIndexDetails();
+        scheduleSelectedIndexDetailsUpdate();
         updateIndexButtonStates();
     });
 
@@ -2860,6 +3002,14 @@ void PreferencesDialog::populateIndexTable()
             new QTableWidgetItem(formatIndexTime(summary.lastIndexedTime))
         );
 
+        auto* lastUpdatedItem = new QTableWidgetItem(formatIndexTime(summary.lastUpdatedTime));
+        lastUpdatedItem->setToolTip(
+            summary.lastUpdatedTime > 0
+                ? QStringLiteral("Last time this index changed due to a full scan or live updates.")
+                : QStringLiteral("No update time is known for this index.")
+        );
+        indexTable_->setItem(row, IndexLastUpdatedColumn, lastUpdatedItem);
+
         if (!knownDevice) {
             for (int column = 0; column < IndexColumnCount; ++column) {
                 if (auto* item = indexTable_->item(row, column)) {
@@ -2870,8 +3020,6 @@ void PreferencesDialog::populateIndexTable()
 
         ++row;
     }
-
-    updateSelectedIndexDetails();
 }
 
 void PreferencesDialog::populateFilterTable()

@@ -713,7 +713,24 @@ bool AppController::start() {
                 const IndexController::LiveUpdateApplyResult result =
                     indexController_->applyLiveUpdateOperations(deviceId, operations);
 
-                if (result.upserted > 0 || result.deleted > 0 || result.metadataChanged > 0) {
+                const bool indexChanged =
+                    result.upserted > 0 ||
+                    result.deleted > 0 ||
+                    result.metadataChanged > 0;
+
+                const bool indexHealthChanged =
+                    result.needsRescan > 0 ||
+                    result.missingParent > 0 ||
+                    result.unsupported > 0;
+
+                if (indexChanged || indexHealthChanged) {
+                    if (indexController_->markUpdatedByDeviceId(deviceId)) {
+                        updateOpenPreferencesDialog();
+                        Q_EMIT indexesChanged();
+                    }
+                }
+
+                if (indexChanged) {
                     markIndexDirtyForDevice(deviceId);
                 }
 
@@ -724,7 +741,7 @@ bool AppController::start() {
                     scheduleLiveMetadataRefresh();
                 }
 
-                if (result.needsRescan > 0 || result.missingParent > 0 || result.unsupported > 0) {
+                if (indexHealthChanged) {
                     if (indexController_ &&
                         indexController_->markStaleByDeviceId(deviceId, true)) {
                         updateOpenPreferencesDialog();

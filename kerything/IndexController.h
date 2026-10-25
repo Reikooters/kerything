@@ -134,6 +134,15 @@ public:
         // unix seconds; 0 means unknown
         qint64 lastIndexedTime = 0;
 
+        /*
+         * Unix seconds; 0 means unknown.
+         *
+         * Updated after a full scan and after live-update batches that change
+         * the in-memory index or mark it stale. This is intentionally separate
+         * from lastIndexedTime, which represents the most recent full scan.
+         */
+        qint64 lastUpdatedTime = 0;
+
         // display metadata
         QString label;
 
@@ -2369,6 +2378,7 @@ public:
         bool mounted = false;
         bool showOfflineResults = true;
         qint64 lastIndexedTime = 0;
+        qint64 lastUpdatedTime = 0;
 
         std::vector<FileRecord> fileRecords;
         std::vector<FileRecordNamespace> fileRecordNamespaces;
@@ -2436,6 +2446,7 @@ public:
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
     bool markStaleByDeviceId(const QString& deviceId, bool stale = true);
+    bool markUpdatedByDeviceId(const QString& deviceId, qint64 updateTime = 0);
     [[nodiscard]] bool hasStaleIndexes() const;
     [[nodiscard]] QStringList staleDeviceIds() const;
     [[nodiscard]] std::optional<CoreSnapshot> coreSnapshotForDeviceId(const QString& deviceId) const;

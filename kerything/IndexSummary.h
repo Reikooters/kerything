@@ -18,6 +18,7 @@ struct IndexSummary {
     QString primaryMountPoint;
     QStringList mountPoints;
     qint64 lastIndexedTime = 0;
+    qint64 lastUpdatedTime = 0;
     qsizetype recordCount = 0;
     qsizetype deletedRecordCount = 0;
     bool ready = false;

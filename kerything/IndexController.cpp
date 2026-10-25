@@ -4703,6 +4703,7 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
         if (becameReady) {
             deviceIndex.stale = false;
             deviceIndex.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
+            deviceIndex.lastUpdatedTime = deviceIndex.lastIndexedTime;
             deviceIndex.compactDeletedRecordBits();
             deviceIndex.fileRecordNamespaces.shrink_to_fit();
             deviceIndex.namespacedDirectoryFsIndexRecordRefs.shrink_to_fit();
@@ -4737,6 +4738,36 @@ bool IndexController::markStaleByDeviceId(const QString& deviceId, bool stale)
 
         if (deviceIndex->stale != stale) {
             deviceIndex->stale = stale;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+bool IndexController::markUpdatedByDeviceId(const QString& deviceId, qint64 updateTime)
+{
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    if (updateTime <= 0) {
+        updateTime = QDateTime::currentSecsSinceEpoch();
+    }
+
+    std::unique_lock lock(indexMutex_);
+
+    bool changed = false;
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndex || deviceIndex->deviceId != deviceId) {
+            continue;
+        }
+
+        if (deviceIndex->lastUpdatedTime != updateTime) {
+            deviceIndex->lastUpdatedTime = updateTime;
             changed = true;
         }
     }
@@ -4810,6 +4841,7 @@ std::optional<IndexController::CoreSnapshot> IndexController::coreSnapshotForDev
         snapshot.mounted = device.mounted;
         snapshot.showOfflineResults = device.showOfflineResults;
         snapshot.lastIndexedTime = device.lastIndexedTime;
+        snapshot.lastUpdatedTime = device.lastUpdatedTime;
         snapshot.fileRecords = device.fileRecords;
         snapshot.fileRecordNamespaces = device.fileRecordNamespaces;
         snapshot.stringPool = device.stringPool;
@@ -4852,6 +4884,7 @@ bool IndexController::addDeviceFromCoreSnapshot(CoreSnapshot snapshot)
         deviceIndex->mounted = snapshot.mounted;
         deviceIndex->showOfflineResults = snapshot.showOfflineResults;
         deviceIndex->lastIndexedTime = snapshot.lastIndexedTime;
+        deviceIndex->lastUpdatedTime = snapshot.lastUpdatedTime;
         deviceIndex->stale = true;
         deviceIndex->fileRecords = std::move(snapshot.fileRecords);
         deviceIndex->fileRecordNamespaces = std::move(snapshot.fileRecordNamespaces);
@@ -6011,6 +6044,7 @@ std::vector<IndexSummary> IndexController::indexSummaries() const
                 .primaryMountPoint = device.primaryMountPoint,
                 .mountPoints = device.mountPoints,
                 .lastIndexedTime = device.lastIndexedTime,
+                .lastUpdatedTime = device.lastUpdatedTime,
                 .recordCount = static_cast<qsizetype>(device.fileRecords.size()),
                 .deletedRecordCount = deletedRecordCount,
                 .ready = device.isReady,

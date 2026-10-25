@@ -81,6 +81,7 @@ private:
         IndexRecordsColumn,
         IndexFilesystemColumn,
         IndexLastIndexedColumn,
+        IndexLastUpdatedColumn,
         IndexColumnCount
     };
 
@@ -106,6 +107,8 @@ private:
     void updateSelectedDeviceDetailsHeight();
     void scheduleSelectedDeviceDetailsHeightUpdate();
     void updateSelectedIndexDetails();
+    void scheduleSelectedIndexDetailsUpdate();
+    void noteSelectedIndexDetailsUserScroll();
     void updateApplyButtonEnabled();
     bool applyChanges();
     bool hasChanges() const;
@@ -187,6 +190,11 @@ private:
     QPushButton* refreshStaleIndexesButton_ = nullptr;
     QPushButton* forgetIndexButton_ = nullptr;
     QPushButton* deleteSavedIndexButton_ = nullptr;
+    QString selectedIndexDetailsDeviceId_;
+    quint64 selectedIndexDetailsIndexId_ = 0;
+    quint64 selectedIndexDetailsScrollRestoreToken_ = 0;
+    bool selectedIndexDetailsUpdatePending_ = false;
+    qint64 selectedIndexDetailsLastUserScrollMs_ = 0;
 
     QTableWidget* filterTable_ = nullptr;
     QPushButton* addFilterButton_ = nullptr;

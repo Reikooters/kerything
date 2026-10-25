@@ -869,7 +869,6 @@ void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& index
 {
     QString selectedDeviceId;
     quint64 selectedIndexId = 0;
-    int selectedDetailsScrollValue = 0;
 
     if (indexTable_) {
         const int currentRow = indexTable_->currentRow();
@@ -879,11 +878,6 @@ void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& index
                 selectedIndexId = item->data(IndexIdRole).toULongLong();
             }
         }
-    }
-
-    if (selectedIndexDetailsText_ && selectedIndexDetailsText_->verticalScrollBar()) {
-        selectedDetailsScrollValue =
-            selectedIndexDetailsText_->verticalScrollBar()->value();
     }
 
     indexSummaries_ = indexSummaries;

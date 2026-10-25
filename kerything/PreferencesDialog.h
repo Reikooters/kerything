@@ -183,6 +183,7 @@ private:
     QCheckBox* liveUpdatesEnabledCheckBox_ = nullptr;
     QCheckBox* refreshIndexBeforeEnablingLiveUpdatesCheckBox_ = nullptr;
     QTextBrowser* selectedDeviceDetailsText_ = nullptr;
+    quint64 deviceTableScrollRestoreToken_ = 0;
 
     QTableWidget* indexTable_ = nullptr;
     QTextBrowser* selectedIndexDetailsText_ = nullptr;
@@ -192,6 +193,7 @@ private:
     QPushButton* deleteSavedIndexButton_ = nullptr;
     QString selectedIndexDetailsDeviceId_;
     quint64 selectedIndexDetailsIndexId_ = 0;
+    quint64 indexTableScrollRestoreToken_ = 0;
     quint64 selectedIndexDetailsScrollRestoreToken_ = 0;
     bool selectedIndexDetailsUpdatePending_ = false;
     qint64 selectedIndexDetailsLastUserScrollMs_ = 0;

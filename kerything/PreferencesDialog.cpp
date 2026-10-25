@@ -527,6 +527,100 @@ namespace {
         table->scrollToItem(table->item(row, column), QAbstractItemView::PositionAtCenter);
         return true;
     }
+
+    struct TableScrollPosition {
+        int vertical = 0;
+        int horizontal = 0;
+    };
+
+    TableScrollPosition captureTableScrollPosition(const QTableWidget* table)
+    {
+        if (!table) {
+            return {};
+        }
+
+        const auto* verticalScrollBar = table->verticalScrollBar();
+        const auto* horizontalScrollBar = table->horizontalScrollBar();
+
+        return TableScrollPosition{
+            .vertical = verticalScrollBar ? verticalScrollBar->value() : 0,
+            .horizontal = horizontalScrollBar ? horizontalScrollBar->value() : 0,
+        };
+    }
+
+    void restoreTableScrollPosition(QTableWidget* table, TableScrollPosition position)
+    {
+        if (!table) {
+            return;
+        }
+
+        if (auto* verticalScrollBar = table->verticalScrollBar()) {
+            verticalScrollBar->setValue(std::clamp(
+                position.vertical,
+                verticalScrollBar->minimum(),
+                verticalScrollBar->maximum()
+            ));
+        }
+
+        if (auto* horizontalScrollBar = table->horizontalScrollBar()) {
+            horizontalScrollBar->setValue(std::clamp(
+                position.horizontal,
+                horizontalScrollBar->minimum(),
+                horizontalScrollBar->maximum()
+            ));
+        }
+    }
+
+    void restoreTableScrollPositionSoon(
+        QObject* context,
+        QTableWidget* table,
+        TableScrollPosition position,
+        const quint64* restoreToken,
+        quint64 expectedRestoreToken
+    ) {
+        auto restoreIfCurrent = [table, position, restoreToken, expectedRestoreToken]() {
+            if (!restoreToken || *restoreToken != expectedRestoreToken) {
+                return;
+            }
+
+            restoreTableScrollPosition(table, position);
+        };
+
+        restoreIfCurrent();
+
+        QTimer::singleShot(0, context, restoreIfCurrent);
+        QTimer::singleShot(25, context, restoreIfCurrent);
+    }
+
+    void noteTableUserScroll(quint64& restoreToken)
+    {
+        /*
+         * Cancel any delayed restore captured before the user's latest scroll input.
+         * Otherwise a singleShot restore can pull the table back to an older position
+         * while the user is actively scrolling.
+         */
+        ++restoreToken;
+    }
+
+    bool isScrollNavigationKey(QKeyEvent* keyEvent)
+    {
+        if (!keyEvent) {
+            return false;
+        }
+
+        switch (keyEvent->key()) {
+            case Qt::Key_Up:
+            case Qt::Key_Down:
+            case Qt::Key_PageUp:
+            case Qt::Key_PageDown:
+            case Qt::Key_Home:
+            case Qt::Key_End:
+                return true;
+
+            default:
+                return false;
+        }
+    }
 }
 
 PreferencesDialog::PreferencesDialog(
@@ -620,16 +714,61 @@ bool PreferencesDialog::eventFilter(QObject* watched, QEvent* event)
         }
     }
 
+    if (deviceTable_ &&
+        (watched == deviceTable_->viewport() ||
+         watched == deviceTable_->verticalScrollBar())) {
+        switch (event->type()) {
+            case QEvent::Wheel:
+            case QEvent::MouseButtonPress:
+            case QEvent::MouseMove:
+            case QEvent::MouseButtonRelease:
+                noteTableUserScroll(deviceTableScrollRestoreToken_);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    if (indexTable_ &&
+        (watched == indexTable_->viewport() ||
+         watched == indexTable_->verticalScrollBar())) {
+        switch (event->type()) {
+            case QEvent::Wheel:
+            case QEvent::MouseButtonPress:
+            case QEvent::MouseMove:
+            case QEvent::MouseButtonRelease:
+                noteTableUserScroll(indexTableScrollRestoreToken_);
+                break;
+
+            default:
+                break;
+        }
+    }
+
     if (event->type() == QEvent::KeyPress) {
         auto* keyEvent = dynamic_cast<QKeyEvent*>(event);
 
         if (watched == deviceTable_) {
+            if (isScrollNavigationKey(keyEvent)) {
+                noteTableUserScroll(deviceTableScrollRestoreToken_);
+            }
+
             if (keyEvent->key() == Qt::Key_Space && keyEvent->modifiers() == Qt::NoModifier) {
                 toggleDeviceRowChecked(deviceTable_->currentRow());
                 return true;
             }
 
             if (moveTableSelectionToEdge(deviceTable_, keyEvent)) {
+                return true;
+            }
+        }
+        else if (watched == indexTable_) {
+            if (isScrollNavigationKey(keyEvent)) {
+                noteTableUserScroll(indexTableScrollRestoreToken_);
+            }
+
+            if (moveTableSelectionToEdge(indexTable_, keyEvent)) {
                 return true;
             }
         }
@@ -758,6 +897,9 @@ void PreferencesDialog::appendSearchFilter(const SearchFilterPreference& filter)
 void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDevices)
 {
     QString selectedDeviceId;
+    const TableScrollPosition deviceTableScrollPosition =
+        captureTableScrollPosition(deviceTable_);
+    const quint64 restoreToken = ++deviceTableScrollRestoreToken_;
 
     struct CurrentDeviceState {
         bool enabled = false;
@@ -862,6 +1004,14 @@ void PreferencesDialog::setKnownDevices(const std::vector<BlockDevice>& knownDev
         deviceTable_->setCurrentCell(rowToSelect, DeviceNameColumn);
     }
 
+    restoreTableScrollPositionSoon(
+        this,
+        deviceTable_,
+        deviceTableScrollPosition,
+        &deviceTableScrollRestoreToken_,
+        restoreToken
+    );
+
     updateApplyButtonEnabled();
 }
 
@@ -869,6 +1019,9 @@ void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& index
 {
     QString selectedDeviceId;
     quint64 selectedIndexId = 0;
+    const TableScrollPosition indexTableScrollPosition =
+        captureTableScrollPosition(indexTable_);
+    const quint64 restoreToken = ++indexTableScrollRestoreToken_;
 
     if (indexTable_) {
         const int currentRow = indexTable_->currentRow();
@@ -914,6 +1067,14 @@ void PreferencesDialog::setIndexSummaries(const std::vector<IndexSummary>& index
 
         indexTable_->setCurrentCell(rowToSelect, IndexNameColumn);
     }
+
+    restoreTableScrollPositionSoon(
+        this,
+        indexTable_,
+        indexTableScrollPosition,
+        &indexTableScrollRestoreToken_,
+        restoreToken
+    );
 
     scheduleSelectedIndexDetailsUpdate();
 }
@@ -1199,6 +1360,10 @@ QWidget* PreferencesDialog::createDevicesPage()
     deviceTable_->horizontalHeader()->setSectionResizeMode(DeviceModelColumn, QHeaderView::ResizeToContents);
     installHoverRowHighlight(deviceTable_);
     deviceTable_->installEventFilter(this);
+    deviceTable_->viewport()->installEventFilter(this);
+    if (deviceTable_->verticalScrollBar()) {
+        deviceTable_->verticalScrollBar()->installEventFilter(this);
+    }
 
     populateDeviceTable();
 
@@ -1707,6 +1872,11 @@ QWidget* PreferencesDialog::createIndexesPage()
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexLastIndexedColumn, QHeaderView::ResizeToContents);
     indexTable_->horizontalHeader()->setSectionResizeMode(IndexLastUpdatedColumn, QHeaderView::ResizeToContents);
     installHoverRowHighlight(indexTable_);
+    indexTable_->installEventFilter(this);
+    indexTable_->viewport()->installEventFilter(this);
+    if (indexTable_->verticalScrollBar()) {
+        indexTable_->verticalScrollBar()->installEventFilter(this);
+    }
 
     populateIndexTable();
 

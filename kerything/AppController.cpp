@@ -22,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include "BlockDeviceDisplayUtils.h"
 #include "DaemonClient.h"
 #include "DeviceCapabilities.h"
 #include "DevicePickerDialog.h"
@@ -635,6 +636,12 @@ bool AppController::start() {
                         break;
 
                     case LiveUpdateStatus::StaleNeedsRescan:
+                        if (indexController_ &&
+                            indexController_->markStaleByDeviceId(deviceId, true)) {
+                            updateOpenPreferencesDialog();
+                            Q_EMIT indexesChanged();
+                        }
+
                         requestWindowStatusMessage(
                             QStringLiteral("Index may be stale for %1: %2")
                                 .arg(deviceText, reason),
@@ -718,6 +725,12 @@ bool AppController::start() {
                 }
 
                 if (result.needsRescan > 0 || result.missingParent > 0 || result.unsupported > 0) {
+                    if (indexController_ &&
+                        indexController_->markStaleByDeviceId(deviceId, true)) {
+                        updateOpenPreferencesDialog();
+                        Q_EMIT indexesChanged();
+                    }
+
                     QString deviceText = deviceId;
                     if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
                         if (blockDevice->mounted && !blockDevice->primaryMountPoint.isEmpty()) {
@@ -1394,13 +1407,16 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
             this, &AppController::applyDevicePreferenceChanges);
 
     connect(dialog, &PreferencesDialog::refreshIndexRequested,
-        this, &AppController::refreshIndex);
+            this, &AppController::refreshIndex);
+
+    connect(dialog, &PreferencesDialog::refreshStaleIndexesRequested,
+            this, &AppController::refreshStaleIndexes);
 
     connect(dialog, &PreferencesDialog::forgetIndexRequested,
             this, &AppController::forgetIndex);
 
     connect(dialog, &PreferencesDialog::deleteSavedIndexRequested,
-        this, &AppController::deleteSavedIndex);
+            this, &AppController::deleteSavedIndex);
 
     connect(dialog, &PreferencesDialog::searchFiltersApplied,
             this, [this]() {
@@ -1412,10 +1428,10 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
             this, &AppController::setAutoRefreshResultsForLiveUpdates);
 
     connect(dialog, &PreferencesDialog::showFiltersDropdownApplied,
-        this, &AppController::setShowFiltersDropdown);
+            this, &AppController::setShowFiltersDropdown);
 
     connect(dialog, &PreferencesDialog::showPreviewPaneApplied,
-        this, &AppController::setShowPreviewPane);
+            this, &AppController::setShowPreviewPane);
 
     connect(dialog, &PreferencesDialog::trayPreferencesApplied,
             this, [this](bool showTrayIcon, bool closeToTray) {
@@ -1474,6 +1490,46 @@ void AppController::refreshIndexes()
 
     requestWindowStatusMessage(
         QStringLiteral("Refreshing device list before indexing…"),
+        3000
+    );
+}
+
+void AppController::refreshStaleIndexes()
+{
+    if (!indexController_) {
+        return;
+    }
+
+    const QStringList staleDeviceIds = indexController_->staleDeviceIds();
+
+    if (staleDeviceIds.isEmpty()) {
+        requestWindowStatusMessage(
+            QStringLiteral("No stale indexes to refresh."),
+            3000
+        );
+        return;
+    }
+
+    qsizetype scansStarted = 0;
+
+    for (const QString& deviceId : staleDeviceIds) {
+        if (requestScanForDeviceId(deviceId)) {
+            ++scansStarted;
+        }
+    }
+
+    if (scansStarted <= 0) {
+        requestWindowStatusMessage(
+            QStringLiteral("No stale indexes could be refreshed."),
+            5000
+        );
+        return;
+    }
+
+    requestWindowStatusMessage(
+        scansStarted == 1
+            ? QStringLiteral("Refreshing 1 stale index…")
+            : QStringLiteral("Refreshing %1 stale indexes…").arg(scansStarted),
         3000
     );
 }
@@ -1813,6 +1869,85 @@ bool AppController::carryWindowSizeAndColumnWidthsToNewWindows() const
 std::vector<IndexSummary> AppController::indexSummaries() const
 {
     return indexController_ ? indexController_->indexSummaries() : std::vector<IndexSummary>{};
+}
+
+bool AppController::hasStaleIndexes() const
+{
+    return indexController_ && indexController_->hasStaleIndexes();
+}
+
+std::vector<IndexSummary> AppController::refreshableIndexSummaries() const
+{
+    std::vector<IndexSummary> out;
+    QHash<QString, IndexSummary> summaryByDeviceId;
+    QHash<QString, qsizetype> summaryOrderByDeviceId;
+
+    const std::vector<IndexSummary> summaries = indexSummaries();
+
+    qsizetype summaryOrder = 0;
+    for (const IndexSummary& summary : summaries) {
+        if (summary.deviceId.isEmpty()) {
+            continue;
+        }
+
+        summaryByDeviceId.insert(summary.deviceId, summary);
+        summaryOrderByDeviceId.insert(summary.deviceId, summaryOrder);
+        ++summaryOrder;
+    }
+
+    out.reserve(knownDevices_.size());
+
+    for (const BlockDevice& blockDevice : knownDevices_) {
+        if (blockDevice.deviceId.isEmpty()) {
+            continue;
+        }
+
+        if (!preferences_.isDeviceEnabled(blockDevice.deviceId)) {
+            continue;
+        }
+
+        IndexSummary summary = summaryByDeviceId.value(blockDevice.deviceId);
+
+        if (summary.deviceId.isEmpty()) {
+            summary.deviceId = blockDevice.deviceId;
+        }
+
+        summary.displayName = BlockDeviceDisplayUtils::displayNameForBlockDevice(blockDevice);
+        summary.label = blockDevice.label;
+        summary.devNode = blockDevice.devNode;
+        summary.fsType = blockDevice.fsType;
+        summary.primaryMountPoint = blockDevice.primaryMountPoint;
+        summary.mountPoints = blockDevice.mountPoints;
+        summary.mounted = blockDevice.mounted;
+
+        out.push_back(std::move(summary));
+    }
+
+    std::ranges::sort(
+        out,
+        [&summaryOrderByDeviceId](const IndexSummary& lhs, const IndexSummary& rhs) {
+            const bool lhsHasIndex = summaryOrderByDeviceId.contains(lhs.deviceId);
+            const bool rhsHasIndex = summaryOrderByDeviceId.contains(rhs.deviceId);
+
+            if (lhsHasIndex != rhsHasIndex) {
+                return lhsHasIndex;
+            }
+
+            if (lhsHasIndex && rhsHasIndex) {
+                return summaryOrderByDeviceId.value(lhs.deviceId) <
+                       summaryOrderByDeviceId.value(rhs.deviceId);
+            }
+
+            const int nameCompare = lhs.displayName.localeAwareCompare(rhs.displayName);
+            if (nameCompare != 0) {
+                return nameCompare < 0;
+            }
+
+            return lhs.deviceId.localeAwareCompare(rhs.deviceId) < 0;
+        }
+    );
+
+    return out;
 }
 
 void AppController::setShowFiltersDropdown(bool enabled)
@@ -2241,6 +2376,7 @@ void AppController::handleKnownDevicesUpdated(quint32 requestId, const std::vect
 
     syncLiveUpdateDevices();
     updateOpenPreferencesDialog();
+    Q_EMIT indexesChanged();
 
 #ifdef KERYTHING_ENABLE_LOGGING
     for (const auto& blockDevice : blockDevices) {

@@ -3389,6 +3389,7 @@ quint64 IndexController::addDevice(
             deviceIndex.mounts = mounts;
             deviceIndex.mounted = !mountPoints.isEmpty();
             deviceIndex.isReady = false;
+            deviceIndex.stale = false;
             deviceIndex.fileRecords.clear();
             deviceIndex.fileRecordNamespaces.clear();
             deviceIndex.indexedFsNamespaces.clear();
@@ -3446,6 +3447,7 @@ quint64 IndexController::addDevice(
     deviceIndex->primaryMountPoint = primaryMountPoint;
     deviceIndex->mounts = mounts;
     deviceIndex->mounted = !mountPoints.isEmpty();
+    deviceIndex->stale = false;
 
     DeviceIndex* deviceIndexRaw = deviceIndex.get();
 
@@ -4699,6 +4701,7 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
         deviceIndex.isReady = isReady;
 
         if (becameReady) {
+            deviceIndex.stale = false;
             deviceIndex.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
             deviceIndex.compactDeletedRecordBits();
             deviceIndex.fileRecordNamespaces.shrink_to_fit();
@@ -4713,6 +4716,69 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
         ::malloc_trim(0);
     }
 #endif
+}
+
+bool IndexController::markStaleByDeviceId(const QString& deviceId, bool stale)
+{
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+
+    std::unique_lock lock(indexMutex_);
+
+    bool changed = false;
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndex || deviceIndex->deviceId != deviceId) {
+            continue;
+        }
+
+        if (deviceIndex->stale != stale) {
+            deviceIndex->stale = stale;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+bool IndexController::hasStaleIndexes() const
+{
+    std::shared_lock lock(indexMutex_);
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (deviceIndex && deviceIndex->isReady && deviceIndex->stale) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+QStringList IndexController::staleDeviceIds() const
+{
+    QStringList out;
+
+    std::shared_lock lock(indexMutex_);
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndex || !deviceIndex->isReady || !deviceIndex->stale) {
+            continue;
+        }
+
+        if (!deviceIndex->deviceId.isEmpty()) {
+            out << deviceIndex->deviceId;
+        }
+    }
+
+    out.removeDuplicates();
+    return out;
 }
 
 std::optional<IndexController::CoreSnapshot> IndexController::coreSnapshotForDeviceId(
@@ -4786,6 +4852,7 @@ bool IndexController::addDeviceFromCoreSnapshot(CoreSnapshot snapshot)
         deviceIndex->mounted = snapshot.mounted;
         deviceIndex->showOfflineResults = snapshot.showOfflineResults;
         deviceIndex->lastIndexedTime = snapshot.lastIndexedTime;
+        deviceIndex->stale = true;
         deviceIndex->fileRecords = std::move(snapshot.fileRecords);
         deviceIndex->fileRecordNamespaces = std::move(snapshot.fileRecordNamespaces);
         deviceIndex->stringPool = std::move(snapshot.stringPool);
@@ -5950,6 +6017,7 @@ std::vector<IndexSummary> IndexController::indexSummaries() const
                 .mounted = device.mounted,
                 .searchable = device.isSearchable(),
                 .showOfflineResults = device.showOfflineResults,
+                .stale = device.stale,
             });
         }
 

@@ -225,6 +225,8 @@ private:
     void applySortColumnFromMenu(int column);
     void applySortOrderFromMenu(Qt::SortOrder order);
     void syncSortMenuActions();
+    void rebuildIndexMenu();
+    static QString refreshIndexMenuText(const IndexSummary& summary);
 
     AppController* controller_ = nullptr;
     QLineEdit *searchLine_ = nullptr;
@@ -240,6 +242,9 @@ private:
     quint64 statusMessageId_ = 0;
     QMenu* filterMenu_ = nullptr;
     QMenu* searchMenu_ = nullptr;
+    QMenu* indexMenu_ = nullptr;
+    QMenu* refreshIndexMenu_ = nullptr;
+    QAction* refreshStaleIndexesAct_ = nullptr;
     QAction* autoRefreshLiveUpdatesAct_ = nullptr;
     QAction* saveSearchFilterAction_ = nullptr;
     QAction* showFiltersDropdownAct_ = nullptr;

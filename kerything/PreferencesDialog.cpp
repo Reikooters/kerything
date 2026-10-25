@@ -69,6 +69,7 @@ namespace {
     constexpr int IndexDeviceIdRole = Qt::UserRole + 20;
     constexpr int IndexIdRole = Qt::UserRole + 21;
     constexpr int IndexSavedAvailableRole = Qt::UserRole + 22;
+    constexpr int IndexStaleRole = Qt::UserRole + 23;
 
     constexpr int FilterIdRole = Qt::UserRole + 40;
 
@@ -1155,18 +1156,22 @@ QWidget* PreferencesDialog::createIndexesPage()
     auto* buttonLayout = new QHBoxLayout();
 
     refreshIndexButton_ = new QPushButton(QStringLiteral("Refresh Index"), page);
+    refreshStaleIndexesButton_ = new QPushButton(QStringLiteral("Refresh Stale Indexes"), page);
     forgetIndexButton_ = new QPushButton(QStringLiteral("Forget Index"), page);
     deleteSavedIndexButton_ = new QPushButton(QStringLiteral("Delete Saved Index"), page);
 
     setButtonIcon(refreshIndexButton_, QStringLiteral("view-refresh"), QStringLiteral("reload"));
+    setButtonIcon(refreshStaleIndexesButton_, QStringLiteral("view-refresh"), QStringLiteral("reload"));
     setButtonIcon(forgetIndexButton_, QStringLiteral("edit-delete"), QStringLiteral("list-remove"));
     setButtonIcon(deleteSavedIndexButton_, QStringLiteral("edit-delete"), QStringLiteral("list-remove"));
 
     refreshIndexButton_->setEnabled(false);
+    refreshStaleIndexesButton_->setEnabled(false);
     forgetIndexButton_->setEnabled(false);
     deleteSavedIndexButton_->setEnabled(false);
 
     buttonLayout->addWidget(refreshIndexButton_);
+    buttonLayout->addWidget(refreshStaleIndexesButton_);
     buttonLayout->addWidget(forgetIndexButton_);
     buttonLayout->addWidget(deleteSavedIndexButton_);
     buttonLayout->addStretch();
@@ -1191,8 +1196,28 @@ QWidget* PreferencesDialog::createIndexesPage()
         }
 
         const bool knownDeviceAvailable =
-            !deviceId.isEmpty() &&
-            knownDeviceById_.contains(deviceId);
+                !deviceId.isEmpty() &&
+                knownDeviceById_.contains(deviceId);
+
+        bool hasRefreshableStaleIndex = false;
+        if (indexTable_) {
+            for (int staleRow = 0; staleRow < indexTable_->rowCount(); ++staleRow) {
+                const auto* staleNameItem = indexTable_->item(staleRow, IndexNameColumn);
+                if (!staleNameItem ||
+                    !staleNameItem->data(IndexStaleRole).toBool()) {
+                    continue;
+                }
+
+                const QString staleDeviceId =
+                    staleNameItem->data(IndexDeviceIdRole).toString();
+
+                if (!staleDeviceId.isEmpty() &&
+                    knownDeviceById_.contains(staleDeviceId)) {
+                    hasRefreshableStaleIndex = true;
+                    break;
+                }
+            }
+        }
 
         if (refreshIndexButton_) {
             refreshIndexButton_->setEnabled(knownDeviceAvailable);
@@ -1200,6 +1225,15 @@ QWidget* PreferencesDialog::createIndexesPage()
                 knownDeviceAvailable
                     ? QStringLiteral("Refresh this index by rescanning its device.")
                     : QStringLiteral("This index cannot be refreshed because its device is no longer available.")
+            );
+        }
+
+        if (refreshStaleIndexesButton_) {
+            refreshStaleIndexesButton_->setEnabled(hasRefreshableStaleIndex);
+            refreshStaleIndexesButton_->setToolTip(
+                hasRefreshableStaleIndex
+                    ? QStringLiteral("Refresh all stale indexes by rescanning their devices.")
+                    : QStringLiteral("No stale indexes can currently be refreshed.")
             );
         }
 
@@ -1237,6 +1271,10 @@ QWidget* PreferencesDialog::createIndexesPage()
         if (!deviceId.isEmpty()) {
             Q_EMIT refreshIndexRequested(deviceId);
         }
+    });
+
+    connect(refreshStaleIndexesButton_, &QPushButton::clicked, this, [this]() {
+        Q_EMIT refreshStaleIndexesRequested();
     });
 
     connect(forgetIndexButton_, &QPushButton::clicked, this, [this]() {
@@ -2369,6 +2407,11 @@ void PreferencesDialog::populateIndexTable()
         if (!summary.ready) {
             status = QStringLiteral("Indexing");
         }
+        else if (summary.stale) {
+            status = summary.searchable
+                ? QStringLiteral("Stale")
+                : QStringLiteral("Stale, hidden offline");
+        }
         else if (!knownDevice) {
             status = summary.searchable
                 ? QStringLiteral("Device unavailable")
@@ -2389,11 +2432,12 @@ void PreferencesDialog::populateIndexTable()
         auto* nameItem = new QTableWidgetItem(indexName);
         nameItem->setData(IndexDeviceIdRole, summary.deviceId);
         nameItem->setData(IndexIdRole, summary.indexId);
+        nameItem->setData(IndexStaleRole, summary.stale);
         nameItem->setToolTip(summary.deviceId);
         indexTable_->setItem(row, IndexNameColumn, nameItem);
 
         auto* statusItem = new QTableWidgetItem(status);
-        if (!knownDevice) {
+        if (summary.stale) {
             if (indexTable_ && indexTable_->style()) {
                 statusItem->setData(
                     Qt::DecorationRole,
@@ -2405,7 +2449,25 @@ void PreferencesDialog::populateIndexTable()
 
             statusItem->setToolTip(
                 QStringLiteral(
-                    "The indexed device is no longer visible in the current device list. "
+                    "This index may be stale because Kerything has not completed\n"
+                    "a full rescan for this device during this session, or live\n"
+                    "updates reported that a rescan is required."
+                )
+            );
+        }
+        else if (!knownDevice) {
+            if (indexTable_ && indexTable_->style()) {
+                statusItem->setData(
+                    Qt::DecorationRole,
+                    indexTable_->style()
+                        ->standardIcon(QStyle::SP_MessageBoxWarning)
+                        .pixmap(16, 16)
+                );
+            }
+
+            statusItem->setToolTip(
+                QStringLiteral(
+                    "The indexed device is no longer visible in the current device list.\n "
                     "You can keep using offline results or forget this index."
                 )
             );

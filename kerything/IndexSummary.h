@@ -24,6 +24,7 @@ struct IndexSummary {
     bool mounted = false;
     bool searchable = false;
     bool showOfflineResults = true;
+    bool stale = false;
 
     bool savedIndexAvailable = false;
     qint64 savedIndexSizeBytes = 0;

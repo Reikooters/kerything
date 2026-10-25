@@ -950,6 +950,19 @@ MainWindow::MainWindow(
     });
     addAction(refreshIndexesAct);
 
+    refreshStaleIndexesAct_ = new QAction(
+        QIcon::fromTheme(QStringLiteral("view-refresh")),
+        QStringLiteral("Refresh Stale Indexes"),
+        this
+    );
+    refreshStaleIndexesAct_->setStatusTip(QStringLiteral("Refresh only indexes that may be stale"));
+    connect(refreshStaleIndexesAct_, &QAction::triggered, this, [this]() {
+        if (controller_) {
+            controller_->refreshStaleIndexes();
+        }
+    });
+    addAction(refreshStaleIndexesAct_);
+
     auto* manageIndexesAct = new QAction(
         QIcon::fromTheme(
             QStringLiteral("folder-database"),
@@ -1306,11 +1319,17 @@ MainWindow::MainWindow(
     rebuildFilterMenu();
 
     // Index Menu
-    auto* indexMenu = menuBar()->addMenu(QStringLiteral("Index"));
-    indexMenu->addAction(refreshIndexesAct);
-    indexMenu->addAction(manageIndexesAct);
-    indexMenu->addSeparator();
-    indexMenu->addAction(autoRefreshLiveUpdatesAct_);
+    indexMenu_ = menuBar()->addMenu(QStringLiteral("Index"));
+    indexMenu_->addAction(refreshIndexesAct);
+    indexMenu_->addAction(refreshStaleIndexesAct_);
+    refreshIndexMenu_ = indexMenu_->addMenu(
+        QIcon::fromTheme(QStringLiteral("view-refresh")),
+        QStringLiteral("Refresh Index")
+    );
+    indexMenu_->addAction(manageIndexesAct);
+    indexMenu_->addSeparator();
+    indexMenu_->addAction(autoRefreshLiveUpdatesAct_);
+    rebuildIndexMenu();
 
     // Settings Menu
     auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
@@ -1351,6 +1370,11 @@ MainWindow::MainWindow(
         connect(controller_, &AppController::showPreviewPaneChanged,
                 this, [this](bool enabled) {
                     setPreviewPaneVisible(enabled);
+                });
+
+        connect(controller_, &AppController::indexesChanged,
+                this, [this]() {
+                    rebuildIndexMenu();
                 });
     }
 
@@ -2661,6 +2685,106 @@ void MainWindow::syncSortMenuActions()
     setCheckedBlocked(sortByDateModifiedAct_, column == SearchResultColumn::DateModified);
     setCheckedBlocked(sortAscendingAct_, order == Qt::AscendingOrder);
     setCheckedBlocked(sortDescendingAct_, order == Qt::DescendingOrder);
+}
+
+QString MainWindow::refreshIndexMenuText(const IndexSummary& summary)
+{
+    QString name = summary.displayName.trimmed();
+
+    if (name.isEmpty()) {
+        name = summary.label.trimmed();
+    }
+
+    if (name.isEmpty()) {
+        name = summary.devNode.trimmed();
+    }
+
+    if (name.isEmpty()) {
+        name = summary.deviceId.trimmed();
+    }
+
+    QString filesystem = summary.fsType.trimmed();
+    if (filesystem.isEmpty()) {
+        filesystem = QStringLiteral("unknown");
+    }
+
+    QString mountPoint = summary.primaryMountPoint.trimmed();
+    if (mountPoint.size() > 80) {
+        mountPoint = QStringLiteral("…") + mountPoint.right(79);
+    }
+
+    if (mountPoint.isEmpty()) {
+        const QString text = QStringLiteral("%1 (%2)").arg(name, filesystem);
+        return summary.stale
+            ? QStringLiteral("%1 — stale").arg(text)
+            : text;
+    }
+
+    const QString text = QStringLiteral("%1 (%2) %3").arg(name, filesystem, mountPoint);
+    return summary.stale
+        ? QStringLiteral("%1 — stale").arg(text)
+        : text;
+}
+
+void MainWindow::rebuildIndexMenu()
+{
+    if (refreshStaleIndexesAct_) {
+        const bool hasStale = controller_ && controller_->hasStaleIndexes();
+
+        refreshStaleIndexesAct_->setEnabled(hasStale);
+        refreshStaleIndexesAct_->setToolTip(
+            hasStale
+                ? QStringLiteral("Refresh all stale indexes")
+                : QStringLiteral("No stale indexes to refresh")
+        );
+    }
+
+    if (!refreshIndexMenu_) {
+        return;
+    }
+
+    refreshIndexMenu_->clear();
+
+    const std::vector<IndexSummary> summaries =
+        controller_ ? controller_->refreshableIndexSummaries() : std::vector<IndexSummary>{};
+
+    refreshIndexMenu_->setEnabled(!summaries.empty());
+
+    if (summaries.empty()) {
+        auto* unavailableAction = refreshIndexMenu_->addAction(QStringLiteral("No refreshable indexes"));
+        unavailableAction->setEnabled(false);
+        return;
+    }
+
+    for (const IndexSummary& summary : summaries) {
+        auto* action = refreshIndexMenu_->addAction(refreshIndexMenuText(summary));
+        action->setData(summary.deviceId);
+        action->setStatusTip(
+            summary.stale
+                ? QStringLiteral("Refresh this stale index by rescanning its device")
+                : QStringLiteral("Refresh this index by rescanning its device")
+        );
+        action->setToolTip(
+            summary.stale
+                ? QStringLiteral(
+                    "This index may be stale. Refreshing it will rescan the device."
+                )
+                : QStringLiteral("Refresh this index by rescanning its device.")
+        );
+
+        if (summary.stale) {
+            action->setIcon(QIcon::fromTheme(
+                QStringLiteral("dialog-warning"),
+                QIcon::fromTheme(QStringLiteral("emblem-warning"))
+            ));
+        }
+
+        connect(action, &QAction::triggered, this, [this, deviceId = summary.deviceId]() {
+            if (controller_) {
+                controller_->refreshIndex(deviceId);
+            }
+        });
+    }
 }
 
 void MainWindow::setMatchCaseEnabled(bool enabled)

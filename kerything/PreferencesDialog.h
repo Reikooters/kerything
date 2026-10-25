@@ -53,6 +53,7 @@ protected:
 Q_SIGNALS:
     void preferencesApplied(QList<DevicePreferenceChange> changes);
     void refreshIndexRequested(const QString& deviceId);
+    void refreshStaleIndexesRequested();
     void forgetIndexRequested(const QString& deviceId);
     void deleteSavedIndexRequested(const QString& deviceId);
     void searchFiltersApplied();
@@ -184,6 +185,7 @@ private:
 
     QTableWidget* indexTable_ = nullptr;
     QPushButton* refreshIndexButton_ = nullptr;
+    QPushButton* refreshStaleIndexesButton_ = nullptr;
     QPushButton* forgetIndexButton_ = nullptr;
     QPushButton* deleteSavedIndexButton_ = nullptr;
 

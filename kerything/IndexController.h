@@ -112,6 +112,7 @@ public:
         QString fsType;
         quint64 generation = 0;
         bool isReady = false;
+        bool stale = false;
 
         // Runtime search visibility state.
         // Mounted devices are always searchable. Unmounted devices are searchable
@@ -2434,6 +2435,9 @@ public:
     void buildBigramIndexParallelByRequestId(quint32 requestId);
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
+    bool markStaleByDeviceId(const QString& deviceId, bool stale = true);
+    [[nodiscard]] bool hasStaleIndexes() const;
+    [[nodiscard]] QStringList staleDeviceIds() const;
     [[nodiscard]] std::optional<CoreSnapshot> coreSnapshotForDeviceId(const QString& deviceId) const;
     bool addDeviceFromCoreSnapshot(CoreSnapshot snapshot);
     [[nodiscard]] QString memoryStatsText() const;

@@ -43,6 +43,7 @@ public:
     void presentExistingWindow();
     void showPreferencesDialog(PreferencesDialogPage initialPage = PreferencesDialogPage::Devices);
     void refreshIndexes();
+    void refreshStaleIndexes();
     void refreshIndex(const QString& deviceId);
     void forgetIndex(const QString& deviceId);
     void deleteSavedIndex(const QString& deviceId);
@@ -76,6 +77,8 @@ public:
     [[nodiscard]] bool carryResultSortingToNewWindows() const;
     [[nodiscard]] bool carryWindowSizeAndColumnWidthsToNewWindows() const;
     [[nodiscard]] std::vector<IndexSummary> indexSummaries() const;
+    [[nodiscard]] bool hasStaleIndexes() const;
+    [[nodiscard]] std::vector<IndexSummary> refreshableIndexSummaries() const;
     void setShowFiltersDropdown(bool enabled);
     void setShowPreviewPane(bool enabled);
     IndexController* indexController() const noexcept;

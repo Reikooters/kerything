@@ -112,7 +112,7 @@ public:
         QString fsType;
         quint64 generation = 0;
         bool isReady = false;
-        bool stale = false;
+        IndexStaleReason staleReasons = IndexStaleReason::None;
 
         // Runtime search visibility state.
         // Mounted devices are always searchable. Unmounted devices are searchable
@@ -2445,6 +2445,9 @@ public:
     void buildBigramIndexParallelByRequestId(quint32 requestId);
     void buildExtensionIndexByRequestId(quint32 requestId);
     void setReadyState(quint32 requestId, bool isReady);
+    bool setStaleReasonsByDeviceId(const QString& deviceId, IndexStaleReason reasons);
+    bool addStaleReasonByDeviceId(const QString& deviceId, IndexStaleReason reason);
+    bool clearStaleReasonByDeviceId(const QString& deviceId, IndexStaleReason reason);
     bool markStaleByDeviceId(const QString& deviceId, bool stale = true);
     bool markUpdatedByDeviceId(const QString& deviceId, qint64 updateTime = 0);
     [[nodiscard]] bool hasStaleIndexes() const;

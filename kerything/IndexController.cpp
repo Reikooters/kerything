@@ -3389,7 +3389,7 @@ quint64 IndexController::addDevice(
             deviceIndex.mounts = mounts;
             deviceIndex.mounted = !mountPoints.isEmpty();
             deviceIndex.isReady = false;
-            deviceIndex.stale = false;
+            deviceIndex.staleReasons = IndexStaleReason::None;
             deviceIndex.fileRecords.clear();
             deviceIndex.fileRecordNamespaces.clear();
             deviceIndex.indexedFsNamespaces.clear();
@@ -3447,7 +3447,7 @@ quint64 IndexController::addDevice(
     deviceIndex->primaryMountPoint = primaryMountPoint;
     deviceIndex->mounts = mounts;
     deviceIndex->mounted = !mountPoints.isEmpty();
-    deviceIndex->stale = false;
+    deviceIndex->staleReasons = IndexStaleReason::None;
 
     DeviceIndex* deviceIndexRaw = deviceIndex.get();
 
@@ -4701,7 +4701,7 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
         deviceIndex.isReady = isReady;
 
         if (becameReady) {
-            deviceIndex.stale = false;
+            deviceIndex.staleReasons = IndexStaleReason::None;
             deviceIndex.lastIndexedTime = QDateTime::currentSecsSinceEpoch();
             deviceIndex.lastUpdatedTime = deviceIndex.lastIndexedTime;
             deviceIndex.compactDeletedRecordBits();
@@ -4719,8 +4719,10 @@ void IndexController::setReadyState(quint32 requestId, bool isReady) {
 #endif
 }
 
-bool IndexController::markStaleByDeviceId(const QString& deviceId, bool stale)
-{
+bool IndexController::setStaleReasonsByDeviceId(
+    const QString& deviceId,
+    IndexStaleReason reasons
+) {
     if (deviceId.isEmpty()) {
         return false;
     }
@@ -4736,13 +4738,83 @@ bool IndexController::markStaleByDeviceId(const QString& deviceId, bool stale)
             continue;
         }
 
-        if (deviceIndex->stale != stale) {
-            deviceIndex->stale = stale;
+        if (deviceIndex->staleReasons != reasons) {
+            deviceIndex->staleReasons = reasons;
             changed = true;
         }
     }
 
     return changed;
+}
+
+bool IndexController::addStaleReasonByDeviceId(
+    const QString& deviceId,
+    IndexStaleReason reason
+) {
+    if (deviceId.isEmpty() || reason == IndexStaleReason::None) {
+        return false;
+    }
+
+    std::unique_lock lock(indexMutex_);
+
+    bool changed = false;
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndex || deviceIndex->deviceId != deviceId) {
+            continue;
+        }
+
+        const IndexStaleReason nextReasons = deviceIndex->staleReasons | reason;
+        if (deviceIndex->staleReasons != nextReasons) {
+            deviceIndex->staleReasons = nextReasons;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+bool IndexController::clearStaleReasonByDeviceId(
+    const QString& deviceId,
+    IndexStaleReason reason
+) {
+    if (deviceId.isEmpty() || reason == IndexStaleReason::None) {
+        return false;
+    }
+
+    using Underlying = std::underlying_type_t<IndexStaleReason>;
+
+    std::unique_lock lock(indexMutex_);
+
+    bool changed = false;
+
+    for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
+        Q_UNUSED(indexId);
+
+        if (!deviceIndex || deviceIndex->deviceId != deviceId) {
+            continue;
+        }
+
+        const auto current = static_cast<Underlying>(deviceIndex->staleReasons);
+        const auto mask = static_cast<Underlying>(reason);
+        const auto next = static_cast<IndexStaleReason>(current & ~mask);
+
+        if (deviceIndex->staleReasons != next) {
+            deviceIndex->staleReasons = next;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+bool IndexController::markStaleByDeviceId(const QString& deviceId, bool stale)
+{
+    return stale
+        ? addStaleReasonByDeviceId(deviceId, IndexStaleReason::LiveUpdateFailure)
+        : setStaleReasonsByDeviceId(deviceId, IndexStaleReason::None);
 }
 
 bool IndexController::markUpdatedByDeviceId(const QString& deviceId, qint64 updateTime)
@@ -4782,7 +4854,9 @@ bool IndexController::hasStaleIndexes() const
     for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
         Q_UNUSED(indexId);
 
-        if (deviceIndex && deviceIndex->isReady && deviceIndex->stale) {
+        if (deviceIndex &&
+            deviceIndex->isReady &&
+            hasAnyIndexStaleReason(deviceIndex->staleReasons)) {
             return true;
         }
     }
@@ -4799,7 +4873,9 @@ QStringList IndexController::staleDeviceIds() const
     for (const auto& [indexId, deviceIndex] : indexByIndexId_) {
         Q_UNUSED(indexId);
 
-        if (!deviceIndex || !deviceIndex->isReady || !deviceIndex->stale) {
+        if (!deviceIndex ||
+            !deviceIndex->isReady ||
+            !hasAnyIndexStaleReason(deviceIndex->staleReasons)) {
             continue;
         }
 
@@ -4885,7 +4961,7 @@ bool IndexController::addDeviceFromCoreSnapshot(CoreSnapshot snapshot)
         deviceIndex->showOfflineResults = snapshot.showOfflineResults;
         deviceIndex->lastIndexedTime = snapshot.lastIndexedTime;
         deviceIndex->lastUpdatedTime = snapshot.lastUpdatedTime;
-        deviceIndex->stale = true;
+        deviceIndex->staleReasons = IndexStaleReason::LoadedFromDiskNeedsRefresh;
         deviceIndex->fileRecords = std::move(snapshot.fileRecords);
         deviceIndex->fileRecordNamespaces = std::move(snapshot.fileRecordNamespaces);
         deviceIndex->stringPool = std::move(snapshot.stringPool);
@@ -6051,7 +6127,8 @@ std::vector<IndexSummary> IndexController::indexSummaries() const
                 .mounted = device.mounted,
                 .searchable = device.isSearchable(),
                 .showOfflineResults = device.showOfflineResults,
-                .stale = device.stale,
+                .staleReasons = device.staleReasons,
+                .stale = hasAnyIndexStaleReason(device.staleReasons),
             });
         }
 

@@ -226,6 +226,13 @@ bool AppController::start() {
 
     connect(daemonClient_, &DaemonClient::daemonUnavailable,
             this, [this]() {
+                for (const QString& deviceId : liveUpdateIndexedDeviceIds_) {
+                    markIndexLiveUpdatesNotContinuous(
+                        deviceId,
+                        IndexStaleReason::DaemonDisconnected
+                    );
+                }
+
                 // Any in-flight daemon requests are no longer valid after disconnect.
                 for (const quint32 requestId : scanRequestDeviceIds_.keys()) {
                     indexController_->removeDeviceByRequestId(requestId);
@@ -475,6 +482,13 @@ bool AppController::start() {
                 if (deviceIdMatches) {
                     preferences_.markDeviceIndexed(deviceId);
                     addLiveUpdateIndexedDevice(deviceId);
+
+                    if (!liveUpdatesEnabledForDevice(deviceId)) {
+                        markIndexLiveUpdatesNotContinuous(
+                            deviceId,
+                            IndexStaleReason::LiveUpdatesDisabled
+                        );
+                    }
                 }
 
                 // Update indexed device runtime state again after scan completion,
@@ -636,10 +650,8 @@ bool AppController::start() {
                         break;
 
                     case LiveUpdateStatus::StaleNeedsRescan:
-                        if (indexController_ &&
-                            indexController_->markStaleByDeviceId(deviceId, true)) {
-                            updateOpenPreferencesDialog();
-                            Q_EMIT indexesChanged();
+                        if (indexController_) {
+                            markLiveUpdateFailure(deviceId);
                         }
 
                         requestWindowStatusMessage(
@@ -742,11 +754,7 @@ bool AppController::start() {
                 }
 
                 if (indexHealthChanged) {
-                    if (indexController_ &&
-                        indexController_->markStaleByDeviceId(deviceId, true)) {
-                        updateOpenPreferencesDialog();
-                        Q_EMIT indexesChanged();
-                    }
+                    markLiveUpdateFailure(deviceId);
 
                     QString deviceText = deviceId;
                     if (const std::optional<BlockDevice> blockDevice = knownDeviceById(deviceId)) {
@@ -2611,6 +2619,10 @@ void AppController::applyDevicePreferenceChanges(const QList<DevicePreferenceCha
         if (change.enabled && change.liveUpdatesEnabledChanged()) {
             if (!change.liveUpdatesEnabled) {
                 removeLiveUpdateIndexedDevice(change.deviceId);
+                markIndexLiveUpdatesNotContinuous(
+                    change.deviceId,
+                    IndexStaleReason::LiveUpdatesDisabled
+                );
             }
             else if (deviceSupportsLiveUpdates(change.deviceId)) {
                 if (change.refreshIndexBeforeEnablingLiveUpdates) {
@@ -2974,6 +2986,28 @@ void AppController::addReadyLoadedIndexesToLiveUpdates()
 
         addLiveUpdateIndexedDevice(summary.deviceId);
     }
+}
+
+void AppController::markIndexLiveUpdatesNotContinuous(
+    const QString& deviceId,
+    IndexStaleReason reason
+) {
+    if (!indexController_ || deviceId.isEmpty()) {
+        return;
+    }
+
+    if (indexController_->addStaleReasonByDeviceId(deviceId, reason)) {
+        updateOpenPreferencesDialog();
+        Q_EMIT indexesChanged();
+    }
+}
+
+void AppController::markLiveUpdateFailure(const QString& deviceId)
+{
+    markIndexLiveUpdatesNotContinuous(
+        deviceId,
+        IndexStaleReason::LiveUpdateFailure
+    );
 }
 
 bool AppController::liveUpdatesEnabledForDevice(const QString& deviceId) const

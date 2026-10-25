@@ -252,6 +252,83 @@ namespace {
         );
     }
 
+    QString staleReasonText(IndexStaleReason reason)
+    {
+        switch (reason) {
+            case IndexStaleReason::LoadedFromDiskNeedsRefresh:
+                return QStringLiteral("Needs refresh");
+
+            case IndexStaleReason::LiveUpdatesDisabled:
+                return QStringLiteral("Live updates not continuous");
+
+            case IndexStaleReason::DaemonDisconnected:
+                return QStringLiteral("Daemon disconnected");
+
+            case IndexStaleReason::LiveUpdateFailure:
+                return QStringLiteral("Live update problem");
+
+            case IndexStaleReason::None:
+            default:
+                return QStringLiteral("Stale");
+        }
+    }
+
+    QString staleReasonExplanation(IndexStaleReason reason)
+    {
+        switch (reason) {
+            case IndexStaleReason::LoadedFromDiskNeedsRefresh:
+                return QStringLiteral(
+                    "This index was loaded from disk and has not been refreshed since Kerything started."
+                );
+
+            case IndexStaleReason::LiveUpdatesDisabled:
+                return QStringLiteral(
+                    "Live updates were not continuously active, so changes may have been missed."
+                );
+
+            case IndexStaleReason::DaemonDisconnected:
+                return QStringLiteral(
+                    "The Kerything daemon disconnected while live updates should have been active, so changes may have been missed."
+                );
+
+            case IndexStaleReason::LiveUpdateFailure:
+                return QStringLiteral(
+                    "Live updates reported a problem and a full rescan is recommended."
+                );
+
+            case IndexStaleReason::None:
+            default:
+                return QStringLiteral(
+                    "This index may be out of date. Refresh it to rescan the device."
+                );
+        }
+    }
+
+    QString staleReasonsHtml(IndexStaleReason reasons)
+    {
+        QStringList lines;
+
+        auto appendReason = [&](IndexStaleReason reason) {
+            if (hasIndexStaleReason(reasons, reason)) {
+                lines << QStringLiteral("<li>%1</li>").arg(
+                    staleReasonExplanation(reason).toHtmlEscaped()
+                );
+            }
+        };
+
+        appendReason(IndexStaleReason::LoadedFromDiskNeedsRefresh);
+        appendReason(IndexStaleReason::LiveUpdatesDisabled);
+        appendReason(IndexStaleReason::DaemonDisconnected);
+        appendReason(IndexStaleReason::LiveUpdateFailure);
+
+        if (lines.isEmpty()) {
+            return QStringLiteral("—");
+        }
+
+        return QStringLiteral("<ul style=\"margin-top: 0px; margin-bottom: 0px; margin-left: 10px; -qt-list-indent: 0;\">%1</ul>")
+            .arg(lines.join(QString()));
+    }
+
     QString statusTextForIndexSummary(const IndexSummary& summary, bool knownDevice)
     {
         if (!summary.ready) {
@@ -259,9 +336,12 @@ namespace {
         }
 
         if (summary.stale) {
+            const QString staleText =
+                staleReasonText(primaryIndexStaleReason(summary.staleReasons));
+
             return summary.searchable
-                ? QStringLiteral("Stale")
-                : QStringLiteral("Stale, hidden offline");
+                ? staleText
+                : QStringLiteral("%1, hidden offline").arg(staleText);
         }
 
         if (!knownDevice) {
@@ -288,14 +368,16 @@ namespace {
         }
 
         if (summary.stale && summary.searchable) {
-            return QStringLiteral(
-                "This index is searchable, but it may be out of date. Refresh it to rescan the device."
+            return staleReasonExplanation(
+                primaryIndexStaleReason(summary.staleReasons)
             );
         }
 
         if (summary.stale) {
-            return QStringLiteral(
-                "This index may be out of date and is currently hidden from search results."
+            return QStringLiteral("%1 This index is currently hidden from search results.").arg(
+                staleReasonExplanation(
+                    primaryIndexStaleReason(summary.staleReasons)
+                )
             );
         }
 
@@ -371,6 +453,12 @@ namespace {
         html += detailsRow(QStringLiteral("Name:"), displayName.toHtmlEscaped());
         html += detailsRow(QStringLiteral("Status:"), statusValue);
         html += detailsRow(QStringLiteral("Status note:"), statusExplanation.toHtmlEscaped());
+        if (indexStaleReasonCount(summary.staleReasons) >= 2) {
+            html += detailsRow(
+                QStringLiteral("Stale reasons:"),
+                staleReasonsHtml(summary.staleReasons)
+            );
+        }
         html += detailsRow(QStringLiteral("Searchable:"), yesNo(summary.searchable));
         html += detailsRow(QStringLiteral("Mounted:"), yesNo(summary.mounted));
         html += detailsRow(QStringLiteral("Offline results:"), yesNo(summary.showOfflineResults));
@@ -400,7 +488,6 @@ namespace {
         html += detailsRow(QStringLiteral("Device node:"), displayOrDash(summary.devNode));
         html += detailsRow(QStringLiteral("Device ID:"), displayOrDash(summary.deviceId));
         html += detailsRow(QStringLiteral("Label:"), displayOrDash(summary.label));
-        html += detailsRow(QStringLiteral("Internal index ID:"), locale.toString(summary.indexId));
         html += QStringLiteral("</table>");
 
         html += detailsSectionTitle(QStringLiteral("Saved index"));
@@ -2947,10 +3034,8 @@ void PreferencesDialog::populateIndexTable()
             }
 
             statusItem->setToolTip(
-                QStringLiteral(
-                    "This index may be stale because Kerything has not completed\n"
-                    "a full rescan for this device during this session, or live\n"
-                    "updates reported that a rescan is required."
+                staleReasonExplanation(
+                    primaryIndexStaleReason(summary.staleReasons)
                 )
             );
         }

@@ -148,6 +148,27 @@ namespace {
         return text;
     }
 
+    QString staleMenuSuffix(const IndexSummary& summary)
+    {
+        switch (primaryIndexStaleReason(summary.staleReasons)) {
+            case IndexStaleReason::LoadedFromDiskNeedsRefresh:
+                return QStringLiteral("needs refresh");
+
+            case IndexStaleReason::LiveUpdatesDisabled:
+                return QStringLiteral("live updates not continuous");
+
+            case IndexStaleReason::DaemonDisconnected:
+                return QStringLiteral("daemon disconnected");
+
+            case IndexStaleReason::LiveUpdateFailure:
+                return QStringLiteral("live update problem");
+
+            case IndexStaleReason::None:
+            default:
+                return QStringLiteral("stale");
+        }
+    }
+
     bool isBuiltInSearchFilterToken(const QString& token)
     {
         const QString foldedToken = token.trimmed().toCaseFolded();
@@ -2716,13 +2737,13 @@ QString MainWindow::refreshIndexMenuText(const IndexSummary& summary)
     if (mountPoint.isEmpty()) {
         const QString text = QStringLiteral("%1 (%2)").arg(name, filesystem);
         return summary.stale
-            ? QStringLiteral("%1 — stale").arg(text)
+            ? QStringLiteral("%1 — %2").arg(text, staleMenuSuffix(summary))
             : text;
     }
 
     const QString text = QStringLiteral("%1 (%2) %3").arg(name, filesystem, mountPoint);
     return summary.stale
-        ? QStringLiteral("%1 — stale").arg(text)
+        ? QStringLiteral("%1 — %2").arg(text, staleMenuSuffix(summary))
         : text;
 }
 

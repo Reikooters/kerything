@@ -138,6 +138,8 @@ private:
     void addLiveUpdateIndexedDevice(const QString& deviceId);
     void removeLiveUpdateIndexedDevice(const QString& deviceId);
     void addReadyLoadedIndexesToLiveUpdates();
+    void markIndexLiveUpdatesNotContinuous(const QString& deviceId, IndexStaleReason reason);
+    void markLiveUpdateFailure(const QString& deviceId);
     [[nodiscard]] bool liveUpdatesEnabledForDevice(const QString& deviceId) const;
     bool requestScanForDeviceId(const QString& deviceId);
     void syncLiveUpdateDevices();

@@ -2439,7 +2439,7 @@ QWidget* PreferencesDialog::createWindowsPage()
     auto* label = new QLabel(
         QStringLiteral(
             "<h2>Windows</h2>"
-            "<p>Configure how Kerything opens and initializes search windows, as well as system tray settings.</p>"
+            "<p>Configure how Kerything opens, creates, and closes search windows, including system tray behavior.</p>"
         ),
         page
     );
@@ -2486,6 +2486,87 @@ QWidget* PreferencesDialog::createWindowsPage()
     launchLayout->addWidget(createNewWindowOnLaunchDescription);
 
     layout->addWidget(launchGroup);
+
+    auto* newWindowsGroup = new QGroupBox(QStringLiteral("New windows"), content);
+    auto* newWindowsLayout = new QVBoxLayout(newWindowsGroup);
+
+    carryFilterToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over the active filter to new windows"),
+        newWindowsGroup
+    );
+    carryFilterToNewWindowsCheckBox_->setChecked(preferences_.carryFilterToNewWindows());
+    carryFilterToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current window’s active filter\n"
+            "into the new search window."
+        )
+    );
+
+    carrySearchOptionsToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over search options to new windows"),
+        newWindowsGroup
+    );
+    carrySearchOptionsToNewWindowsCheckBox_->setChecked(preferences_.carrySearchOptionsToNewWindows());
+    carrySearchOptionsToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current window's Match Case,\n"
+            "Match Whole Word, and Regex into the new search window."
+        )
+    );
+
+    carrySearchTextToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over the search text to new windows"),
+        newWindowsGroup
+    );
+    carrySearchTextToNewWindowsCheckBox_->setChecked(preferences_.carrySearchTextToNewWindows());
+    carrySearchTextToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current search text\n"
+            "into the new search window."
+        )
+    );
+
+    carryResultSortingToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over result sorting to new windows"),
+        newWindowsGroup
+    );
+    carryResultSortingToNewWindowsCheckBox_->setChecked(preferences_.carryResultSortingToNewWindows());
+    carryResultSortingToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N copy the current result sort column\n"
+            "and direction into the new search window."
+        )
+    );
+
+    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = new QCheckBox(
+        QStringLiteral("Carry over window size and column widths to new windows"),
+        newWindowsGroup
+    );
+    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setChecked(preferences_.carryWindowSizeAndColumnWidthsToNewWindows());
+    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, File > New Window and Ctrl+N use the current window's width,\n"
+            "height, and search result column widths for the new search window."
+        )
+    );
+
+    auto* newWindowStateDescription = new QLabel(
+        QStringLiteral(
+            "These options control what is copied from the current window when you open another window "
+            "using File > New Window or Ctrl+N."
+        ),
+        newWindowsGroup
+    );
+    newWindowStateDescription->setWordWrap(true);
+
+    newWindowsLayout->addWidget(carryFilterToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_);
+    newWindowsLayout->addWidget(newWindowStateDescription);
+
+    layout->addWidget(newWindowsGroup);
 
     auto* trayGroup = new QGroupBox(QStringLiteral("System tray"), content);
     auto* trayLayout = new QVBoxLayout(trayGroup);
@@ -2577,87 +2658,6 @@ QWidget* PreferencesDialog::createWindowsPage()
     };
 
     syncTrayOptionStates();
-
-    auto* newWindowsGroup = new QGroupBox(QStringLiteral("New windows"), content);
-    auto* newWindowsLayout = new QVBoxLayout(newWindowsGroup);
-
-    carryFilterToNewWindowsCheckBox_ = new QCheckBox(
-        QStringLiteral("Carry over the active filter to new windows"),
-        newWindowsGroup
-    );
-    carryFilterToNewWindowsCheckBox_->setChecked(preferences_.carryFilterToNewWindows());
-    carryFilterToNewWindowsCheckBox_->setToolTip(
-        QStringLiteral(
-            "When enabled, File > New Window and Ctrl+N copy the current window’s active filter\n"
-            "into the new search window."
-        )
-    );
-
-    carrySearchOptionsToNewWindowsCheckBox_ = new QCheckBox(
-        QStringLiteral("Carry over search options to new windows"),
-        newWindowsGroup
-    );
-    carrySearchOptionsToNewWindowsCheckBox_->setChecked(preferences_.carrySearchOptionsToNewWindows());
-    carrySearchOptionsToNewWindowsCheckBox_->setToolTip(
-        QStringLiteral(
-            "When enabled, File > New Window and Ctrl+N copy the current window's Match Case,\n"
-            "Match Whole Word, and Regex into the new search window."
-        )
-    );
-
-    carrySearchTextToNewWindowsCheckBox_ = new QCheckBox(
-        QStringLiteral("Carry over the search text to new windows"),
-        newWindowsGroup
-    );
-    carrySearchTextToNewWindowsCheckBox_->setChecked(preferences_.carrySearchTextToNewWindows());
-    carrySearchTextToNewWindowsCheckBox_->setToolTip(
-        QStringLiteral(
-            "When enabled, File > New Window and Ctrl+N copy the current search text\n"
-            "into the new search window."
-        )
-    );
-
-    carryResultSortingToNewWindowsCheckBox_ = new QCheckBox(
-        QStringLiteral("Carry over result sorting to new windows"),
-        newWindowsGroup
-    );
-    carryResultSortingToNewWindowsCheckBox_->setChecked(preferences_.carryResultSortingToNewWindows());
-    carryResultSortingToNewWindowsCheckBox_->setToolTip(
-        QStringLiteral(
-            "When enabled, File > New Window and Ctrl+N copy the current result sort column\n"
-            "and direction into the new search window."
-        )
-    );
-
-    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = new QCheckBox(
-        QStringLiteral("Carry over window size and column widths to new windows"),
-        newWindowsGroup
-    );
-    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setChecked(preferences_.carryWindowSizeAndColumnWidthsToNewWindows());
-    carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_->setToolTip(
-        QStringLiteral(
-            "When enabled, File > New Window and Ctrl+N use the current window's width,\n"
-            "height, and search result column widths for the new search window."
-        )
-    );
-
-    auto* newWindowStateDescription = new QLabel(
-        QStringLiteral(
-            "These options control what is copied from the current window when you open another window "
-            "using File > New Window or Ctrl+N."
-        ),
-        newWindowsGroup
-    );
-    newWindowStateDescription->setWordWrap(true);
-
-    newWindowsLayout->addWidget(carryFilterToNewWindowsCheckBox_);
-    newWindowsLayout->addWidget(carrySearchOptionsToNewWindowsCheckBox_);
-    newWindowsLayout->addWidget(carrySearchTextToNewWindowsCheckBox_);
-    newWindowsLayout->addWidget(carryResultSortingToNewWindowsCheckBox_);
-    newWindowsLayout->addWidget(carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_);
-    newWindowsLayout->addWidget(newWindowStateDescription);
-
-    layout->addWidget(newWindowsGroup);
     layout->addStretch();
 
     scrollArea->setWidget(content);

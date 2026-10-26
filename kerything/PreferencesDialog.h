@@ -215,6 +215,7 @@ private:
     QCheckBox* carryWindowSizeAndColumnWidthsToNewWindowsCheckBox_ = nullptr;
     QCheckBox* showTrayIconCheckBox_ = nullptr;
     QCheckBox* closeToTrayCheckBox_ = nullptr;
+    QCheckBox* showCloseToTrayNotificationCheckBox_ = nullptr;
     QComboBox* defaultSortColumnComboBox_ = nullptr;
     QComboBox* defaultSortOrderComboBox_ = nullptr;
     QCheckBox* sortDateDescendingFirstCheckBox_ = nullptr;

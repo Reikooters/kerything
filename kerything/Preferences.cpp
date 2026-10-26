@@ -150,6 +150,20 @@ void Preferences::setCloseToTray(bool enabled)
     settings_.sync();
 }
 
+bool Preferences::showCloseToTrayNotification() const
+{
+    return settings_.value(
+        QStringLiteral("ui/showCloseToTrayNotification"),
+        true
+    ).toBool();
+}
+
+void Preferences::setShowCloseToTrayNotification(bool enabled)
+{
+    settings_.setValue(QStringLiteral("ui/showCloseToTrayNotification"), enabled);
+    settings_.sync();
+}
+
 bool Preferences::showFiltersDropdown() const
 {
     return settings_.value(

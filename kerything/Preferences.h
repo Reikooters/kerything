@@ -68,6 +68,8 @@ public:
     void setShowTrayIcon(bool enabled);
     [[nodiscard]] bool closeToTray() const;
     void setCloseToTray(bool enabled);
+    [[nodiscard]] bool showCloseToTrayNotification() const;
+    void setShowCloseToTrayNotification(bool enabled);
 
     // UI
     [[nodiscard]] bool showFiltersDropdown() const;

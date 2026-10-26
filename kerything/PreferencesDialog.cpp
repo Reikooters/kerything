@@ -2439,7 +2439,7 @@ QWidget* PreferencesDialog::createWindowsPage()
     auto* label = new QLabel(
         QStringLiteral(
             "<h2>Windows</h2>"
-            "<p>Configure how Kerything opens and initializes search windows.</p>"
+            "<p>Configure how Kerything opens and initializes search windows, as well as system tray settings.</p>"
         ),
         page
     );
@@ -2515,6 +2515,18 @@ QWidget* PreferencesDialog::createWindowsPage()
         )
     );
 
+    showCloseToTrayNotificationCheckBox_ = new QCheckBox(
+        QStringLiteral("Show a notification once per session when Kerything keeps running in the tray"),
+        trayGroup
+    );
+    showCloseToTrayNotificationCheckBox_->setChecked(preferences_.showCloseToTrayNotification());
+    showCloseToTrayNotificationCheckBox_->setToolTip(
+        QStringLiteral(
+            "When enabled, Kerything shows a notification once per session when the last window is closed\n"
+            "and the application continues running in the system tray."
+        )
+    );
+
     auto* trayDescription = new QLabel(
         QStringLiteral(
             "Tray availability depends on your Linux desktop environment. If no system tray is available, "
@@ -2526,12 +2538,15 @@ QWidget* PreferencesDialog::createWindowsPage()
 
     trayLayout->addWidget(showTrayIconCheckBox_);
     trayLayout->addWidget(closeToTrayCheckBox_);
+    trayLayout->addWidget(showCloseToTrayNotificationCheckBox_);
     trayLayout->addWidget(trayDescription);
 
     layout->addWidget(trayGroup);
 
     auto syncTrayOptionStates = [this]() {
-        if (!showTrayIconCheckBox_ || !closeToTrayCheckBox_) {
+        if (!showTrayIconCheckBox_ ||
+            !closeToTrayCheckBox_ ||
+            !showCloseToTrayNotificationCheckBox_) {
             return;
         }
 
@@ -2548,6 +2563,16 @@ QWidget* PreferencesDialog::createWindowsPage()
                     "Show a Kerything icon in the desktop environment's system tray when available.\n"
                     "The tray menu can hide and restore all search windows, open Preferences, or quit Kerything."
                 )
+        );
+
+        showCloseToTrayNotificationCheckBox_->setEnabled(closeToTrayCheckBox_->isChecked());
+        showCloseToTrayNotificationCheckBox_->setToolTip(
+            closeToTrayCheckBox_->isChecked()
+                ? QStringLiteral(
+                    "When enabled, Kerything shows a notification once per session when the last window is closed\n"
+                    "and the application continues running in the system tray."
+                )
+                : QStringLiteral("This notification is only used when Kerything keeps running in the tray.")
         );
     };
 
@@ -2684,6 +2709,22 @@ QWidget* PreferencesDialog::createWindowsPage()
             );
         }
 
+        if (showCloseToTrayNotificationCheckBox_) {
+            showCloseToTrayNotificationCheckBox_->setEnabled(checked);
+            showCloseToTrayNotificationCheckBox_->setToolTip(
+                checked
+                    ? QStringLiteral(
+                        "When enabled, Kerything shows a notification once per session when the last window is closed\n"
+                        "and the application continues running in the system tray."
+                    )
+                    : QStringLiteral("This notification is only used when Kerything keeps running in the tray.")
+            );
+        }
+
+        updateApplyButtonEnabled();
+    });
+
+    connect(showCloseToTrayNotificationCheckBox_, &QCheckBox::toggled, this, [this]() {
         updateApplyButtonEnabled();
     });
 
@@ -4519,6 +4560,12 @@ bool PreferencesDialog::hasWindowChanges() const
             preferences_.closeToTray();
     }
 
+    if (showCloseToTrayNotificationCheckBox_) {
+        changed = changed ||
+            showCloseToTrayNotificationCheckBox_->isChecked() !=
+            preferences_.showCloseToTrayNotification();
+    }
+
     return changed;
 }
 
@@ -4726,6 +4773,12 @@ bool PreferencesDialog::applyChanges()
 
         if (closeToTrayCheckBox_) {
             preferences_.setCloseToTray(trayCloseToTrayEnabled);
+        }
+
+        if (showCloseToTrayNotificationCheckBox_) {
+            preferences_.setShowCloseToTrayNotification(
+                showCloseToTrayNotificationCheckBox_->isChecked()
+            );
         }
     }
 

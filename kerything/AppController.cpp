@@ -1139,7 +1139,10 @@ void AppController::maybeShowCloseToTrayNoticeForClosingWindow(MainWindow* closi
 
 void AppController::showCloseToTrayMessageOnce()
 {
-    if (closeToTrayMessageShown_ || !trayIcon_ || !trayIcon_->isVisible()) {
+    if (!preferences_.showCloseToTrayNotification() ||
+        closeToTrayMessageShown_ ||
+        !trayIcon_ ||
+        !trayIcon_->isVisible()) {
         return;
     }
 

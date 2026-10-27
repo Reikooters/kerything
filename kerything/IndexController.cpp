@@ -737,6 +737,7 @@ namespace {
 
             out = {};
             out.minInclusive = *start;
+            out.maxExclusive = QDateTime::currentSecsSinceEpoch() + 1;
             return true;
         }
 

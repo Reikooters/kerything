@@ -704,6 +704,23 @@ namespace {
             return true;
         }
 
+        if (expression.size() >= 2 && expression.back() == 'h') {
+            quint64 hours = 0;
+            if (!parseUnsignedDecimal(expression.substr(0, expression.size() - 1), hours) ||
+                hours > static_cast<quint64>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+
+            const qint64 now = QDateTime::currentSecsSinceEpoch();
+            const qint64 seconds = static_cast<qint64>(hours) * 3600;
+
+            out = {};
+            out.minInclusive = now - seconds;
+            // Timestamps have second precision; include the current second.
+            out.maxExclusive = now + 1;
+            return true;
+        }
+
         if (expression.size() >= 2 && expression.back() == 'd') {
             quint64 days = 0;
             if (!parseUnsignedDecimal(expression.substr(0, expression.size() - 1), days) ||

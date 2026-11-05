@@ -1260,7 +1260,7 @@ Thanks to the following people who have contributed code to Kerything:
 - [@derickso](https://github.com/derickso)
   - Added the Preview Pane, which shows thumbnails for images and videos, and file-type icons for other formats.
 - [@VitroidFPV](https://github.com/VitroidFPV)
-  - Added RPM builds for Fedora
+  - Added RPM builds for Fedora.
 
 ### Third-party Libraries
 
@@ -1283,6 +1283,7 @@ Special thanks to the following people for reporting bugs, suggesting features a
   - Suggested Btrfs filesystem support. Kerything has a dedicated Btrfs scanner which is currently a work in progress.
   - Identified issue with NTFS scanner not cancelling when it should.
   - Suggested tray icon feature.
+  - Suggested search typing delay and hide results when the search query is empty features.
 - [@antonmeleshkevich](https://github.com/antonmeleshkevich)
   - Suggested support for desktops other than KDE Plasma. This led to the Qt-only build of Kerything without KDE dependencies.
 - [@derickso](https://github.com/derickso)
@@ -1295,6 +1296,8 @@ Special thanks to the following people for reporting bugs, suggesting features a
   - Suggested support for regular expressions.
 - [@seonhwa17kim](https://github.com/seonhwa17kim)
   - Identified issue with regex search returning fewer matches than it should.
+- [@VitroidFPV](https://github.com/VitroidFPV)
+  - Contributed RPM builds for Fedora.
 
 ## License
 

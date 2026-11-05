@@ -71,6 +71,7 @@ public:
     [[nodiscard]] bool showHighlightedSearchTerms() const;
     [[nodiscard]] bool showFiltersDropdown() const;
     [[nodiscard]] bool showPreviewPane() const;
+    [[nodiscard]] SearchInteractionPreferences searchInteraction() const;
     [[nodiscard]] bool carryFilterToNewWindows() const;
     [[nodiscard]] bool carrySearchOptionsToNewWindows() const;
     [[nodiscard]] bool carrySearchTextToNewWindows() const;
@@ -89,6 +90,7 @@ Q_SIGNALS:
     void autoRefreshResultsForLiveUpdatesChanged(bool enabled);
     void showFiltersDropdownChanged(bool enabled);
     void showPreviewPaneChanged(bool enabled);
+    void searchInteractionChanged();
 
 private Q_SLOTS:
     void onPrimaryRequestedOpenWindow();

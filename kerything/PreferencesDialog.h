@@ -25,6 +25,7 @@ class QListWidget;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
+class QSpinBox;
 class QTextBrowser;
 class QToolButton;
 
@@ -62,6 +63,7 @@ Q_SIGNALS:
     void showFiltersDropdownApplied(bool enabled);
     void showPreviewPaneApplied(bool enabled);
     void trayPreferencesApplied(bool showTrayIcon, bool closeToTray);
+    void searchInteractionApplied();
 
 private:
     enum DeviceColumn {
@@ -95,6 +97,7 @@ private:
     QWidget* createDevicesPage();
     QWidget* createIndexesPage();
     QWidget* createFiltersPage();
+    QWidget* createSearchBehaviorPage();
     QWidget* createWindowsPage();
     QWidget* createUiPage();
     QWidget* createAdvancedPage();
@@ -117,7 +120,9 @@ private:
     bool hasWindowChanges() const;
     bool hasUIChanges() const;
     bool hasGeneralChanges() const;
-    bool validateFilters(QString* errorText = nullptr, bool focusFirstInvalid = true) const;
+    bool hasSearchBehaviorChanges() const;
+    [[nodiscard]] SearchInteractionPreferences searchInteractionFromWidgets() const;
+    bool validateFilters(QString* errorText = nullptr, bool focusFirstInvalid = true);
 
     QStringList enabledDeviceIdsFromTable() const;
     bool scanWhenUnmountedForDevice(const QString& deviceId) const;
@@ -170,6 +175,7 @@ private:
 
     QListWidget* navigation_ = nullptr;
     QStackedWidget* pages_ = nullptr;
+    QHash<int, QWidget*> pageWidgets_;
     QDialogButtonBox* buttonBox_ = nullptr;
     QPushButton* applyButton_ = nullptr;
 
@@ -224,6 +230,12 @@ private:
     QCheckBox* showHighlightedSearchTermsCheckBox_ = nullptr;
     QCheckBox* showFiltersDropdownCheckBox_ = nullptr;
     QCheckBox* showPreviewPaneCheckBox_ = nullptr;
+
+    QCheckBox* debounceEnabledCheckBox_ = nullptr;
+    QSpinBox* debounceDelaySpinBox_ = nullptr;
+    QCheckBox* debounceShortQueriesOnlyCheckBox_ = nullptr;
+    QSpinBox* immediateSearchMinCharactersSpinBox_ = nullptr;
+    QCheckBox* showEmptyQueryResultsCheckBox_ = nullptr;
 
     QCheckBox* autoRefreshLiveUpdatesCheckBox_ = nullptr;
 };

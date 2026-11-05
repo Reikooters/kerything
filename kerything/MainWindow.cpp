@@ -850,7 +850,14 @@ MainWindow::MainWindow(
     }
 
     // Connect search bar to our search logic
-    connect(searchLine_, &QLineEdit::textChanged, this, &MainWindow::updateSearch);
+    searchDebounceTimer_.setSingleShot(true);
+    searchDebounceTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&searchDebounceTimer_, &QTimer::timeout, this, [this]() {
+        updateSearch(searchLine_->text());
+    });
+
+    connect(searchLine_, &QLineEdit::textChanged,
+                this, &MainWindow::scheduleSearch);
     connect(searchLine_, &QLineEdit::textChanged, this, [this](const QString& text) {
         if (saveSearchFilterAction_) {
             saveSearchFilterAction_->setEnabled(!text.trimmed().isEmpty());
@@ -1393,6 +1400,11 @@ MainWindow::MainWindow(
                     setPreviewPaneVisible(enabled);
                 });
 
+        connect(controller_, &AppController::searchInteractionChanged,
+                this, [this]() {
+                    scheduleSearch(searchLine_->text());
+                });
+
         connect(controller_, &AppController::indexesChanged,
                 this, [this]() {
                     rebuildIndexMenu();
@@ -1431,11 +1443,92 @@ MainWindow::MainWindow(
     }
 }
 
+QString MainWindow::effectiveSearchQuery(const QString& text) const
+{
+    QString query = text;
+
+    if (!activeSearchFilter_.isEmpty()) {
+        if (!query.trimmed().isEmpty()) {
+            query += QLatin1Char(' ');
+        }
+
+        query += activeSearchFilter_;
+    }
+
+    return effectiveSearchQueryWithFilterMacros(
+        query,
+        controller_ ? controller_->searchFilters()
+                    : std::vector<SearchFilterPreference>{}
+    );
+}
+
+bool MainWindow::hideEmptySearchResults(const QString& text) const
+{
+    return controller_ &&
+           !controller_->searchInteraction().showEmptyQueryResults &&
+           effectiveSearchQuery(text).trimmed().isEmpty();
+}
+
+void MainWindow::scheduleSearch(const QString& text)
+{
+    searchDebounceTimer_.stop();
+
+    const auto preference = controller_
+        ? controller_->searchInteraction()
+        : SearchInteractionPreferences{};
+
+    const QString trimmedText = text.trimmed();
+
+    const bool applyDelay =
+        preference.debounceEnabled &&
+        !trimmedText.isEmpty() &&
+        !hideEmptySearchResults(text) &&
+        (!preference.debounceShortQueriesOnly ||
+         trimmedText.toUcs4().size() < preference.immediateSearchMinCharacters);
+
+    if (!applyDelay) {
+        updateSearch(text);
+        return;
+    }
+
+    // Prevent actions on results belonging to the previous query.
+    model_->setSearchResults({});
+
+    if (previewPane_) {
+        previewPane_->clearPreview(QStringLiteral("Waiting for search"));
+    }
+
+    statusBar()->showMessage(QStringLiteral("Waiting for typing to finish…"));
+    searchDebounceTimer_.start(preference.debounceDelayMs);
+}
+
 void MainWindow::updateSearch(const QString &text) {
+    // Explicit searches, such as filter changes, replace pending typing searches.
+    searchDebounceTimer_.stop();
+
+    if (hideEmptySearchResults(text)) {
+        liveStructuralRefreshDirty_ = false;
+        liveMetadataRefreshDirty_ = false;
+
+        model_->setSearchHighlightTerms(
+            {}, false, matchCaseEnabled_, matchWholeWordEnabled_, regexEnabled_);
+        model_->setSearchResults({});
+
+        if (previewPane_) {
+            previewPane_->clearPreview(QStringLiteral("Type to search"));
+        }
+
+        statusBar()->showMessage(QStringLiteral("Type to search"));
+        return;
+    }
+
     if (shouldDeferLiveRefresh()) {
         liveStructuralRefreshDirty_ = true;
         return;
     }
+
+    liveStructuralRefreshDirty_ = false;
+    liveMetadataRefreshDirty_ = false;
 
     if (model_) {
         const QString regexHighlightPattern = regexEnabled_
@@ -1468,20 +1561,7 @@ void MainWindow::updateSearch(const QString &text) {
     const std::optional<IndexController::RecordHandle> currentHandle =
         captureCurrentRecordHandle();
 
-    QString rawEffectiveQuery = text;
-
-    if (!activeSearchFilter_.isEmpty()) {
-        if (!rawEffectiveQuery.trimmed().isEmpty()) {
-            rawEffectiveQuery += QLatin1Char(' ');
-        }
-
-        rawEffectiveQuery += activeSearchFilter_;
-    }
-
-    const QString effectiveQuery = effectiveSearchQueryWithFilterMacros(
-        rawEffectiveQuery,
-        controller_ ? controller_->searchFilters() : std::vector<SearchFilterPreference>{}
-    );
+    const QString effectiveQuery = effectiveSearchQuery(text);
 
     std::vector<IndexController::RecordHandle> results;
 
@@ -1713,6 +1793,11 @@ bool MainWindow::shouldDeferLiveRefresh() const
 }
 
 void MainWindow::refresh() {
+    if (searchDebounceTimer_.isActive()) {
+        liveStructuralRefreshDirty_ = true;
+        return;
+    }
+
     if (shouldDeferLiveRefresh()) {
         markLiveStructuralRefreshDirty();
         return;
@@ -1780,6 +1865,10 @@ void MainWindow::refreshLiveMetadata()
 
 void MainWindow::refreshSearchHighlighting()
 {
+    if (searchDebounceTimer_.isActive()) {
+        return;
+    }
+
     if (!model_ || !searchLine_) {
         return;
     }

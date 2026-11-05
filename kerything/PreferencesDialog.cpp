@@ -38,6 +38,7 @@
 #include <QSize>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTableWidget>
@@ -788,37 +789,26 @@ void PreferencesDialog::setCurrentPage(PreferencesDialogPage page)
         return;
     }
 
-    int row = 0;
+    const int pageId = static_cast<int>(page);
 
-    switch (page) {
-        case PreferencesDialogPage::Devices:
-            row = 0;
-            break;
-        case PreferencesDialogPage::Indexes:
-            row = 1;
-            break;
-        case PreferencesDialogPage::Filters:
-            row = 2;
-            break;
-        case PreferencesDialogPage::Windows:
-            row = 3;
-            break;
-        case PreferencesDialogPage::UI:
-            row = 4;
-            break;
-        case PreferencesDialogPage::Advanced:
-            row = 5;
-            break;
-    }
+    for (int row = 0; row < navigation_->count(); ++row) {
+        if (navigation_->item(row)->data(Qt::UserRole).toInt() != pageId) {
+            continue;
+        }
 
-    if (row >= 0 && row < navigation_->count()) {
         navigation_->setCurrentRow(row);
-    }
 
-    if (page == PreferencesDialogPage::Devices) {
-        scheduleSelectedDeviceDetailsHeightUpdate();
-    } else if (page == PreferencesDialogPage::Indexes) {
-        scheduleSelectedIndexDetailsUpdate();
+        if (QWidget* widget = pageWidgets_.value(pageId, nullptr)) {
+            pages_->setCurrentWidget(widget);
+        }
+
+        if (page == PreferencesDialogPage::Devices) {
+            scheduleSelectedDeviceDetailsHeightUpdate();
+        } else if (page == PreferencesDialogPage::Indexes) {
+            scheduleSelectedIndexDetailsUpdate();
+        }
+
+        return;
     }
 }
 
@@ -1286,30 +1276,55 @@ void PreferencesDialog::scheduleSelectedDeviceDetailsHeightUpdate()
 
 void PreferencesDialog::populateNavigation()
 {
-    pages_->addWidget(createDevicesPage());
-    navigation_->addItem(QStringLiteral("Devices"));
+    auto addPage = [this](
+        PreferencesDialogPage id,
+        const QString& title,
+        QWidget* widget
+    ) {
+        const int pageId = static_cast<int>(id);
+        pages_->addWidget(widget);
+        pageWidgets_.insert(pageId, widget);
 
-    pages_->addWidget(createIndexesPage());
-    navigation_->addItem(QStringLiteral("Indexes"));
+        auto* item = new QListWidgetItem(title, navigation_);
+        item->setData(Qt::UserRole, pageId);
+    };
 
-    pages_->addWidget(createFiltersPage());
-    navigation_->addItem(QStringLiteral("Filters"));
+    addPage(PreferencesDialogPage::Devices,
+            QStringLiteral("Devices"), createDevicesPage());
+    addPage(PreferencesDialogPage::Indexes,
+            QStringLiteral("Indexes"), createIndexesPage());
+    addPage(PreferencesDialogPage::Filters,
+            QStringLiteral("Filters"), createFiltersPage());
+    addPage(PreferencesDialogPage::SearchBehavior,
+            QStringLiteral("Search Behavior"), createSearchBehaviorPage());
+    addPage(PreferencesDialogPage::Windows,
+            QStringLiteral("Windows"), createWindowsPage());
+    addPage(PreferencesDialogPage::UI,
+            QStringLiteral("UI"), createUiPage());
+    addPage(PreferencesDialogPage::Advanced,
+            QStringLiteral("Advanced"), createAdvancedPage());
 
-    pages_->addWidget(createWindowsPage());
-    navigation_->addItem(QStringLiteral("Windows"));
+    connect(navigation_, &QListWidget::currentRowChanged, this, [this](int row) {
+        const auto* item = navigation_->item(row);
+        if (!item) {
+            return;
+        }
 
-    pages_->addWidget(createUiPage());
-    navigation_->addItem(QStringLiteral("UI"));
+        QWidget* widget = pageWidgets_.value(
+            item->data(Qt::UserRole).toInt(), nullptr);
+        if (widget) {
+            pages_->setCurrentWidget(widget);
+        }
+    });
 
-    pages_->addWidget(createAdvancedPage());
-    navigation_->addItem(QStringLiteral("Advanced"));
+    connect(pages_, &QStackedWidget::currentChanged, this, [this](int) {
+        QWidget* widget = pages_->currentWidget();
 
-    connect(navigation_, &QListWidget::currentRowChanged, pages_, &QStackedWidget::setCurrentIndex);
-
-    connect(pages_, &QStackedWidget::currentChanged, this, [this](int index) {
-        if (index == static_cast<int>(PreferencesDialogPage::Devices)) {
+        if (widget == pageWidgets_.value(
+                static_cast<int>(PreferencesDialogPage::Devices), nullptr)) {
             scheduleSelectedDeviceDetailsHeightUpdate();
-        } else if (index == static_cast<int>(PreferencesDialogPage::Indexes)) {
+        } else if (widget == pageWidgets_.value(
+                       static_cast<int>(PreferencesDialogPage::Indexes), nullptr)) {
             scheduleSelectedIndexDetailsUpdate();
         }
     });
@@ -2429,6 +2444,158 @@ QWidget* PreferencesDialog::createFiltersPage()
     updateFilterButtonStates();
 
     return page;
+}
+
+QWidget* PreferencesDialog::createSearchBehaviorPage()
+{
+    const auto preference = preferences_.searchInteraction();
+
+    auto* page = new QWidget(this);
+    auto* pageLayout = new QVBoxLayout(page);
+
+    auto* heading = new QLabel(QStringLiteral(
+        "<h2>Search Behavior</h2>"
+        "<p>Configure when searches run and what happens with an empty query.</p>"
+    ), page);
+    heading->setWordWrap(true);
+    pageLayout->addWidget(heading);
+
+    auto* scrollArea = new QScrollArea(page);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+
+    auto* content = new QWidget(scrollArea);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    auto* typingGroup = new QGroupBox(
+        QStringLiteral("Search as you type"), content);
+    auto* typingLayout = new QVBoxLayout(typingGroup);
+
+    debounceEnabledCheckBox_ = new QCheckBox(
+        QStringLiteral("Delay searches while typing"), typingGroup);
+    debounceEnabledCheckBox_->setChecked(preference.debounceEnabled);
+    typingLayout->addWidget(debounceEnabledCheckBox_);
+
+    auto* delayRow = new QWidget(typingGroup);
+    auto* delayLayout = new QHBoxLayout(delayRow);
+    delayLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* delayLabel = new QLabel(QStringLiteral("Typing delay:"), delayRow);
+    debounceDelaySpinBox_ = new QSpinBox(delayRow);
+    debounceDelaySpinBox_->setRange(1, 2000);
+    debounceDelaySpinBox_->setSuffix(QStringLiteral(" ms"));
+    debounceDelaySpinBox_->setValue(preference.debounceDelayMs);
+    delayLabel->setBuddy(debounceDelaySpinBox_);
+
+    delayLayout->addWidget(delayLabel);
+    delayLayout->addWidget(debounceDelaySpinBox_);
+    delayLayout->addStretch();
+    typingLayout->addWidget(delayRow);
+
+    debounceShortQueriesOnlyCheckBox_ = new QCheckBox(
+        QStringLiteral("Apply the delay only to short queries"), typingGroup);
+    debounceShortQueriesOnlyCheckBox_->setChecked(
+        preference.debounceShortQueriesOnly);
+    typingLayout->addWidget(debounceShortQueriesOnlyCheckBox_);
+
+    auto* thresholdRow = new QWidget(typingGroup);
+    auto* thresholdLayout = new QHBoxLayout(thresholdRow);
+    thresholdLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* thresholdLabel = new QLabel(
+        QStringLiteral("Search immediately with at least:"), thresholdRow);
+    immediateSearchMinCharactersSpinBox_ = new QSpinBox(thresholdRow);
+    immediateSearchMinCharactersSpinBox_->setRange(2, 100);
+    immediateSearchMinCharactersSpinBox_->setSuffix(QStringLiteral(" characters"));
+    immediateSearchMinCharactersSpinBox_->setValue(
+        preference.immediateSearchMinCharacters);
+    thresholdLabel->setBuddy(immediateSearchMinCharactersSpinBox_);
+
+    thresholdLayout->addWidget(thresholdLabel);
+    thresholdLayout->addWidget(immediateSearchMinCharactersSpinBox_);
+    thresholdLayout->addStretch();
+    typingLayout->addWidget(thresholdRow);
+
+    auto* typingDescription = new QLabel(QStringLiteral(
+        "The delay restarts whenever the search text changes. This can avoid "
+        "expensive searches for short fragments while you continue typing. "
+        "Results are cleared while waiting for a delayed search."
+        "\n\n"
+        "The character limit counts search-box text without leading or trailing "
+        "whitespace. It does not count expanded filters or estimate search cost. "
+        "Clearing the search box is handled immediately."
+    ), typingGroup);
+    typingDescription->setWordWrap(true);
+    typingLayout->addWidget(typingDescription);
+
+    layout->addWidget(typingGroup);
+
+    auto* emptyGroup = new QGroupBox(QStringLiteral("Empty query"), content);
+    auto* emptyLayout = new QVBoxLayout(emptyGroup);
+
+    showEmptyQueryResultsCheckBox_ = new QCheckBox(
+        QStringLiteral("Show results when the search query is empty"), emptyGroup);
+    showEmptyQueryResultsCheckBox_->setChecked(preference.showEmptyQueryResults);
+    emptyLayout->addWidget(showEmptyQueryResultsCheckBox_);
+
+    auto* emptyDescription = new QLabel(QStringLiteral(
+        "When disabled, an empty search with no active filter shows no results. "
+        "An active filter still shows filter-only results."
+    ), emptyGroup);
+    emptyDescription->setWordWrap(true);
+    emptyLayout->addWidget(emptyDescription);
+
+    layout->addWidget(emptyGroup);
+    layout->addStretch();
+
+    scrollArea->setWidget(content);
+    pageLayout->addWidget(scrollArea, 1);
+
+    auto updateStates = [this, delayRow, thresholdRow]() {
+        const bool enabled = debounceEnabledCheckBox_->isChecked();
+        delayRow->setEnabled(enabled);
+        debounceShortQueriesOnlyCheckBox_->setEnabled(enabled);
+        thresholdRow->setEnabled(
+            enabled && debounceShortQueriesOnlyCheckBox_->isChecked());
+    };
+
+    for (auto* checkBox : {
+             debounceEnabledCheckBox_,
+             debounceShortQueriesOnlyCheckBox_,
+             showEmptyQueryResultsCheckBox_}) {
+        connect(checkBox, &QCheckBox::toggled, this, [this, updateStates]() {
+            updateStates();
+            updateApplyButtonEnabled();
+        });
+    }
+
+    for (auto* spinBox : {
+             debounceDelaySpinBox_,
+             immediateSearchMinCharactersSpinBox_}) {
+        connect(spinBox, &QSpinBox::valueChanged, this, [this]() {
+            updateApplyButtonEnabled();
+        });
+    }
+
+    updateStates();
+    return page;
+}
+
+SearchInteractionPreferences PreferencesDialog::searchInteractionFromWidgets() const
+{
+    return {
+        .debounceEnabled = debounceEnabledCheckBox_->isChecked(),
+        .debounceDelayMs = debounceDelaySpinBox_->value(),
+        .debounceShortQueriesOnly = debounceShortQueriesOnlyCheckBox_->isChecked(),
+        .immediateSearchMinCharacters = immediateSearchMinCharactersSpinBox_->value(),
+        .showEmptyQueryResults = showEmptyQueryResultsCheckBox_->isChecked(),
+    };
+}
+
+bool PreferencesDialog::hasSearchBehaviorChanges() const
+{
+    return searchInteractionFromWidgets() != preferences_.searchInteraction();
 }
 
 QWidget* PreferencesDialog::createWindowsPage()
@@ -4325,7 +4492,7 @@ bool PreferencesDialog::hasFilterValidationState() const
     return false;
 }
 
-bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInvalid) const
+bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInvalid)
 {
     if (!filterTable_) {
         return true;
@@ -4387,15 +4554,7 @@ bool PreferencesDialog::validateFilters(QString* errorText, bool focusFirstInval
     const SearchFilterUtils::SearchFilterValidationIssue& firstIssue = issues.front();
 
     if (focusFirstInvalid) {
-        constexpr int FiltersPageIndex = 2;
-        if (pages_) {
-            pages_->setCurrentIndex(FiltersPageIndex);
-        }
-
-        if (navigation_ && navigation_->count() > FiltersPageIndex) {
-            navigation_->setCurrentRow(FiltersPageIndex);
-        }
-
+        setCurrentPage(PreferencesDialogPage::Filters);
         focusFilterCell(firstIssue.row, static_cast<int>(firstIssue.column));
     }
 
@@ -4410,6 +4569,7 @@ bool PreferencesDialog::hasChanges() const
 {
     return hasDeviceChanges() ||
            hasFilterChanges() ||
+           hasSearchBehaviorChanges() ||
            hasWindowChanges() ||
            hasUIChanges() ||
            hasGeneralChanges();
@@ -4669,6 +4829,11 @@ bool PreferencesDialog::applyChanges()
 
     const bool uiChanged = hasUIChanges();
     const bool windowChanged = hasWindowChanges();
+
+    if (hasSearchBehaviorChanges()) {
+        preferences_.setSearchInteraction(searchInteractionFromWidgets());
+        Q_EMIT searchInteractionApplied();
+    }
 
     const bool trayPreferencesChanged =
         (showTrayIconCheckBox_ &&

@@ -770,3 +770,38 @@ void Preferences::restoreDefaultSearchFilters()
 
     saveSearchFilters(filters);
 }
+
+SearchInteractionPreferences Preferences::searchInteraction() const
+{
+    return {
+        .debounceEnabled = settings_.value(
+            QStringLiteral("search/debounceEnabled"), false).toBool(),
+        .debounceDelayMs = std::clamp(settings_.value(
+            QStringLiteral("search/debounceDelayMs"), 175).toInt(), 1, 2000),
+        .debounceShortQueriesOnly = settings_.value(
+            QStringLiteral("search/debounceShortQueriesOnly"), true).toBool(),
+        .immediateSearchMinCharacters = std::clamp(settings_.value(
+            QStringLiteral("search/immediateSearchMinCharacters"), 3).toInt(), 2, 100),
+        .showEmptyQueryResults = settings_.value(
+            QStringLiteral("search/showEmptyQueryResults"), true).toBool(),
+    };
+}
+
+void Preferences::setSearchInteraction(SearchInteractionPreferences preference)
+{
+    preference.debounceDelayMs = std::clamp(preference.debounceDelayMs, 1, 2000);
+    preference.immediateSearchMinCharacters =
+        std::clamp(preference.immediateSearchMinCharacters, 2, 100);
+
+    settings_.setValue(QStringLiteral("search/debounceEnabled"),
+                       preference.debounceEnabled);
+    settings_.setValue(QStringLiteral("search/debounceDelayMs"),
+                       preference.debounceDelayMs);
+    settings_.setValue(QStringLiteral("search/debounceShortQueriesOnly"),
+                       preference.debounceShortQueriesOnly);
+    settings_.setValue(QStringLiteral("search/immediateSearchMinCharacters"),
+                       preference.immediateSearchMinCharacters);
+    settings_.setValue(QStringLiteral("search/showEmptyQueryResults"),
+                       preference.showEmptyQueryResults);
+    settings_.sync();
+}

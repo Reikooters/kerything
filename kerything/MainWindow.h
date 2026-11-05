@@ -11,6 +11,7 @@
 #include <QString>
 #include <QSize>
 #include <QtGlobal>
+#include <QTimer>
 #include <optional>
 #include <vector>
 #include <string>
@@ -188,6 +189,10 @@ private Q_SLOTS:
     void openTerminal();
 
 private:
+    void scheduleSearch(const QString& text);
+    [[nodiscard]] QString effectiveSearchQuery(const QString& text) const;
+    [[nodiscard]] bool hideEmptySearchResults(const QString& text) const;
+
     void showUnavailableSelectionStatus(qsizetype selectedCount, qsizetype mountedCount, const QString& actionText);
     void showSkippedUnmountedStatus(qsizetype attemptedCount, qsizetype completedCount, const QString& actionText);
     QString actionTextForOpenableCount(
@@ -262,6 +267,7 @@ private:
     QActionGroup* sortOrderActionGroup_ = nullptr;
     QSplitter* mainSplitter_ = nullptr;
     PreviewPane* previewPane_ = nullptr;
+    QTimer searchDebounceTimer_;
 
     QString activeSearchFilterId_;
     QString activeSearchFilterName_;

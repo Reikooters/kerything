@@ -1461,6 +1461,9 @@ void AppController::showPreferencesDialog(PreferencesDialogPage initialPage)
     connect(dialog, &PreferencesDialog::showPreviewPaneApplied,
             this, &AppController::setShowPreviewPane);
 
+    connect(dialog, &PreferencesDialog::searchInteractionApplied,
+        this, &AppController::searchInteractionChanged);
+
     connect(dialog, &PreferencesDialog::trayPreferencesApplied,
             this, [this](bool showTrayIcon, bool closeToTray) {
                 Q_UNUSED(showTrayIcon);
@@ -1868,6 +1871,10 @@ bool AppController::showPreviewPane() const
     return preferences_.showPreviewPane();
 }
 
+[[nodiscard]] SearchInteractionPreferences AppController::searchInteraction() const
+{
+    return preferences_.searchInteraction();
+}
 
 bool AppController::carryFilterToNewWindows() const
 {

@@ -8,6 +8,7 @@ enum class PreferencesDialogPage {
     Devices,
     Indexes,
     Filters,
+    SearchBehavior,
     Windows,
     UI,
     Advanced,

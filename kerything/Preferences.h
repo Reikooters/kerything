@@ -43,6 +43,16 @@ struct SearchFilterPreference {
     QString query;
 };
 
+struct SearchInteractionPreferences {
+    bool debounceEnabled = false;
+    int debounceDelayMs = 175;
+    bool debounceShortQueriesOnly = true;
+    int immediateSearchMinCharacters = 3;
+    bool showEmptyQueryResults = true;
+
+    bool operator==(const SearchInteractionPreferences&) const = default;
+};
+
 class Preferences final {
 public:
     Preferences();
@@ -107,6 +117,10 @@ public:
     void saveSearchFilters(const std::vector<SearchFilterPreference>& filters);
     void restoreDefaultSearchFilters();
     static std::vector<SearchFilterPreference> defaultSearchFilters();
+
+    // Search Behavior
+    [[nodiscard]] SearchInteractionPreferences searchInteraction() const;
+    void setSearchInteraction(SearchInteractionPreferences preference);
 
 private:
     // Devices

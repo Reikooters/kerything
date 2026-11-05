@@ -777,7 +777,7 @@ SearchInteractionPreferences Preferences::searchInteraction() const
         .debounceEnabled = settings_.value(
             QStringLiteral("search/debounceEnabled"), false).toBool(),
         .debounceDelayMs = std::clamp(settings_.value(
-            QStringLiteral("search/debounceDelayMs"), 175).toInt(), 1, 2000),
+            QStringLiteral("search/debounceDelayMs"), 500).toInt(), 1, 2000),
         .debounceShortQueriesOnly = settings_.value(
             QStringLiteral("search/debounceShortQueriesOnly"), true).toBool(),
         .immediateSearchMinCharacters = std::clamp(settings_.value(

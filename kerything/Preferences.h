@@ -45,7 +45,7 @@ struct SearchFilterPreference {
 
 struct SearchInteractionPreferences {
     bool debounceEnabled = false;
-    int debounceDelayMs = 175;
+    int debounceDelayMs = 500;
     bool debounceShortQueriesOnly = true;
     int immediateSearchMinCharacters = 3;
     bool showEmptyQueryResults = true;

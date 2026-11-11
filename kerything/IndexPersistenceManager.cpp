@@ -3,6 +3,7 @@
 
 #include "IndexPersistenceManager.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
@@ -10,6 +11,7 @@
 #include <QFileInfo>
 #include <QSaveFile>
 #include <QStandardPaths>
+#include <QtGlobal>
 
 namespace {
     constexpr quint32 FormatMagic = 0x4B495831; // "KIX1"
@@ -101,7 +103,35 @@ IndexPersistenceManager::IndexPersistenceManager(QObject* parent)
 
 QString IndexPersistenceManager::indexDirectory() const
 {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
     const QString stateLocation = QStandardPaths::writableLocation(QStandardPaths::StateLocation);
+#else
+    // Match QStandardPaths::StateLocation on Linux before Qt 6.7.
+    QString stateLocation;
+
+    if (QStandardPaths::isTestModeEnabled()) {
+        stateLocation = QDir::home().filePath(QStringLiteral(".qttest/state"));
+    } else {
+        stateLocation = qEnvironmentVariable("XDG_STATE_HOME");
+
+        // XDG base directories must be absolute; ignore relative values.
+        if (stateLocation.isEmpty() || !QDir::isAbsolutePath(stateLocation)) {
+            stateLocation = QDir::home().filePath(QStringLiteral(".local/state"));
+        }
+    }
+
+    const QString organizationName = QCoreApplication::organizationName();
+    if (!organizationName.isEmpty()) {
+        stateLocation = QDir(stateLocation).filePath(organizationName);
+    }
+
+    const QString applicationName = QCoreApplication::applicationName();
+    if (!applicationName.isEmpty()) {
+        stateLocation = QDir(stateLocation).filePath(applicationName);
+    }
+
+    stateLocation = QDir::cleanPath(stateLocation);
+#endif
 
     if (!stateLocation.trimmed().isEmpty()) {
         return QDir(stateLocation).filePath(QStringLiteral("indexes"));

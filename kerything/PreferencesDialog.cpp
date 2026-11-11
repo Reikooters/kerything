@@ -151,11 +151,11 @@ namespace {
 
         return QDateTime::fromSecsSinceEpoch(
             unixSeconds,
-            QTimeZone::UTC
+            QTimeZone::utc()
         ).toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     }
 
-        QString warningIconDataUri()
+    QString warningIconDataUri()
     {
         static QString cachedDataUri;
 

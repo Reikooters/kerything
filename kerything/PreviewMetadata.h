@@ -4,7 +4,7 @@
 #ifndef KERYTHING_PREVIEWMETADATA_H
 #define KERYTHING_PREVIEWMETADATA_H
 
-#include <QtTypes>
+#include <QtGlobal>
 #include <QString>
 
 struct PreviewMetadata {
